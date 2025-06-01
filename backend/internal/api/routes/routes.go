@@ -3,12 +3,13 @@ package routes
 import (
 	"backend/internal/api/handlers"
 	"backend/internal/api/middleware"
+	"backend/internal/models"
 
 	"github.com/gin-gonic/gin"
 )
 
 // SetupRoutes configures all the routes for our application
-func SetupRoutes(router *gin.Engine) {
+func SetupRoutes(router *gin.Engine, repository models.Repository) {
 	// Add middleware
 	router.Use(middleware.Logger())
 	router.Use(middleware.Recovery())
@@ -29,10 +30,14 @@ func SetupRoutes(router *gin.Engine) {
 		v1.GET("/ping", handlers.Ping)
 
 		// Items endpoints
+		itemsHandler := handlers.NewHandler(repository)
 		items := v1.Group("/items")
 		{
-			items.GET("", handlers.GetItems)
-			items.POST("", handlers.CreateItem)
+			items.GET("", itemsHandler.GetItems)
+			items.GET("/:id", itemsHandler.GetItem)
+			items.POST("", itemsHandler.CreateItem)
+			items.PUT("/:id", itemsHandler.UpdateItem)
+			items.DELETE("/:id", itemsHandler.DeleteItem)
 		}
 	}
 }

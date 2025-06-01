@@ -1,0 +1,22 @@
+# Binary files
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Coverage reports
+coverage/
+*.out
+*.html
+
+# Temporary files
+tmp/
+*.tmp
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo

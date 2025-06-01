@@ -14,12 +14,29 @@ test:
 
 # Run tests with coverage
 test-coverage:
-	go test -coverprofile=coverage.out ./...
-	go tool cover -html=coverage.out -o coverage.html
+	@mkdir -p coverage
+	@echo "Running tests with coverage..."
+	@go test -coverprofile=coverage/coverage.out -covermode=atomic ./... | tee coverage/test-output.txt
+	@echo "\nGenerating coverage reports..."
+	@go tool cover -html=coverage/coverage.out -o coverage/coverage.html
+	@go tool cover -func=coverage/coverage.out | tee coverage/coverage-summary.txt
+	@echo "\nChecking coverage threshold (minimum 80%)..."
+	@coverage_value=$$(go tool cover -func=coverage/coverage.out | grep total: | grep -Eo '[0-9]+\.[0-9]+' || echo "0.0"); \
+	if [ $$(echo "$$coverage_value < 80.0" | bc -l) -eq 1 ]; then \
+		echo "\033[0;31mTest coverage ($$coverage_value%) is below threshold (80%)\033[0m"; \
+		exit 1; \
+	else \
+		echo "\033[0;32mTest coverage ($$coverage_value%) meets threshold\033[0m"; \
+	fi
+
+# Run tests with coverage and open the report
+test-coverage-html: test-coverage
+	@echo "Opening coverage report..."
+	@open coverage/coverage.html
 
 # Clean up
 clean:
-	rm -rf bin coverage.out coverage.html
+	rm -rf bin coverage/
 
 # Run linter
 lint:

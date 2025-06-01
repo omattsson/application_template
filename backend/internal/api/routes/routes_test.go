@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"backend/internal/api/handlers"
+
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
@@ -14,9 +16,10 @@ func TestSetupRoutes(t *testing.T) {
 	// Set Gin to Test Mode
 	gin.SetMode(gin.TestMode)
 
-	// Create a new router
+	// Create a new router and mock repository
 	router := gin.New()
-	SetupRoutes(router)
+	mockRepo := handlers.NewMockRepository()
+	SetupRoutes(router, mockRepo)
 
 	// Test cases
 	tests := []struct {

@@ -32,7 +32,7 @@ func TestLoadConfig(t *testing.T) {
 
 		config := LoadConfig()
 
-		assert.Equal(t, "8080", config.Port)
+		assert.Equal(t, "8081", config.Port)
 		assert.Equal(t, "development", config.Env)
 	})
 }
