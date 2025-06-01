@@ -1,0 +1,119 @@
+basePath: /api/v1
+definitions:
+  health.CheckStatus:
+    properties:
+      message:
+        type: string
+      status:
+        type: string
+    type: object
+  health.HealthStatus:
+    properties:
+      checks:
+        additionalProperties:
+          $ref: '#/definitions/health.CheckStatus'
+        type: object
+      status:
+        type: string
+      uptime:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: This is the API documentation for the backend service
+  title: Backend API
+  version: "1.0"
+paths:
+  /api/v1/items:
+    get:
+      description: Get all items
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get items
+      tags:
+      - items
+    post:
+      consumes:
+      - application/json
+      description: Create a new item
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create item
+      tags:
+      - items
+  /api/v1/ping:
+    get:
+      description: Ping test endpoint
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Ping test
+      tags:
+      - ping
+  /health:
+    get:
+      description: Get API health status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Health Check
+      tags:
+      - health
+  /health/live:
+    get:
+      description: Get API liveness status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/health.HealthStatus'
+      summary: Liveness Check
+      tags:
+      - health
+  /health/ready:
+    get:
+      description: Get API readiness status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/health.HealthStatus'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/health.HealthStatus'
+      summary: Readiness Check
+      tags:
+      - health
+swagger: "2.0"

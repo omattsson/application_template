@@ -1,0 +1,56 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: ${GO_ENV:-production}
+    container_name: app-backend-${GO_ENV:-prod}
+    ports:
+      - "${BACKEND_PORT:-8081}:8081"
+    environment:
+      - GIN_MODE=${GIN_MODE:-release}
+      - GO_ENV=${GO_ENV:-production}
+    networks:
+      - backend-net
+      - frontend-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./backend:/app
+      - backend_go_mod:/go/pkg/mod
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: ${NODE_ENV:-production}
+      args:
+        - NODE_ENV=${NODE_ENV:-production}
+    container_name: app-frontend-${NODE_ENV:-prod}
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - VITE_API_URL=http://backend:8081
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - frontend-net
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+
+networks:
+  backend-net:
+    name: backend-network-${NODE_ENV:-prod}
+  frontend-net:
+    name: frontend-network-${NODE_ENV:-prod}
+
+volumes:
+  backend_go_mod:
+  frontend_node_modules:
