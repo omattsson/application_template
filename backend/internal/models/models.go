@@ -20,8 +20,9 @@ type Base struct {
 // Item represents a basic item in the system
 type Item struct {
 	Base
-	Name  string  `gorm:"size:255;not null" json:"name"`
-	Price float64 `json:"price"`
+	Name    string  `gorm:"size:255;not null" json:"name"`
+	Price   float64 `json:"price"`
+	Version uint    `gorm:"not null;default:0" json:"version"` // For optimistic locking
 }
 
 // User represents a user in the system
@@ -32,6 +33,11 @@ type User struct {
 	Name     string `gorm:"size:255" json:"name"`
 }
 
+// Validator is an interface for model validation
+type Validator interface {
+	Validate() error
+}
+
 // Repository defines the interface for database operations
 type Repository interface {
 	Create(interface{}) error
@@ -39,6 +45,7 @@ type Repository interface {
 	Update(interface{}) error
 	Delete(interface{}) error
 	List(dest interface{}, conditions ...interface{}) error
+	Ping() error
 }
 
 // GenericRepository implements the Repository interface
@@ -46,13 +53,18 @@ type GenericRepository struct {
 	db *gorm.DB
 }
 
+// NewRepository creates a new GenericRepository
 func NewRepository(db *gorm.DB) Repository {
 	return &GenericRepository{db: db}
 }
 
-// Validator is an interface for model validation
-type Validator interface {
-	Validate() error
+// Ping checks if the database is reachable
+func (r *GenericRepository) Ping() error {
+	sqlDB, err := r.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Ping()
 }
 
 func (r *GenericRepository) Create(entity interface{}) error {
@@ -118,4 +130,17 @@ func (r *GenericRepository) handleError(op string, err error) error {
 	default:
 		return dberrors.NewDatabaseError(op, err)
 	}
+}
+
+// Filter represents a filter condition for queries
+type Filter struct {
+	Field string      `json:"field"`
+	Op    string      `json:"op,omitempty"`
+	Value interface{} `json:"value"`
+}
+
+// Pagination represents pagination parameters for queries
+type Pagination struct {
+	Limit  int `json:"limit"`
+	Offset int `json:"offset"`
 }

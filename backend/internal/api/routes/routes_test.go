@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"backend/internal/api/handlers"
+	"backend/internal/health"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -17,8 +18,13 @@ func TestSetupRoutes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	// Create a new router and mock repository
-	router := gin.New()
+	router := gin.Default() // Use gin.Default() to include default middleware
 	mockRepo := handlers.NewMockRepository()
+
+	// Initialize health checker and set it as ready
+	health.NewHealthChecker().SetReady(true)
+
+	// Setup routes
 	SetupRoutes(router, mockRepo)
 
 	// Test cases

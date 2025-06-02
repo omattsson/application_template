@@ -6,7 +6,6 @@ import (
 	"backend/internal/config"
 	"backend/internal/database"
 	"backend/internal/health"
-	"backend/internal/models"
 	"fmt"
 	"log"
 	"net/http"
@@ -40,8 +39,11 @@ func main() {
 		log.Fatalf("Failed to run database migrations: %v", err)
 	}
 
-	// Create repository
-	repository := models.NewRepository(db.DB)
+	// Create repository based on configuration
+	repository, err := database.NewRepository(cfg)
+	if err != nil {
+		log.Fatalf("Failed to create repository: %v", err)
+	}
 
 	r := gin.Default()
 
@@ -49,13 +51,20 @@ func main() {
 	healthChecker := health.NewHealthChecker()
 
 	// Add database health check
-	healthChecker.AddCheck("database", func() error {
-		sqlDB, err := db.DB.DB()
-		if err != nil {
-			return err
-		}
-		return sqlDB.Ping()
-	})
+	if cfg.AzureTable.UseAzureTable {
+		healthChecker.AddCheck("database", func() error {
+			// For Azure Table Storage, we'll check if we can list tables
+			return repository.Ping()
+		})
+	} else {
+		healthChecker.AddCheck("database", func() error {
+			sqlDB, err := db.DB.DB()
+			if err != nil {
+				return err
+			}
+			return sqlDB.Ping()
+		})
+	}
 
 	// Mark the service as ready after initialization
 	healthChecker.SetReady(true)

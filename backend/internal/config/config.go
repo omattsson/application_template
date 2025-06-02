@@ -12,10 +12,11 @@ import (
 
 // Config holds all configuration for the application
 type Config struct {
-	App      AppConfig
-	Database DatabaseConfig
-	Server   ServerConfig
-	Logging  LogConfig
+	App        AppConfig
+	Database   DatabaseConfig
+	AzureTable AzureTableConfig
+	Server     ServerConfig
+	Logging    LogConfig
 }
 
 // AppConfig holds application-wide configuration
@@ -35,6 +36,16 @@ type DatabaseConfig struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
+}
+
+// AzureTableConfig holds Azure Table Storage configuration
+type AzureTableConfig struct {
+	AccountName   string
+	AccountKey    string
+	Endpoint      string
+	TableName     string
+	UseAzureTable bool // true to use Azure Table as backend
+	UseAzurite    bool // true to use local Azurite emulator
 }
 
 // ServerConfig holds HTTP server configuration
@@ -97,6 +108,22 @@ func (c *DatabaseConfig) Validate() error {
 	}
 	if c.ConnMaxLifetime <= 0 {
 		return fmt.Errorf("connection max lifetime must be positive")
+	}
+	return nil
+}
+
+func (c *AzureTableConfig) Validate() error {
+	if c.AccountName == "" {
+		return fmt.Errorf("account name is required")
+	}
+	if c.AccountKey == "" {
+		return fmt.Errorf("account key is required")
+	}
+	if c.Endpoint == "" {
+		return fmt.Errorf("endpoint is required")
+	}
+	if c.TableName == "" {
+		return fmt.Errorf("table name is required")
 	}
 	return nil
 }
@@ -172,6 +199,14 @@ func LoadConfig() (*Config, error) {
 			MaxIdleConns:    getEnvInt("DB_MAX_IDLE_CONNS", 5),
 			ConnMaxLifetime: getEnvDuration("DB_CONN_MAX_LIFETIME", 5*time.Minute),
 		},
+		AzureTable: AzureTableConfig{
+			AccountName:   getEnv("AZURE_TABLE_ACCOUNT_NAME", ""),
+			AccountKey:    getEnv("AZURE_TABLE_ACCOUNT_KEY", ""),
+			Endpoint:      getEnv("AZURE_TABLE_ENDPOINT", ""),
+			TableName:     getEnv("AZURE_TABLE_NAME", "items"),
+			UseAzureTable: getEnvBool("USE_AZURE_TABLE", false),
+			UseAzurite:    getEnvBool("USE_AZURITE", false),
+		},
 		Server: ServerConfig{
 			Host:            getEnv("SERVER_HOST", ""),
 			Port:            getEnv("SERVER_PORT", "8081"),
@@ -181,6 +216,7 @@ func LoadConfig() (*Config, error) {
 		},
 		Logging: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),
+			File:  getEnv("LOG_FILE", ""),
 		},
 	}
 
