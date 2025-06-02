@@ -1,4 +1,25 @@
-.PHONY: dev dev-backend dev-frontend build clean test install docs fmt lint
+.PHONY: dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
+
+# MySQL service management
+mysql-start:
+	@echo "Starting MySQL container..."
+	GO_ENV=development docker compose up -d db
+	@echo "Waiting for MySQL to be ready..."
+	@until docker compose exec db mysqladmin ping -h localhost -u$${MYSQL_USER:-appuser} -p$${MYSQL_PASSWORD:-apppass} --silent; do \
+		echo "Waiting for MySQL..."; \
+		sleep 2; \
+	done
+	@echo "MySQL is ready!"
+
+mysql-stop:
+	@echo "Stopping MySQL container..."
+	docker compose stop db
+
+mysql-logs:
+	docker compose logs -f db
+
+mysql-shell:
+	docker compose exec db mysql -u$${MYSQL_USER:-appuser} -p$${MYSQL_PASSWORD:-apppass} $${MYSQL_DATABASE:-app}
 
 # Development mode for both services
 dev:

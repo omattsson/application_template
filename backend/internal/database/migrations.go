@@ -36,13 +36,22 @@ func (d *Database) AutoMigrate() error {
 		Description: "Add indexes for performance optimization",
 		Up: func(tx *gorm.DB) error {
 			// Add composite index on items
-			err := tx.Exec("CREATE INDEX idx_items_name_price ON items(name, price)").Error
-			if err != nil {
-				return err
+			var count int64
+			tx.Raw("SELECT COUNT(1) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'items' AND index_name = 'idx_items_name_price'").Scan(&count)
+			if count == 0 {
+				if err := tx.Exec("CREATE INDEX idx_items_name_price ON items(name, price)").Error; err != nil {
+					return err
+				}
 			}
 
 			// Add unique index on email (uniqueness already enforced by schema)
-			return tx.Exec("CREATE INDEX idx_users_email ON users(email)").Error
+			tx.Raw("SELECT COUNT(1) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'users' AND index_name = 'idx_users_email'").Scan(&count)
+			if count == 0 {
+				if err := tx.Exec("CREATE INDEX idx_users_email ON users(email)").Error; err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 		Down: func(tx *gorm.DB) error {
 			if err := tx.Exec("DROP INDEX idx_items_name_price ON items").Error; err != nil {

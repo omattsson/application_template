@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"backend/internal/database"
 	"backend/internal/models"
-	"backend/pkg/dberrors"
 
 	"github.com/gin-gonic/gin"
 )
@@ -38,12 +38,12 @@ func (h *Handler) CreateItem(c *gin.Context) {
 	if err := h.repository.Create(&item); err != nil {
 		var status int
 		switch err.(type) {
-		case *dberrors.DatabaseError:
-			dbErr := err.(*dberrors.DatabaseError)
+		case *database.DatabaseError:
+			dbErr := err.(*database.DatabaseError)
 			switch dbErr.Err {
-			case dberrors.ErrValidation:
+			case database.ErrValidation:
 				status = http.StatusBadRequest
-			case dberrors.ErrDuplicateKey:
+			case database.ErrDuplicateKey:
 				status = http.StatusConflict
 			default:
 				status = http.StatusInternalServerError
@@ -94,7 +94,7 @@ func (h *Handler) GetItem(c *gin.Context) {
 	var item models.Item
 	if err := h.repository.FindByID(uint(id), &item); err != nil {
 		status := http.StatusInternalServerError
-		if dbErr, ok := err.(*dberrors.DatabaseError); ok && dbErr.Err == dberrors.ErrNotFound {
+		if dbErr, ok := err.(*database.DatabaseError); ok && dbErr.Err == database.ErrNotFound {
 			status = http.StatusNotFound
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
@@ -125,7 +125,7 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 	var item models.Item
 	if err := h.repository.FindByID(uint(id), &item); err != nil {
 		status := http.StatusInternalServerError
-		if dbErr, ok := err.(*dberrors.DatabaseError); ok && dbErr.Err == dberrors.ErrNotFound {
+		if dbErr, ok := err.(*database.DatabaseError); ok && dbErr.Err == database.ErrNotFound {
 			status = http.StatusNotFound
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
@@ -140,12 +140,12 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 	if err := h.repository.Update(&item); err != nil {
 		var status int
 		switch err.(type) {
-		case *dberrors.DatabaseError:
-			dbErr := err.(*dberrors.DatabaseError)
+		case *database.DatabaseError:
+			dbErr := err.(*database.DatabaseError)
 			switch dbErr.Err {
-			case dberrors.ErrValidation:
+			case database.ErrValidation:
 				status = http.StatusBadRequest
-			case dberrors.ErrDuplicateKey:
+			case database.ErrDuplicateKey:
 				status = http.StatusConflict
 			default:
 				status = http.StatusInternalServerError
@@ -179,7 +179,7 @@ func (h *Handler) DeleteItem(c *gin.Context) {
 	var item models.Item
 	if err := h.repository.FindByID(uint(id), &item); err != nil {
 		status := http.StatusInternalServerError
-		if dbErr, ok := err.(*dberrors.DatabaseError); ok && dbErr.Err == dberrors.ErrNotFound {
+		if dbErr, ok := err.(*database.DatabaseError); ok && dbErr.Err == database.ErrNotFound {
 			status = http.StatusNotFound
 		}
 		c.JSON(status, gin.H{"error": err.Error()})

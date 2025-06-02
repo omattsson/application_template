@@ -34,15 +34,32 @@ services:
       target: ${GO_ENV:-production}
     container_name: app-backend-${GO_ENV:-prod}
     ports:
-      - "${BACKEND_PORT:-8081}:8081"
+      - "${PORT:-8081}:8081"
     environment:
-      - GIN_MODE=${GIN_MODE:-release}
-      - GO_ENV=${GO_ENV:-production}
+      - APP_NAME=${APP_NAME:-application}
+      - APP_ENV=${GO_ENV:-production}
+      - APP_DEBUG=${APP_DEBUG:-false}
       - DB_HOST=db
       - DB_PORT=3306
       - DB_NAME=${MYSQL_DATABASE:-app}
       - DB_USER=${MYSQL_USER:-appuser}
       - DB_PASSWORD=${MYSQL_PASSWORD:-apppass}
+      - DB_MAX_OPEN_CONNS=${DB_MAX_OPEN_CONNS:-25}
+      - DB_MAX_IDLE_CONNS=${DB_MAX_IDLE_CONNS:-25}
+      - DB_CONN_MAX_LIFETIME=${DB_CONN_MAX_LIFETIME:-5m}
+      - SERVER_HOST=0.0.0.0
+      - PORT=${PORT:-8081}
+      - SERVER_READ_TIMEOUT=${SERVER_READ_TIMEOUT:-15s}
+      - SERVER_WRITE_TIMEOUT=${SERVER_WRITE_TIMEOUT:-15s}
+      - SERVER_SHUTDOWN_TIMEOUT=${SERVER_SHUTDOWN_TIMEOUT:-30s}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FILE=${LOG_FILE:-}
+      - API_VERSION=${API_VERSION:-v1}
+      - API_PREFIX=${API_PREFIX:-/api}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
+      - CORS_ALLOWED_METHODS=${CORS_ALLOWED_METHODS:-GET,POST,PUT,DELETE,OPTIONS}
+      - CORS_ALLOWED_HEADERS=${CORS_ALLOWED_HEADERS:-Origin,Content-Type,Accept,Authorization}
+      - CORS_MAX_AGE=${CORS_MAX_AGE:-300}
     depends_on:
       db:
         condition: service_healthy
