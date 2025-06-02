@@ -88,9 +88,16 @@ func (m *MockRepository) Update(entity interface{}) error {
 		return errors.New("version mismatch")
 	}
 
+	// Make a copy of the item to avoid other references being modified
+	updatedItem := *item
+
 	// Increment version and update
-	item.Version++
-	m.items[item.ID] = item
+	updatedItem.Version = currentItem.Version + 1
+	m.items[item.ID] = &updatedItem
+
+	// Update the original item's version to match
+	item.Version = updatedItem.Version
+
 	return nil
 }
 
@@ -136,10 +143,9 @@ func (m *MockRepository) List(dest interface{}, conditions ...interface{}) error
 
 	// Apply filters and pagination
 	var pagination *models.Pagination
-	filteredItems := make([]models.Item, 0)
+	filteredItems := allItems[:] // Start with all items
 
 	// Apply filters
-	filteredItems = allItems[:] // Start with all items
 	for _, condition := range conditions {
 		switch cond := condition.(type) {
 		case models.Filter:
@@ -163,20 +169,20 @@ func (m *MockRepository) List(dest interface{}, conditions ...interface{}) error
 				filteredItems = tmpItems
 			case "price":
 				price := cond.Value.(float64)
-				for _, item := range allItems {
+				tmpItems := make([]models.Item, 0)
+				for _, item := range filteredItems {
 					switch cond.Op {
 					case ">=":
 						if item.Price >= price {
-							filteredItems = append(filteredItems, item)
+							tmpItems = append(tmpItems, item)
 						}
 					case "<=":
 						if item.Price <= price {
-							filteredItems = append(filteredItems, item)
+							tmpItems = append(tmpItems, item)
 						}
 					}
 				}
-				allItems = filteredItems
-				filteredItems = make([]models.Item, 0)
+				filteredItems = tmpItems
 			}
 		case models.Pagination:
 			pagination = &cond
@@ -187,18 +193,18 @@ func (m *MockRepository) List(dest interface{}, conditions ...interface{}) error
 	if pagination != nil {
 		start := pagination.Offset
 		end := start + pagination.Limit
-		if start >= len(allItems) {
+		if start >= len(filteredItems) {
 			*items = []models.Item{}
 			return nil
 		}
-		if end > len(allItems) {
-			end = len(allItems)
+		if end > len(filteredItems) {
+			end = len(filteredItems)
 		}
-		*items = allItems[start:end]
+		*items = filteredItems[start:end]
 		return nil
 	}
 
-	*items = allItems
+	*items = filteredItems
 	return nil
 }
 

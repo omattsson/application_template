@@ -40,7 +40,7 @@ func handleDBError(err error) (int, string) {
 		if strings.Contains(err.Error(), "not found") {
 			return http.StatusNotFound, "Item not found"
 		}
-		return http.StatusInternalServerError, "Internal server error"
+		return http.StatusInternalServerError, err.Error()
 	}
 }
 
@@ -202,8 +202,10 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 		return
 	}
 
-	// Increment version
-	currentItem.Version++
+	// Make sure we're using the version from the request for optimistic locking
+	currentItem.Version = updateItem.Version
+
+	// We don't increment the version here, the repository will handle that
 
 	if err := h.repository.Update(&currentItem); err != nil {
 		if err.Error() == "version mismatch" {
