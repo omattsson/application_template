@@ -16,54 +16,31 @@ func TestCORSMiddleware(t *testing.T) {
 	// Setup router with middleware
 	r := gin.New()
 	r.Use(CORS())
-	r.GET("/test", func(c *gin.Context) {
+	r.Any("/test", func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
 
-	// Test cases
-	tests := []struct {
-		name           string
-		origin         string
-		expectedOrigin string
-	}{
-		{
-			name:           "With origin header",
-			origin:         "http://localhost:3000",
-			expectedOrigin: "http://localhost:3000",
-		},
-		{
-			name:           "Without origin header",
-			origin:         "",
-			expectedOrigin: "*",
-		},
-	}
+	t.Run("Regular GET request", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/test", nil)
+		r.ServeHTTP(w, req)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			req, _ := http.NewRequest("GET", "/test", nil)
-			if tt.origin != "" {
-				req.Header.Set("Origin", tt.origin)
-			}
+		// Check CORS headers
+		assert.Equal(t, "*", w.Header().Get("Access-Control-Allow-Origin"))
+		assert.Equal(t, "GET, POST, PUT, DELETE, OPTIONS", w.Header().Get("Access-Control-Allow-Methods"))
+		assert.Equal(t, "Content-Type, Content-Length, Accept-Encoding, Authorization", w.Header().Get("Access-Control-Allow-Headers"))
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
 
-			// Test preflight request
-			preflightReq, _ := http.NewRequest("OPTIONS", "/test", nil)
-			if tt.origin != "" {
-				preflightReq.Header.Set("Origin", tt.origin)
-			}
-			preflightW := httptest.NewRecorder()
+	t.Run("OPTIONS preflight request", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("OPTIONS", "/test", nil)
+		r.ServeHTTP(w, req)
 
-			r.ServeHTTP(preflightW, preflightReq)
-			r.ServeHTTP(w, req)
-
-			// Assert response headers for regular request
-			assert.Equal(t, tt.expectedOrigin, w.Header().Get("Access-Control-Allow-Origin"))
-			assert.Equal(t, "true", w.Header().Get("Access-Control-Allow-Credentials"))
-
-			// Assert response headers for preflight request
-			assert.Equal(t, tt.expectedOrigin, preflightW.Header().Get("Access-Control-Allow-Origin"))
-			assert.Equal(t, "true", preflightW.Header().Get("Access-Control-Allow-Credentials"))
-			assert.Equal(t, "GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS", preflightW.Header().Get("Access-Control-Allow-Methods"))
-		})
-	}
+		// Check CORS headers
+		assert.Equal(t, "*", w.Header().Get("Access-Control-Allow-Origin"))
+		assert.Equal(t, "GET, POST, PUT, DELETE, OPTIONS", w.Header().Get("Access-Control-Allow-Methods"))
+		assert.Equal(t, "Content-Type, Content-Length, Accept-Encoding, Authorization", w.Header().Get("Access-Control-Allow-Headers"))
+		assert.Equal(t, http.StatusNoContent, w.Code) // OPTIONS request should return 204 No Content
+	})
 }

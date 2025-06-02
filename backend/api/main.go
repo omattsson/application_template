@@ -7,7 +7,9 @@ import (
 	"backend/internal/database"
 	"backend/internal/health"
 	"backend/internal/models"
+	"fmt"
 	"log"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
@@ -17,16 +19,18 @@ import (
 // @title           Backend API
 // @version         1.0
 // @description     This is the API documentation for the backend service
-// @host            localhost:8080
-// @BasePath        /api/v1
+// @host            localhost:8081
+// @BasePath        /
 
 func main() {
 	// Load configuration
-	cfg := config.LoadConfig()
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
 
 	// Initialize database
-	dbConfig := database.NewConfig()
-	db, err := database.NewDatabase(dbConfig)
+	db, err := database.NewFromAppConfig(cfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
@@ -62,9 +66,20 @@ func main() {
 	// Set up routes with repository
 	routes.SetupRoutes(r, repository)
 
-	// Start the server
-	log.Printf("Starting server on port %s", cfg.Port)
-	if err := r.Run(":" + cfg.Port); err != nil {
+	// Configure server address
+	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
+
+	// Configure server timeouts
+	server := &http.Server{
+		Addr:         addr,
+		Handler:      r,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+	}
+
+	// Start server
+	log.Printf("Starting server on %s", addr)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"backend/internal/models"
+	"backend/pkg/dberrors"
 
 	"github.com/gin-gonic/gin"
 )
@@ -30,18 +31,27 @@ func NewHandler(repository models.Repository) *Handler {
 func (h *Handler) CreateItem(c *gin.Context) {
 	var item models.Item
 	if err := c.ShouldBindJSON(&item); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Validate required fields
-	if item.Name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Name is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
 		return
 	}
 
 	if err := h.repository.Create(&item); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create item"})
+		var status int
+		switch err.(type) {
+		case *dberrors.DatabaseError:
+			dbErr := err.(*dberrors.DatabaseError)
+			switch dbErr.Err {
+			case dberrors.ErrValidation:
+				status = http.StatusBadRequest
+			case dberrors.ErrDuplicateKey:
+				status = http.StatusConflict
+			default:
+				status = http.StatusInternalServerError
+			}
+		default:
+			status = http.StatusInternalServerError
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -58,7 +68,7 @@ func (h *Handler) CreateItem(c *gin.Context) {
 func (h *Handler) GetItems(c *gin.Context) {
 	var items []models.Item
 	if err := h.repository.List(&items); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch items"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -83,7 +93,11 @@ func (h *Handler) GetItem(c *gin.Context) {
 
 	var item models.Item
 	if err := h.repository.FindByID(uint(id), &item); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
+		status := http.StatusInternalServerError
+		if dbErr, ok := err.(*dberrors.DatabaseError); ok && dbErr.Err == dberrors.ErrNotFound {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -102,21 +116,44 @@ func (h *Handler) GetItem(c *gin.Context) {
 // @Failure 404 {object} map[string]string
 // @Router /api/v1/items/{id} [put]
 func (h *Handler) UpdateItem(c *gin.Context) {
-	var item models.Item
-	if err := c.ShouldBindJSON(&item); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
 		return
 	}
-	item.ID = uint(id)
+
+	var item models.Item
+	if err := h.repository.FindByID(uint(id), &item); err != nil {
+		status := http.StatusInternalServerError
+		if dbErr, ok := err.(*dberrors.DatabaseError); ok && dbErr.Err == dberrors.ErrNotFound {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := c.ShouldBindJSON(&item); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
 
 	if err := h.repository.Update(&item); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
+		var status int
+		switch err.(type) {
+		case *dberrors.DatabaseError:
+			dbErr := err.(*dberrors.DatabaseError)
+			switch dbErr.Err {
+			case dberrors.ErrValidation:
+				status = http.StatusBadRequest
+			case dberrors.ErrDuplicateKey:
+				status = http.StatusConflict
+			default:
+				status = http.StatusInternalServerError
+			}
+		default:
+			status = http.StatusInternalServerError
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -141,12 +178,16 @@ func (h *Handler) DeleteItem(c *gin.Context) {
 
 	var item models.Item
 	if err := h.repository.FindByID(uint(id), &item); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
+		status := http.StatusInternalServerError
+		if dbErr, ok := err.(*dberrors.DatabaseError); ok && dbErr.Err == dberrors.ErrNotFound {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
 	if err := h.repository.Delete(&item); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete item"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
