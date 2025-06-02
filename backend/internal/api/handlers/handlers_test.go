@@ -59,3 +59,41 @@ func TestPingHandler(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, "pong", response["message"])
 }
+func TestGetItemsHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.Default()
+	r.GET("/items", GetItems)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/items", nil)
+
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+
+	assert.Nil(t, err)
+	assert.Equal(t, "GetItems called", response["message"])
+}
+func TestCreateItemHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.Default()
+	r.POST("/items", CreateItem)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/items", nil)
+
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+
+	assert.Nil(t, err)
+	assert.Equal(t, "CreateItem called", response["message"])
+}

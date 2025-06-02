@@ -36,6 +36,9 @@ definitions:
       updated_at:
         example: "2025-06-02T10:00:00Z"
         type: string
+      version:
+        description: For optimistic locking
+        type: integer
     type: object
 host: localhost:8081
 info:

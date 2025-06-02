@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"backend/internal/models"
@@ -17,7 +18,7 @@ import (
 
 // TableRepository implements the Repository interface for Azure Table Storage
 type TableRepository struct {
-	client    *aztables.Client
+	client    AzureTableClient
 	tableName string
 }
 
@@ -28,6 +29,10 @@ func NewTableRepository(accountName, accountKey, endpoint, tableName string, use
 		serviceURL = fmt.Sprintf("http://%s", endpoint) // Azurite uses http
 	} else {
 		serviceURL = fmt.Sprintf("https://%s.table.%s", accountName, endpoint)
+	}
+
+	if accountName == "" || accountKey == "" {
+		return nil, dberrors.NewDatabaseError("azure_client", fmt.Errorf("invalid connection string: missing account name or key"))
 	}
 
 	// Create service client
@@ -49,18 +54,23 @@ func NewTableRepository(accountName, accountKey, endpoint, tableName string, use
 	_, err = serviceClient.CreateTable(context.Background(), tableName, nil)
 	if err != nil {
 		var respErr *azcore.ResponseError
-		if errors.As(err, &respErr) && respErr.ErrorCode == "TableAlreadyExists" {
-			// Table already exists, which is fine
-			return &TableRepository{
-				client:    tableClient,
-				tableName: tableName,
-			}, nil
+		if errors.As(err, &respErr) {
+			if respErr.ErrorCode == "TableAlreadyExists" {
+				// Table already exists, which is fine
+				return &TableRepository{
+					client:    newAzureClientAdapter(tableClient),
+					tableName: tableName,
+				}, nil
+			}
+			// Return the underlying status code error
+			return nil, fmt.Errorf("create_table: %v", respErr.RawResponse.Status)
 		}
+		// Return other errors as-is
 		return nil, dberrors.NewDatabaseError("create_table", err)
 	}
 
 	return &TableRepository{
-		client:    tableClient,
+		client:    newAzureClientAdapter(tableClient),
 		tableName: tableName,
 	}, nil
 }
@@ -215,12 +225,50 @@ func (r *TableRepository) List(dest interface{}, conditions ...interface{}) erro
 		return dberrors.NewDatabaseError("type_assertion", fmt.Errorf("dest must be *[]models.Item"))
 	}
 
-	filter := "PartitionKey eq 'items'"
+	// Process conditions
+	var (
+		result             []models.Item
+		pagination         *models.Pagination
+		nameContainsFilter string
+	)
+
+	// Base filter for partition key
+	filterParts := []string{"PartitionKey eq 'items'"}
+
+	// Build filters from conditions
+	for _, condition := range conditions {
+		switch cond := condition.(type) {
+		case models.Filter:
+			switch cond.Field {
+			case "name":
+				name := cond.Value.(string)
+				if cond.Op == "exact" {
+					filterParts = append(filterParts, fmt.Sprintf("Name eq '%s'", name))
+				} else {
+					nameContainsFilter = strings.ToLower(name)
+				}
+			case "price":
+				price := cond.Value.(float64)
+				if cond.Op == ">=" {
+					filterParts = append(filterParts, fmt.Sprintf("Price ge %f", price))
+				} else if cond.Op == "<=" {
+					filterParts = append(filterParts, fmt.Sprintf("Price le %f", price))
+				}
+			}
+		case models.Pagination:
+			pagination = &cond
+		}
+	}
+
+	// Combine all filter parts with AND
+	filter := strings.Join(filterParts, " and ")
+
+	// Get pager for table query
 	pager := r.client.NewListEntitiesPager(&aztables.ListEntitiesOptions{
 		Filter: &filter,
 	})
 
-	var result []models.Item
+	// Fetch and process all entities
 	for pager.More() {
 		response, err := pager.NextPage(context.Background())
 		if err != nil {
@@ -246,8 +294,31 @@ func (r *TableRepository) List(dest interface{}, conditions ...interface{}) erro
 				Name:  entityData["Name"].(string),
 				Price: entityData["Price"].(float64),
 			}
+
+			// Apply name contains filter if specified
+			if nameContainsFilter != "" {
+				if !strings.Contains(strings.ToLower(item.Name), nameContainsFilter) {
+					continue
+				}
+			}
+
 			result = append(result, item)
 		}
+	}
+
+	// Apply pagination after all filtering
+	if pagination != nil {
+		start := pagination.Offset
+		if start >= len(result) {
+			*items = []models.Item{}
+			return nil
+		}
+
+		end := start + pagination.Limit
+		if end > len(result) {
+			end = len(result)
+		}
+		result = result[start:end]
 	}
 
 	*items = result

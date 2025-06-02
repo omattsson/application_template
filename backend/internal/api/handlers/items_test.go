@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"backend/internal/database"
 	"backend/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -867,4 +868,35 @@ func TestConcurrentBatchOperations(t *testing.T) {
 		assert.Equal(t, lastSuccessfulUpdate.Price, finalItem.Price)
 		assert.Equal(t, maxVersion, finalItem.Version)
 	})
+}
+func TestHandleDBError(t *testing.T) {
+	type dbErr struct {
+		err      error
+		wantCode int
+		wantMsg  string
+	}
+
+	// Mock database.DatabaseError and error values
+	validationErr := &database.DatabaseError{Err: database.ErrValidation, Msg: "validation failed"}
+	notFoundErr := &database.DatabaseError{Err: database.ErrNotFound, Msg: "not found"}
+	duplicateErr := &database.DatabaseError{Err: database.ErrDuplicateKey, Msg: "duplicate key"}
+	otherDBErr := &database.DatabaseError{Err: errors.New("other"), Msg: "other db error"}
+	plainNotFound := errors.New("item not found in db")
+	plainOther := errors.New("some other error")
+
+	tests := []dbErr{
+		{err: nil, wantCode: http.StatusOK, wantMsg: ""},
+		{err: validationErr, wantCode: http.StatusBadRequest, wantMsg: validationErr.Error()},
+		{err: notFoundErr, wantCode: http.StatusNotFound, wantMsg: "Item not found"},
+		{err: duplicateErr, wantCode: http.StatusConflict, wantMsg: "Item already exists"},
+		{err: otherDBErr, wantCode: http.StatusInternalServerError, wantMsg: "Internal server error"},
+		{err: plainNotFound, wantCode: http.StatusNotFound, wantMsg: "Item not found"},
+		{err: plainOther, wantCode: http.StatusInternalServerError, wantMsg: plainOther.Error()},
+	}
+
+	for _, tt := range tests {
+		code, msg := handleDBError(tt.err)
+		assert.Equal(t, tt.wantCode, code)
+		assert.Equal(t, tt.wantMsg, msg)
+	}
 }

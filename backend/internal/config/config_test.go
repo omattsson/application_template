@@ -147,3 +147,101 @@ func TestDatabaseDSN(t *testing.T) {
 	expected := "testuser:testpass@tcp(testhost:3306)/testdb?charset=utf8mb4&parseTime=True&loc=Local"
 	assert.Equal(t, expected, dbConfig.DSN())
 }
+func TestConfigValidate(t *testing.T) {
+	validConfig := &Config{
+		App: AppConfig{
+			Name:        "myapp",
+			Environment: "production",
+			Debug:       false,
+		},
+		Database: DatabaseConfig{
+			Host:            "localhost",
+			Port:            "3306",
+			User:            "user",
+			Password:        "pass",
+			DBName:          "dbname",
+			MaxOpenConns:    10,
+			MaxIdleConns:    5,
+			ConnMaxLifetime: 1 * time.Minute,
+		},
+		Server: ServerConfig{
+			Host:            "127.0.0.1",
+			Port:            "8080",
+			ReadTimeout:     5 * time.Second,
+			WriteTimeout:    5 * time.Second,
+			ShutdownTimeout: 10 * time.Second,
+		},
+	}
+
+	t.Run("valid config returns nil", func(t *testing.T) {
+		assert.NoError(t, validConfig.Validate())
+	})
+
+	t.Run("invalid app config", func(t *testing.T) {
+		cfg := *validConfig
+		cfg.App.Name = ""
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "app config")
+	})
+
+	t.Run("invalid database config", func(t *testing.T) {
+		cfg := *validConfig
+		cfg.Database.Host = ""
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "database config")
+	})
+
+	t.Run("invalid server config", func(t *testing.T) {
+		cfg := *validConfig
+		cfg.Server.Port = ""
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "server config")
+	})
+}
+func TestAzureTableConfig_Validate(t *testing.T) {
+	validConfig := AzureTableConfig{
+		AccountName: "account",
+		AccountKey:  "key",
+		Endpoint:    "endpoint",
+		TableName:   "table",
+	}
+
+	t.Run("valid config returns nil", func(t *testing.T) {
+		assert.NoError(t, validConfig.Validate())
+	})
+
+	t.Run("missing account name", func(t *testing.T) {
+		cfg := validConfig
+		cfg.AccountName = ""
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "account name is required")
+	})
+
+	t.Run("missing account key", func(t *testing.T) {
+		cfg := validConfig
+		cfg.AccountKey = ""
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "account key is required")
+	})
+
+	t.Run("missing endpoint", func(t *testing.T) {
+		cfg := validConfig
+		cfg.Endpoint = ""
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "endpoint is required")
+	})
+
+	t.Run("missing table name", func(t *testing.T) {
+		cfg := validConfig
+		cfg.TableName = ""
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "table name is required")
+	})
+}

@@ -344,6 +344,10 @@ const docTemplate = `{
                 "updated_at": {
                     "type": "string",
                     "example": "2025-06-02T10:00:00Z"
+                },
+                "version": {
+                    "description": "For optimistic locking",
+                    "type": "integer"
                 }
             }
         }
