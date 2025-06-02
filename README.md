@@ -22,6 +22,12 @@ A modern, production-ready template for full-stack web applications using Go (Gi
 - 🛣️ React Router for navigation
 - 🐳 Docker support for development and production
 
+### Development Workflow
+
+- 📋 Standardized PR templates for different types of changes
+- 📊 Project structure for maintainable, scalable applications
+- 🔄 Clear contribution guidelines
+
 ## Quick Start
 
 ### Prerequisites
@@ -173,11 +179,53 @@ Both services include health check endpoints:
 
 ## Contributing
 
+We welcome contributions to this project! Please check out our [Contributing Guidelines](.github/CONTRIBUTING.md) for detailed information on how to get started.
+
+### GitHub Templates and Workflows
+
+This repository includes a comprehensive set of templates and workflows to streamline the development process:
+
+#### Pull Request Templates
+
+- **Default Template**: Used automatically when creating a PR
+- **Bug Fix Template**: For PRs that fix bugs (`?template=bugfix.md`)
+- **Feature Template**: For PRs that add new features (`?template=feature.md`)
+- **Documentation Template**: For PRs that update docs (`?template=documentation.md`)
+
+To use a specialized template, add the query parameter to the PR URL:
+```
+https://github.com/username/application_template/compare/main...your-branch?template=feature.md
+```
+
+#### Issue Templates
+
+- **Bug Report**: For reporting bugs and unexpected behavior
+- **Feature Request**: For suggesting new features or improvements
+- **Documentation Issue**: For reporting issues with documentation
+
+#### Other Resources
+
+- **Code of Conduct**: Our [Code of Conduct](.github/CODE_OF_CONDUCT.md) outlines expectations for participation
+- **CODEOWNERS**: Automatically assigns reviewers based on the files changed
+- **GitHub Actions**: Automatically validates pull requests with linting, testing, and security scans
+
+### Getting Started
+
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+3. Commit your changes (`git commit -m 'feat: add some amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+5. Open a Pull Request using one of our templates
+
+- **Default Template**: Used automatically when creating a PR
+- **Bug Fix Template**: For PRs that fix bugs (`?template=bugfix.md`)
+- **Feature Template**: For PRs that add new features (`?template=feature.md`) 
+- **Documentation Template**: For PRs that update docs (`?template=documentation.md`)
+
+To use a specialized template, add the query parameter to the PR URL:
+```
+https://github.com/your-username/application_template/compare/main...your-branch?template=feature.md
+```
 
 ## License
 

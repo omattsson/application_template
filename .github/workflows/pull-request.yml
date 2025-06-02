@@ -1,0 +1,111 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+    branches: [ main, dev ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Validate PR title
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types:
+            - feat
+            - fix
+            - docs
+            - style
+            - refactor
+            - perf
+            - test
+            - build
+            - ci
+            - chore
+            - revert
+      
+      - name: Check files changed
+        id: files
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            backend:
+              - 'backend/**/*'
+            frontend:
+              - 'frontend/**/*'
+            docs:
+              - '**/*.md'
+              - 'docs/**/*'
+      
+      - name: Setup Go
+        if: steps.files.outputs.backend == 'true'
+        uses: actions/setup-go@v3
+        with:
+          go-version: '>=1.24.0'
+      
+      - name: Backend Lint
+        if: steps.files.outputs.backend == 'true'
+        run: |
+          cd backend
+          go vet ./...
+          go get -u golang.org/x/lint/golint
+          go install golang.org/x/lint/golint
+          golint ./...
+      
+      - name: Backend Tests
+        if: steps.files.outputs.backend == 'true'
+        run: |
+          cd backend
+          go test -v ./...
+      
+      - name: Setup Node.js
+        if: steps.files.outputs.frontend == 'true'
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      
+      - name: Frontend Lint
+        if: steps.files.outputs.frontend == 'true'
+        run: |
+          cd frontend
+          npm ci
+          npm run lint
+      
+      - name: Frontend Build
+        if: steps.files.outputs.frontend == 'true'
+        run: |
+          cd frontend
+          npm run build
+      
+      - name: Frontend Tests
+        if: steps.files.outputs.frontend == 'true'
+        run: |
+          cd frontend
+          npm test
+      
+      - name: Markdown Lint
+        if: steps.files.outputs.docs == 'true'
+        uses: avto-dev/markdown-lint@v1
+        with:
+          args: '**/*.md'
+          
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Run Gosec Security Scanner
+        uses: securego/gosec@master
+        with:
+          args: ./backend/...
+          
+      - name: Run npm audit
+        run: |
+          cd frontend
+          npm audit
