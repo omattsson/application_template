@@ -5,15 +5,15 @@ import (
 	"testing"
 )
 
-func TestNewHealthChecker(t *testing.T) {
-	h := NewHealthChecker()
+func TestNew(t *testing.T) {
+	h := New()
 	if h == nil {
 		t.Error("Expected non-nil HealthChecker")
 	}
 }
 
 func TestLivenessCheck(t *testing.T) {
-	h := NewHealthChecker()
+	h := New()
 	status := h.CheckLiveness()
 
 	if status.Status != "UP" {
@@ -26,7 +26,7 @@ func TestLivenessCheck(t *testing.T) {
 }
 
 func TestReadinessCheck(t *testing.T) {
-	h := NewHealthChecker()
+	h := New()
 
 	t.Run("Service not ready", func(t *testing.T) {
 		status := h.CheckReadiness()
@@ -45,7 +45,7 @@ func TestReadinessCheck(t *testing.T) {
 }
 
 func TestHealthChecks(t *testing.T) {
-	h := NewHealthChecker()
+	h := New()
 	h.SetReady(true)
 
 	t.Run("All checks passing", func(t *testing.T) {

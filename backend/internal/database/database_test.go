@@ -95,14 +95,14 @@ func TestItemCRUD(t *testing.T) {
 			Name:  "Test Item",
 			Price: 99.99,
 		}
-		err := db.Create(item).Error
+		err := db.Create(item)
 		assert.NoError(t, err)
 		assert.NotZero(t, item.ID)
 	})
 
 	t.Run("Read Item", func(t *testing.T) {
 		var item models.Item
-		err := db.First(&item, 1).Error
+		err := db.FindByID(1, &item)
 		assert.NoError(t, err)
 		assert.Equal(t, "Test Item", item.Name)
 		assert.Equal(t, 99.99, item.Price)
@@ -110,22 +110,24 @@ func TestItemCRUD(t *testing.T) {
 
 	t.Run("Update Item", func(t *testing.T) {
 		var item models.Item
-		db.First(&item, 1)
+		err := db.FindByID(1, &item)
+		require.NoError(t, err)
 		item.Price = 199.99
-		err := db.Save(&item).Error
+		err = db.Update(&item)
 		assert.NoError(t, err)
 
 		var updatedItem models.Item
-		db.First(&updatedItem, 1)
+		err = db.FindByID(1, &updatedItem)
 		assert.Equal(t, 199.99, updatedItem.Price)
 	})
 
 	t.Run("Delete Item", func(t *testing.T) {
-		err := db.Delete(&models.Item{}, 1).Error
+		item := &models.Item{Base: models.Base{ID: 1}}
+		err := db.Delete(item)
 		assert.NoError(t, err)
 
-		var item models.Item
-		err = db.First(&item, 1).Error
+		var deleted models.Item
+		err = db.FindByID(1, &deleted)
 		assert.Error(t, err, "Should not find deleted item")
 	})
 }

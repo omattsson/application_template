@@ -877,10 +877,10 @@ func TestHandleDBError(t *testing.T) {
 	}
 
 	// Mock database.DatabaseError and error values
-	validationErr := &database.DatabaseError{Err: database.ErrValidation, Msg: "validation failed"}
-	notFoundErr := &database.DatabaseError{Err: database.ErrNotFound, Msg: "not found"}
-	duplicateErr := &database.DatabaseError{Err: database.ErrDuplicateKey, Msg: "duplicate key"}
-	otherDBErr := &database.DatabaseError{Err: errors.New("other"), Msg: "other db error"}
+	validationErr := &database.DatabaseError{Err: database.ErrValidation, Op: "validation failed"}
+	notFoundErr := &database.DatabaseError{Err: database.ErrNotFound, Op: "not found"}
+	duplicateErr := &database.DatabaseError{Err: database.ErrDuplicateKey, Op: "duplicate key"}
+	otherDBErr := &database.DatabaseError{Err: errors.New("other"), Op: "other db error"}
 	plainNotFound := errors.New("item not found in db")
 	plainOther := errors.New("some other error")
 

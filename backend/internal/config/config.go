@@ -54,6 +54,7 @@ type ServerConfig struct {
 	Port            string
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
+	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
 }
 
@@ -138,8 +139,8 @@ func (c *ServerConfig) Validate() error {
 	if c.WriteTimeout <= 0 {
 		return fmt.Errorf("write timeout must be positive")
 	}
-	if c.ShutdownTimeout <= 0 {
-		return fmt.Errorf("shutdown timeout must be positive")
+	if c.IdleTimeout <= 0 {
+		return fmt.Errorf("idle timeout must be positive")
 	}
 	return nil
 }
@@ -212,6 +213,7 @@ func LoadConfig() (*Config, error) {
 			Port:            getEnv("SERVER_PORT", "8081"),
 			ReadTimeout:     getEnvDuration("SERVER_READ_TIMEOUT", 10*time.Second),
 			WriteTimeout:    getEnvDuration("SERVER_WRITE_TIMEOUT", 10*time.Second),
+			IdleTimeout:     getEnvDuration("SERVER_IDLE_TIMEOUT", 30*time.Second),
 			ShutdownTimeout: getEnvDuration("SERVER_SHUTDOWN_TIMEOUT", 30*time.Second),
 		},
 		Logging: LogConfig{

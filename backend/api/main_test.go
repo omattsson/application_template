@@ -152,7 +152,6 @@ func mockLoadConfig() (*config.Config, error) {
 
 func mockNewFromAppConfig(cfg *config.Config) (*database.Database, error) {
 	// Return a mock database
-	mockDB := new(MockDB)
 	return &database.Database{
 		DB: &gorm.DB{},
 	}, nil
@@ -203,7 +202,7 @@ func TestHealthEndpoints(t *testing.T) {
 	r := gin.Default()
 
 	// Initialize health checker
-	healthChecker := health.NewHealthChecker()
+	healthChecker := health.New()
 	healthChecker.SetReady(true)
 
 	// Register health endpoints
@@ -252,7 +251,7 @@ func TestHealthEndpoints(t *testing.T) {
 
 func TestDatabaseHealthCheck(t *testing.T) {
 	// Create a new health checker
-	healthChecker := health.NewHealthChecker()
+	healthChecker := health.New()
 
 	// Test with SQLite database
 	mockRepo := new(MockRepository)
@@ -279,7 +278,7 @@ func TestDatabaseHealthCheck(t *testing.T) {
 	mockRepo = new(MockRepository)
 	mockRepo.On("Ping").Return(errors.New("connection failed"))
 
-	healthChecker = health.NewHealthChecker()
+	healthChecker = health.New()
 	healthChecker.SetReady(true)
 	healthChecker.AddCheck("database", func() error {
 		return mockRepo.Ping()

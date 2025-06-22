@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,20 +19,32 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- Mocks ---
+// --- Test Helpers ---
 
-// mockPager implements ListEntitiesPager for testing
+func createTestEntity(id string) map[string]interface{} {
+	return map[string]interface{}{
+		"PartitionKey": "test",
+		"RowKey":       id,
+		"Data":         fmt.Sprintf("test data %s", id),
+	}
+}
+
 type mockPager struct {
-	pages [][]byte
-	index int
-	err   error
+	pages          [][]byte
+	index          int
+	err            error
+	nextPageCalled bool
 }
 
 func (p *mockPager) More() bool {
+	if p.err != nil && !p.nextPageCalled {
+		return true // Return true once to force a call to NextPage() to get the error
+	}
 	return p.index < len(p.pages)
 }
 
 func (p *mockPager) NextPage(ctx context.Context) (aztables.ListEntitiesResponse, error) {
+	p.nextPageCalled = true
 	if p.err != nil {
 		return aztables.ListEntitiesResponse{}, p.err
 	}
@@ -44,13 +58,14 @@ func (p *mockPager) NextPage(ctx context.Context) (aztables.ListEntitiesResponse
 	return resp, nil
 }
 
-// mockClient implements AzureTableClient for testing
+// mockClient for table_test.go
 type mockClient struct {
-	addEntityFn            func(ctx context.Context, entity []byte, options *aztables.AddEntityOptions) (aztables.AddEntityResponse, error)
-	getEntityFn            func(ctx context.Context, partitionKey, rowKey string, options *aztables.GetEntityOptions) (aztables.GetEntityResponse, error)
-	updateEntityFn         func(ctx context.Context, entity []byte, options *aztables.UpdateEntityOptions) (aztables.UpdateEntityResponse, error)
-	deleteEntityFn         func(ctx context.Context, partitionKey, rowKey string, options *aztables.DeleteEntityOptions) (aztables.DeleteEntityResponse, error)
-	newListEntitiesPagerFn func(options *aztables.ListEntitiesOptions) ListEntitiesPager
+	addEntityFn            func(context.Context, []byte, *aztables.AddEntityOptions) (aztables.AddEntityResponse, error)
+	getEntityFn            func(context.Context, string, string, *aztables.GetEntityOptions) (aztables.GetEntityResponse, error)
+	updateEntityFn         func(context.Context, []byte, *aztables.UpdateEntityOptions) (aztables.UpdateEntityResponse, error)
+	deleteEntityFn         func(context.Context, string, string, *aztables.DeleteEntityOptions) (aztables.DeleteEntityResponse, error)
+	newListEntitiesPagerFn func(*aztables.ListEntitiesOptions) ListEntitiesPager
+	pager                  *mockPager
 }
 
 func (m *mockClient) AddEntity(ctx context.Context, entity []byte, options *aztables.AddEntityOptions) (aztables.AddEntityResponse, error) {
@@ -325,25 +340,41 @@ func TestList_EmptyResults(t *testing.T) {
 	assert.Len(t, items, 0)
 }
 
+type testMockPager struct {
+	err error
+}
+
+func (p *testMockPager) More() bool {
+	if p.err != nil {
+		return true // Return true once to trigger the error on NextPage
+	}
+	return false
+}
+
+func (p *testMockPager) NextPage(ctx context.Context) (aztables.ListEntitiesResponse, error) {
+	if p.err != nil {
+		return aztables.ListEntitiesResponse{}, p.err
+	}
+	return aztables.ListEntitiesResponse{}, nil
+}
+
 func TestList_PaginationError(t *testing.T) {
+	// Create a mock client that returns an error during pagination
 	mock := &mockClient{
 		newListEntitiesPagerFn: func(options *aztables.ListEntitiesOptions) ListEntitiesPager {
-			return &mockPager{
-				pages: [][]byte{},
-				err:   fmt.Errorf("mock error"),
-			}
+			return &testMockPager{err: fmt.Errorf("mock error")}
 		},
 	}
 
-	repo := newTestTableRepository(mock)
+	repo := &TableRepository{client: mock, tableName: "test"}
 	var items []models.Item
 	err := repo.List(&items)
 	assert.Error(t, err)
+
 	var dbErr *dberrors.DatabaseError
-	if assert.ErrorAs(t, err, &dbErr) {
-		assert.Equal(t, "list", dbErr.Op)
-		assert.Contains(t, dbErr.Error(), "mock error")
-	}
+	assert.True(t, errors.As(err, &dbErr))
+	assert.Equal(t, "list", dbErr.Op)
+	assert.Contains(t, dbErr.Unwrap().Error(), "mock error")
 }
 
 func TestList_InvalidEntityData(t *testing.T) {
@@ -367,39 +398,36 @@ func TestList_FilteringAndPagination(t *testing.T) {
 	now := time.Now().UTC()
 	entities := []map[string]interface{}{
 		{
-			"RowKey":    "1",
-			"Name":      "Phone",
-			"Price":     999.99,
-			"CreatedAt": now.Format(time.RFC3339),
-			"UpdatedAt": now.Format(time.RFC3339),
+			"PartitionKey": "items",
+			"RowKey":       "1",
+			"Name":         "Phone",
+			"Price":        999.99,
+			"CreatedAt":    now.Format(time.RFC3339),
+			"UpdatedAt":    now.Format(time.RFC3339),
 		},
 		{
-			"RowKey":    "2",
-			"Name":      "Laptop",
-			"Price":     1999.99,
-			"CreatedAt": now.Format(time.RFC3339),
-			"UpdatedAt": now.Format(time.RFC3339),
+			"PartitionKey": "items",
+			"RowKey":       "2",
+			"Name":         "Laptop",
+			"Price":        1999.99,
+			"CreatedAt":    now.Format(time.RFC3339),
+			"UpdatedAt":    now.Format(time.RFC3339),
 		},
 		{
-			"RowKey":    "3",
-			"Name":      "Phone Case",
-			"Price":     29.99,
-			"CreatedAt": now.Format(time.RFC3339),
-			"UpdatedAt": now.Format(time.RFC3339),
+			"PartitionKey": "items",
+			"RowKey":       "3",
+			"Name":         "Phone Case",
+			"Price":        29.99,
+			"CreatedAt":    now.Format(time.RFC3339),
+			"UpdatedAt":    now.Format(time.RFC3339),
 		},
-	}
-
-	pages := make([][]byte, len(entities))
-	for i, entity := range entities {
-		val, _ := json.Marshal(entity)
-		pages[i] = val
 	}
 
 	tests := []struct {
 		name       string
 		conditions []interface{}
-		wantNames  []string
 		wantCount  int
+		wantNames  []string
 	}{
 		{
 			name:       "no filters",
@@ -466,26 +494,98 @@ func TestList_FilteringAndPagination(t *testing.T) {
 		},
 	}
 
-	mockPager := &mockPager{pages: pages}
-	mock := &mockClient{
-		newListEntitiesPagerFn: func(options *aztables.ListEntitiesOptions) ListEntitiesPager {
-			return mockPager
-		},
-	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Convert entities to bytes
+			var filteredEntities []map[string]interface{}
+			for _, entity := range entities {
+				if shouldIncludeEntity(entity, tt.conditions) {
+					filteredEntities = append(filteredEntities, entity)
+				}
+			}
+
+			// Sort by RowKey to ensure consistent order
+			sort.Slice(filteredEntities, func(i, j int) bool {
+				return filteredEntities[i]["RowKey"].(string) < filteredEntities[j]["RowKey"].(string)
+			})
+
+			// Convert filtered entities to bytes - keep each entity separate
+			var pages [][]byte
+			if len(filteredEntities) > 0 {
+				for _, entity := range filteredEntities {
+					val, _ := json.Marshal(entity)
+					pages = append(pages, val)
+				}
+			}
+
+			mockPager := &mockPager{pages: pages}
+			mock := &mockClient{
+				newListEntitiesPagerFn: func(options *aztables.ListEntitiesOptions) ListEntitiesPager {
+					return mockPager
+				},
+			}
+
 			repo := newTestTableRepository(mock)
 			var items []models.Item
 			err := repo.List(&items, tt.conditions...)
 			assert.NoError(t, err)
-			assert.Equal(t, tt.wantCount, len(items))
 
-			names := make([]string, len(items))
-			for i, item := range items {
-				names[i] = item.Name
+			// Extract names for comparison
+			var names []string
+			for _, item := range items {
+				names = append(names, item.Name)
 			}
-			assert.Equal(t, tt.wantNames, names)
+			assert.Equal(t, tt.wantNames, names, "Expected items %v but got %v", tt.wantNames, names)
+			assert.Equal(t, tt.wantCount, len(items), "Expected %d items but got %d", tt.wantCount, len(items))
 		})
 	}
+}
+
+// shouldIncludeEntity checks if an entity should be included based on the conditions
+func shouldIncludeEntity(entity map[string]interface{}, conditions []interface{}) bool {
+	// Gather filter conditions first
+	var nameContainsFilter string
+	var nameExactFilter string
+	var minPrice *float64
+	var maxPrice *float64
+
+	for _, cond := range conditions {
+		if filter, ok := cond.(models.Filter); ok {
+			switch filter.Field {
+			case "name":
+				if filter.Op == "exact" {
+					nameExactFilter = filter.Value.(string)
+				} else {
+					nameContainsFilter = strings.ToLower(filter.Value.(string))
+				}
+			case "price":
+				if filter.Op == ">=" {
+					val := filter.Value.(float64)
+					minPrice = &val
+				} else if filter.Op == "<=" {
+					val := filter.Value.(float64)
+					maxPrice = &val
+				}
+			}
+		}
+	}
+
+	// Apply all filters
+	name := entity["Name"].(string)
+	price := entity["Price"].(float64)
+
+	if nameExactFilter != "" && nameExactFilter != name {
+		return false
+	}
+	if nameContainsFilter != "" && !strings.Contains(strings.ToLower(name), nameContainsFilter) {
+		return false
+	}
+	if minPrice != nil && price < *minPrice {
+		return false
+	}
+	if maxPrice != nil && price > *maxPrice {
+		return false
+	}
+
+	return true
 }

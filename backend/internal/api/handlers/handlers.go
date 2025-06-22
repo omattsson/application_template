@@ -10,7 +10,7 @@ import (
 var healthChecker *health.HealthChecker
 
 func init() {
-	healthChecker = health.NewHealthChecker()
+	healthChecker = health.New()
 	// Set the service as ready after initialization
 	healthChecker.SetReady(true)
 }

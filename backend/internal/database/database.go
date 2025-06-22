@@ -69,3 +69,57 @@ func (d *Database) HandleError(op string, err error) error {
 
 	return NewDatabaseError(op, err)
 }
+
+// Create implements models.Repository
+func (d *Database) Create(value interface{}) error {
+	result := d.DB.Create(value)
+	if result.Error != nil {
+		return d.HandleError("create", result.Error)
+	}
+	return nil
+}
+
+// FindByID implements models.Repository
+func (d *Database) FindByID(id uint, dest interface{}) error {
+	result := d.DB.First(dest, id)
+	if result.Error != nil {
+		return d.HandleError("find", result.Error)
+	}
+	return nil
+}
+
+// Update implements models.Repository
+func (d *Database) Update(value interface{}) error {
+	result := d.DB.Save(value)
+	if result.Error != nil {
+		return d.HandleError("update", result.Error)
+	}
+	return nil
+}
+
+// Delete implements models.Repository
+func (d *Database) Delete(value interface{}) error {
+	result := d.DB.Delete(value)
+	if result.Error != nil {
+		return d.HandleError("delete", result.Error)
+	}
+	return nil
+}
+
+// List implements models.Repository
+func (d *Database) List(dest interface{}, conditions ...interface{}) error {
+	result := d.DB.Find(dest)
+	if result.Error != nil {
+		return d.HandleError("list", result.Error)
+	}
+	return nil
+}
+
+// Ping implements models.Repository
+func (d *Database) Ping() error {
+	sqlDB, err := d.DB.DB()
+	if err != nil {
+		return d.HandleError("ping", err)
+	}
+	return sqlDB.Ping()
+}

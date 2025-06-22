@@ -81,8 +81,8 @@ func NewFromAppConfig(cfg *config.Config) (*Database, error) {
 	return database, nil
 }
 
-// NewFromConfig creates a new database instance from database configuration
-func NewFromConfig(cfg *Config) (*Database, error) {
+// NewFromDBConfig creates a new database instance from database configuration
+func NewFromDBConfig(cfg *Config) (*Database, error) {
 	// For testing, use SQLite in-memory database when cfg is nil
 	if cfg == nil {
 		db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{

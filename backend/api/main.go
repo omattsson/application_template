@@ -1,14 +1,21 @@
+// Package main provides the entry point for the backend API service.
+// It handles configuration loading, database setup, and HTTP server initialization.
 package main
 
 import (
-	_ "backend/docs" // This will be generated
+	_ "backend/docs"
 	"backend/internal/api/routes"
 	"backend/internal/config"
 	"backend/internal/database"
 	"backend/internal/health"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
@@ -20,7 +27,9 @@ import (
 // @description     This is the API documentation for the backend service
 // @host            localhost:8081
 // @BasePath        /
-
+// @schemes         http https
+// @produce         json
+// @consumes        json
 func main() {
 	// Load configuration
 	cfg, err := config.LoadConfig()
@@ -34,61 +43,44 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
-	// Run database migrations
-	if err := db.AutoMigrate(); err != nil {
-		log.Fatalf("Failed to run database migrations: %v", err)
-	}
-
-	// Create repository based on configuration
-	repository, err := database.NewRepository(cfg)
-	if err != nil {
-		log.Fatalf("Failed to create repository: %v", err)
-	}
-
-	r := gin.Default()
-
 	// Initialize health checker
-	healthChecker := health.NewHealthChecker()
+	healthChecker := health.New()
+	healthChecker.AddCheck("database", db.Ping)
 
-	// Add database health check
-	if cfg.AzureTable.UseAzureTable {
-		healthChecker.AddCheck("database", func() error {
-			// For Azure Table Storage, we'll check if we can list tables
-			return repository.Ping()
-		})
-	} else {
-		healthChecker.AddCheck("database", func() error {
-			sqlDB, err := db.DB.DB()
-			if err != nil {
-				return err
-			}
-			return sqlDB.Ping()
-		})
-	}
+	// Setup router
+	router := gin.Default()
+	routes.SetupRoutes(router, db)
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	// Mark the service as ready after initialization
-	healthChecker.SetReady(true)
-
-	// Swagger documentation endpoint
-	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
-
-	// Set up routes with repository
-	routes.SetupRoutes(r, repository)
-
-	// Configure server address
-	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
-
-	// Configure server timeouts
-	server := &http.Server{
-		Addr:         addr,
-		Handler:      r,
+	// Create server with timeouts
+	srv := &http.Server{
+		Addr:         fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port),
+		Handler:      router,
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
+		IdleTimeout:  cfg.Server.IdleTimeout,
 	}
 
-	// Start server
-	log.Printf("Starting server on %s", addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Server failed to start: %v", err)
+	// Start server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down server...")
+
+	// Give outstanding requests 5 seconds to complete
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
+
+	log.Println("Server exiting")
 }

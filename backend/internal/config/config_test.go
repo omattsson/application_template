@@ -169,6 +169,7 @@ func TestConfigValidate(t *testing.T) {
 			Port:            "8080",
 			ReadTimeout:     5 * time.Second,
 			WriteTimeout:    5 * time.Second,
+			IdleTimeout:     30 * time.Second,
 			ShutdownTimeout: 10 * time.Second,
 		},
 	}

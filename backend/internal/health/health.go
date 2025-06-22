@@ -25,7 +25,8 @@ type CheckStatus struct {
 	Message string `json:"message,omitempty"`
 }
 
-func NewHealthChecker() *HealthChecker {
+// New creates a new HealthChecker instance
+func New() *HealthChecker {
 	return &HealthChecker{
 		startTime:    time.Now(),
 		dependencies: make(map[string]HealthCheck),

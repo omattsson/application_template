@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewFromConfig(t *testing.T) {
+func TestNewFromDBConfig(t *testing.T) {
 	t.Run("With SQLite configuration", func(t *testing.T) {
-		db, err := NewFromConfig(nil)
+		db, err := NewFromDBConfig(nil)
 		require.NoError(t, err)
 		require.NotNil(t, db)
 
@@ -31,7 +31,7 @@ func TestNewFromConfig(t *testing.T) {
 			DBName:   "test",
 		}
 
-		db, err := NewFromConfig(cfg)
+		db, err := NewFromDBConfig(cfg)
 		assert.Error(t, err)
 		assert.Nil(t, db)
 		assert.Contains(t, err.Error(), "failed to connect to database")

@@ -22,7 +22,7 @@ func TestSetupRoutes(t *testing.T) {
 	mockRepo := handlers.NewMockRepository()
 
 	// Initialize health checker and set it as ready
-	health.NewHealthChecker().SetReady(true)
+	health.New().SetReady(true)
 
 	// Setup routes
 	SetupRoutes(router, mockRepo)
