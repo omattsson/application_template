@@ -11,6 +11,7 @@ import (
 )
 
 func TestHealthCheckHandler(t *testing.T) {
+	t.Parallel()
 	// Set Gin to Test Mode
 	gin.SetMode(gin.TestMode)
 
@@ -36,6 +37,7 @@ func TestHealthCheckHandler(t *testing.T) {
 }
 
 func TestPingHandler(t *testing.T) {
+	t.Parallel()
 	// Set Gin to Test Mode
 	gin.SetMode(gin.TestMode)
 
@@ -60,6 +62,7 @@ func TestPingHandler(t *testing.T) {
 	assert.Equal(t, "pong", response["message"])
 }
 func TestGetItemsHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
 	r := gin.Default()
@@ -79,6 +82,7 @@ func TestGetItemsHandler(t *testing.T) {
 	assert.Equal(t, "GetItems called", response["message"])
 }
 func TestCreateItemHandler(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
 	r := gin.Default()

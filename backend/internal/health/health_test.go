@@ -6,6 +6,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
+	t.Parallel()
 	h := New()
 	if h == nil {
 		t.Error("Expected non-nil HealthChecker")
@@ -13,6 +14,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestLivenessCheck(t *testing.T) {
+	t.Parallel()
 	h := New()
 	status := h.CheckLiveness()
 
@@ -26,9 +28,11 @@ func TestLivenessCheck(t *testing.T) {
 }
 
 func TestReadinessCheck(t *testing.T) {
-	h := New()
+	t.Parallel()
 
 	t.Run("Service not ready", func(t *testing.T) {
+		t.Parallel()
+		h := New() // Create a fresh instance for this subtest
 		status := h.CheckReadiness()
 		if status.Status != "DOWN" {
 			t.Errorf("Expected status DOWN, got %s", status.Status)
@@ -36,6 +40,8 @@ func TestReadinessCheck(t *testing.T) {
 	})
 
 	t.Run("Service ready", func(t *testing.T) {
+		t.Parallel()
+		h := New() // Create a fresh instance for this subtest
 		h.SetReady(true)
 		status := h.CheckReadiness()
 		if status.Status != "UP" {
@@ -45,10 +51,12 @@ func TestReadinessCheck(t *testing.T) {
 }
 
 func TestHealthChecks(t *testing.T) {
-	h := New()
-	h.SetReady(true)
+	t.Parallel()
 
 	t.Run("All checks passing", func(t *testing.T) {
+		t.Parallel()
+		h := New() // Create a fresh instance for this subtest
+		h.SetReady(true)
 		h.AddCheck("test", func() error { return nil })
 		status := h.CheckReadiness()
 		if status.Status != "UP" {
@@ -60,6 +68,9 @@ func TestHealthChecks(t *testing.T) {
 	})
 
 	t.Run("Failed check", func(t *testing.T) {
+		t.Parallel()
+		h := New() // Create a fresh instance for this subtest
+		h.SetReady(true)
 		h.AddCheck("failing", func() error { return errors.New("test error") })
 		status := h.CheckReadiness()
 		if status.Status != "DOWN" {

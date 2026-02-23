@@ -1,15 +1,19 @@
-package config
+package config_test
 
 import (
 	"os"
 	"testing"
 	"time"
 
+	"backend/internal/config"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestLoadConfig(t *testing.T) {
+	// Not parallel: subtests use t.Setenv which modifies process env
+
 	// Test with environment variables set
 	t.Run("With environment variables", func(t *testing.T) {
 		// Set test environment variables
@@ -36,7 +40,7 @@ func TestLoadConfig(t *testing.T) {
 
 		// Set environment variables
 		for k, v := range envVars {
-			os.Setenv(k, v)
+			t.Setenv(k, v)
 		}
 		defer func() {
 			// Clean up environment variables
@@ -45,7 +49,7 @@ func TestLoadConfig(t *testing.T) {
 			}
 		}()
 
-		config, err := LoadConfig()
+		config, err := config.LoadConfig()
 		require.NoError(t, err)
 		require.NotNil(t, config)
 
@@ -95,7 +99,7 @@ func TestLoadConfig(t *testing.T) {
 			os.Unsetenv(v)
 		}
 
-		config, err := LoadConfig()
+		config, err := config.LoadConfig()
 		require.NoError(t, err)
 		require.NotNil(t, config)
 
@@ -108,14 +112,14 @@ func TestLoadConfig(t *testing.T) {
 		assert.Equal(t, "localhost", config.Database.Host)
 		assert.Equal(t, "3306", config.Database.Port)
 		assert.Equal(t, "root", config.Database.User)
-		assert.Equal(t, "", config.Database.Password)
+		assert.Empty(t, config.Database.Password)
 		assert.Equal(t, "app", config.Database.DBName)
-		assert.Equal(t, 25, config.Database.MaxOpenConns)
-		assert.Equal(t, 5, config.Database.MaxIdleConns)
+		assert.Equal(t, int32(25), config.Database.MaxOpenConns)
+		assert.Equal(t, int32(5), config.Database.MaxIdleConns)
 		assert.Equal(t, 5*time.Minute, config.Database.ConnMaxLifetime)
 
 		// Check default server config
-		assert.Equal(t, "", config.Server.Host)
+		assert.Empty(t, config.Server.Host)
 		assert.Equal(t, "8081", config.Server.Port)
 		assert.Equal(t, 10*time.Second, config.Server.ReadTimeout)
 		assert.Equal(t, 10*time.Second, config.Server.WriteTimeout)
@@ -128,15 +132,16 @@ func TestLoadConfig(t *testing.T) {
 		// Check default Azure Table config
 		assert.False(t, config.AzureTable.UseAzureTable)
 		assert.False(t, config.AzureTable.UseAzurite)
-		assert.Equal(t, "", config.AzureTable.AccountName)
-		assert.Equal(t, "", config.AzureTable.AccountKey)
-		assert.Equal(t, "", config.AzureTable.Endpoint)
+		assert.Empty(t, config.AzureTable.AccountName)
+		assert.Empty(t, config.AzureTable.AccountKey)
+		assert.Empty(t, config.AzureTable.Endpoint)
 		assert.Equal(t, "items", config.AzureTable.TableName)
 	})
 }
 
 func TestDatabaseDSN(t *testing.T) {
-	dbConfig := DatabaseConfig{
+	t.Parallel()
+	dbConfig := config.DatabaseConfig{
 		Host:     "testhost",
 		Port:     "3306",
 		User:     "testuser",
@@ -148,99 +153,197 @@ func TestDatabaseDSN(t *testing.T) {
 	assert.Equal(t, expected, dbConfig.DSN())
 }
 func TestConfigValidate(t *testing.T) {
-	validConfig := &Config{
-		App: AppConfig{
-			Name:        "myapp",
-			Environment: "production",
-			Debug:       false,
-		},
-		Database: DatabaseConfig{
-			Host:            "localhost",
-			Port:            "3306",
-			User:            "user",
-			Password:        "pass",
-			DBName:          "dbname",
-			MaxOpenConns:    10,
-			MaxIdleConns:    5,
-			ConnMaxLifetime: 1 * time.Minute,
-		},
-		Server: ServerConfig{
-			Host:            "127.0.0.1",
-			Port:            "8080",
-			ReadTimeout:     5 * time.Second,
-			WriteTimeout:    5 * time.Second,
-			IdleTimeout:     30 * time.Second,
-			ShutdownTimeout: 10 * time.Second,
-		},
-	}
+	t.Parallel()
 
 	t.Run("valid config returns nil", func(t *testing.T) {
+		t.Parallel()
+		validConfig := &config.Config{
+			App: config.AppConfig{
+				Name:        "myapp",
+				Environment: "production",
+				Debug:       false,
+			},
+			Database: config.DatabaseConfig{
+				Host:            "localhost",
+				Port:            "3306",
+				User:            "user",
+				Password:        "pass",
+				DBName:          "dbname",
+				MaxOpenConns:    10,
+				MaxIdleConns:    5,
+				ConnMaxLifetime: 1 * time.Minute,
+			},
+			Server: config.ServerConfig{
+				Host:            "127.0.0.1",
+				Port:            "8080",
+				ReadTimeout:     5 * time.Second,
+				WriteTimeout:    5 * time.Second,
+				IdleTimeout:     30 * time.Second,
+				ShutdownTimeout: 10 * time.Second,
+			},
+		}
+
 		assert.NoError(t, validConfig.Validate())
 	})
 
 	t.Run("invalid app config", func(t *testing.T) {
-		cfg := *validConfig
-		cfg.App.Name = ""
+		t.Parallel()
+		cfg := &config.Config{
+			App: config.AppConfig{
+				Name:        "",
+				Environment: "production",
+				Debug:       false,
+			},
+			Database: config.DatabaseConfig{
+				Host:            "localhost",
+				Port:            "3306",
+				User:            "user",
+				Password:        "pass",
+				DBName:          "dbname",
+				MaxOpenConns:    10,
+				MaxIdleConns:    5,
+				ConnMaxLifetime: 1 * time.Minute,
+			},
+			Server: config.ServerConfig{
+				Host:            "127.0.0.1",
+				Port:            "8080",
+				ReadTimeout:     5 * time.Second,
+				WriteTimeout:    5 * time.Second,
+				IdleTimeout:     30 * time.Second,
+				ShutdownTimeout: 10 * time.Second,
+			},
+		}
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "app config")
 	})
 
 	t.Run("invalid database config", func(t *testing.T) {
-		cfg := *validConfig
-		cfg.Database.Host = ""
+		t.Parallel()
+		cfg := &config.Config{
+			App: config.AppConfig{
+				Name:        "myapp",
+				Environment: "production",
+				Debug:       false,
+			},
+			Database: config.DatabaseConfig{
+				Host:            "",
+				Port:            "3306",
+				User:            "user",
+				Password:        "pass",
+				DBName:          "dbname",
+				MaxOpenConns:    10,
+				MaxIdleConns:    5,
+				ConnMaxLifetime: 1 * time.Minute,
+			},
+			Server: config.ServerConfig{
+				Host:            "127.0.0.1",
+				Port:            "8080",
+				ReadTimeout:     5 * time.Second,
+				WriteTimeout:    5 * time.Second,
+				IdleTimeout:     30 * time.Second,
+				ShutdownTimeout: 10 * time.Second,
+			},
+		}
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "database config")
 	})
 
 	t.Run("invalid server config", func(t *testing.T) {
-		cfg := *validConfig
-		cfg.Server.Port = ""
+		t.Parallel()
+		cfg := &config.Config{
+			App: config.AppConfig{
+				Name:        "myapp",
+				Environment: "production",
+				Debug:       false,
+			},
+			Database: config.DatabaseConfig{
+				Host:            "localhost",
+				Port:            "3306",
+				User:            "user",
+				Password:        "pass",
+				DBName:          "dbname",
+				MaxOpenConns:    10,
+				MaxIdleConns:    5,
+				ConnMaxLifetime: 1 * time.Minute,
+			},
+			Server: config.ServerConfig{
+				Host:            "127.0.0.1",
+				Port:            "",
+				ReadTimeout:     5 * time.Second,
+				WriteTimeout:    5 * time.Second,
+				IdleTimeout:     30 * time.Second,
+				ShutdownTimeout: 10 * time.Second,
+			},
+		}
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "server config")
 	})
 }
-func TestAzureTableConfig_Validate(t *testing.T) {
-	validConfig := AzureTableConfig{
-		AccountName: "account",
-		AccountKey:  "key",
-		Endpoint:    "endpoint",
-		TableName:   "table",
-	}
+func TestAzureTableConfigValidate(t *testing.T) {
+	t.Parallel()
 
 	t.Run("valid config returns nil", func(t *testing.T) {
+		t.Parallel()
+		validConfig := config.AzureTableConfig{
+			AccountName: "account",
+			AccountKey:  "key",
+			Endpoint:    "endpoint",
+			TableName:   "table",
+		}
+
 		assert.NoError(t, validConfig.Validate())
 	})
 
 	t.Run("missing account name", func(t *testing.T) {
-		cfg := validConfig
-		cfg.AccountName = ""
+		t.Parallel()
+		cfg := config.AzureTableConfig{
+			AccountName: "",
+			AccountKey:  "key",
+			Endpoint:    "endpoint",
+			TableName:   "table",
+		}
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "account name is required")
 	})
 
 	t.Run("missing account key", func(t *testing.T) {
-		cfg := validConfig
-		cfg.AccountKey = ""
+		t.Parallel()
+		cfg := config.AzureTableConfig{
+			AccountName: "account",
+			AccountKey:  "",
+			Endpoint:    "endpoint",
+			TableName:   "table",
+		}
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "account key is required")
 	})
 
 	t.Run("missing endpoint", func(t *testing.T) {
-		cfg := validConfig
-		cfg.Endpoint = ""
+		t.Parallel()
+		cfg := config.AzureTableConfig{
+			AccountName: "account",
+			AccountKey:  "key",
+			Endpoint:    "",
+			TableName:   "table",
+		}
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "endpoint is required")
 	})
 
 	t.Run("missing table name", func(t *testing.T) {
-		cfg := validConfig
-		cfg.TableName = ""
+		t.Parallel()
+		cfg := config.AzureTableConfig{
+			AccountName: "account",
+			AccountKey:  "key",
+			Endpoint:    "endpoint",
+			TableName:   "",
+		}
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "table name is required")

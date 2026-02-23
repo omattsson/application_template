@@ -10,6 +10,7 @@ import (
 )
 
 func TestCORSMiddleware(t *testing.T) {
+	t.Parallel()
 	// Set Gin to Test Mode
 	gin.SetMode(gin.TestMode)
 
@@ -21,6 +22,7 @@ func TestCORSMiddleware(t *testing.T) {
 	})
 
 	t.Run("Regular GET request", func(t *testing.T) {
+		t.Parallel()
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", "/test", nil)
 		r.ServeHTTP(w, req)
@@ -33,6 +35,7 @@ func TestCORSMiddleware(t *testing.T) {
 	})
 
 	t.Run("OPTIONS preflight request", func(t *testing.T) {
+		t.Parallel()
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("OPTIONS", "/test", nil)
 		r.ServeHTTP(w, req)

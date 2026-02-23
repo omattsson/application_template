@@ -20,6 +20,7 @@ func setupTestDB(t *testing.T) *Database {
 }
 
 func TestNewDatabase(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 	assert.NotNil(t, db)
 
@@ -29,6 +30,7 @@ func TestNewDatabase(t *testing.T) {
 }
 
 func TestDatabaseMigrations(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 
 	// Run migrations
@@ -46,6 +48,7 @@ func TestDatabaseMigrations(t *testing.T) {
 }
 
 func TestDatabaseTransaction(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 
 	// Run migrations first
@@ -53,6 +56,9 @@ func TestDatabaseTransaction(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Run("Successful Transaction", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NoError(t, db.AutoMigrate())
 		err := db.Transaction(func(tx *gorm.DB) error {
 			user := &models.User{
 				Username: "test_user",
@@ -70,6 +76,20 @@ func TestDatabaseTransaction(t *testing.T) {
 	})
 
 	t.Run("Failed Transaction", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NoError(t, db.AutoMigrate())
+
+		// Create initial user to test duplicate error
+		require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+			user := &models.User{
+				Username: "test_user",
+				Email:    "test@example.com",
+				Name:     "Test User",
+			}
+			return tx.Create(user).Error
+		}))
+
 		err := db.Transaction(func(tx *gorm.DB) error {
 			user := &models.User{
 				Username: "test_user", // Duplicate username should cause error
@@ -87,10 +107,14 @@ func TestDatabaseTransaction(t *testing.T) {
 }
 
 func TestItemCRUD(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 	require.NoError(t, db.AutoMigrate())
 
 	t.Run("Create Item", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NoError(t, db.AutoMigrate())
 		item := &models.Item{
 			Name:  "Test Item",
 			Price: 99.99,
@@ -101,6 +125,17 @@ func TestItemCRUD(t *testing.T) {
 	})
 
 	t.Run("Read Item", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NoError(t, db.AutoMigrate())
+
+		// Create item first
+		initialItem := &models.Item{
+			Name:  "Test Item",
+			Price: 99.99,
+		}
+		require.NoError(t, db.Create(initialItem))
+
 		var item models.Item
 		err := db.FindByID(1, &item)
 		assert.NoError(t, err)
@@ -109,6 +144,17 @@ func TestItemCRUD(t *testing.T) {
 	})
 
 	t.Run("Update Item", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NoError(t, db.AutoMigrate())
+
+		// Create item first
+		initialItem := &models.Item{
+			Name:  "Test Item",
+			Price: 99.99,
+		}
+		require.NoError(t, db.Create(initialItem))
+
 		var item models.Item
 		err := db.FindByID(1, &item)
 		require.NoError(t, err)
@@ -122,6 +168,17 @@ func TestItemCRUD(t *testing.T) {
 	})
 
 	t.Run("Delete Item", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NoError(t, db.AutoMigrate())
+
+		// Create item first
+		initialItem := &models.Item{
+			Name:  "Test Item",
+			Price: 99.99,
+		}
+		require.NoError(t, db.Create(initialItem))
+
 		item := &models.Item{Base: models.Base{ID: 1}}
 		err := db.Delete(item)
 		assert.NoError(t, err)

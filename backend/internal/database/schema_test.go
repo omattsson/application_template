@@ -15,12 +15,14 @@ type TestModel struct {
 }
 
 func TestSchemaManager(t *testing.T) {
-	db := setupTestDB(t)
-	require.NotNil(t, db)
-	schema := NewSchemaManager(db.DB)
-	require.NotNil(t, schema)
+	t.Parallel()
 
 	t.Run("Create and Drop Table", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NotNil(t, db)
+		schema := NewSchemaManager(db.DB)
+		require.NotNil(t, schema)
 		// Create table
 		err := schema.CreateTable(&TestModel{})
 		require.NoError(t, err)
@@ -41,6 +43,12 @@ func TestSchemaManager(t *testing.T) {
 	})
 
 	t.Run("Column Operations", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NotNil(t, db)
+		schema := NewSchemaManager(db.DB)
+		require.NotNil(t, schema)
+
 		// Create table first
 		err := schema.CreateTable(&TestModel{})
 		require.NoError(t, err)
@@ -88,12 +96,28 @@ func TestSchemaManager(t *testing.T) {
 	})
 
 	t.Run("Index Operations", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NotNil(t, db)
+		schema := NewSchemaManager(db.DB)
+		require.NotNil(t, schema)
+
 		// Create table first
 		err := schema.CreateTable(&TestModel{})
 		require.NoError(t, err)
 		defer schema.DropTable(&TestModel{})
 
 		t.Run("Regular Index", func(t *testing.T) {
+			t.Parallel()
+			db := setupTestDB(t)
+			require.NotNil(t, db)
+			schema := NewSchemaManager(db.DB)
+			require.NotNil(t, schema)
+
+			// Create table first
+			err := schema.CreateTable(&TestModel{})
+			require.NoError(t, err)
+			defer schema.DropTable(&TestModel{})
 			indexName := "idx_test_name"
 
 			// Add index
@@ -117,6 +141,16 @@ func TestSchemaManager(t *testing.T) {
 		})
 
 		t.Run("Composite Index", func(t *testing.T) {
+			t.Parallel()
+			db := setupTestDB(t)
+			require.NotNil(t, db)
+			schema := NewSchemaManager(db.DB)
+			require.NotNil(t, schema)
+
+			// Create table first
+			err := schema.CreateTable(&TestModel{})
+			require.NoError(t, err)
+			defer schema.DropTable(&TestModel{})
 			indexName := "idx_test_name_email"
 
 			// Add composite index
@@ -136,6 +170,16 @@ func TestSchemaManager(t *testing.T) {
 		})
 
 		t.Run("Unique Index", func(t *testing.T) {
+			t.Parallel()
+			db := setupTestDB(t)
+			require.NotNil(t, db)
+			schema := NewSchemaManager(db.DB)
+			require.NotNil(t, schema)
+
+			// Create table first
+			err := schema.CreateTable(&TestModel{})
+			require.NoError(t, err)
+			defer schema.DropTable(&TestModel{})
 			// Email field has uniqueIndex tag
 			err = schema.AddIndex(&TestModel{}, "idx_test_email_unique", "email")
 			require.NoError(t, err)

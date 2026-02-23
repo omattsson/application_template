@@ -1,3 +1,5 @@
+//go:build integration
+
 package main
 
 import (
@@ -14,6 +16,7 @@ import (
 
 // TestAzureTableIntegration tests the Azure Table Storage integration in main.go
 func TestAzureTableIntegration(t *testing.T) {
+	// Not parallel: subtests use t.Setenv
 	// Save current env vars
 	envVars := []string{
 		"USE_AZURE_TABLE",
@@ -29,7 +32,7 @@ func TestAzureTableIntegration(t *testing.T) {
 		savedValues[key] = os.Getenv(key)
 	}
 
-	defer func() {
+	t.Cleanup(func() {
 		// Restore environment variables
 		for key, value := range savedValues {
 			if value != "" {
@@ -38,17 +41,17 @@ func TestAzureTableIntegration(t *testing.T) {
 				os.Unsetenv(key)
 			}
 		}
-	}()
+	})
 
 	// Test health check configuration with Azure Table
 	t.Run("Configure health check for Azure Table", func(t *testing.T) {
 		// Configure to use Azure Table (with invalid details)
-		os.Setenv("USE_AZURE_TABLE", "true")
-		os.Setenv("USE_AZURITE", "false")
-		os.Setenv("AZURE_TABLE_ACCOUNT_NAME", "testaccount")
-		os.Setenv("AZURE_TABLE_ACCOUNT_KEY", "testkey")
-		os.Setenv("AZURE_TABLE_ENDPOINT", "example.com")
-		os.Setenv("AZURE_TABLE_NAME", "testitems")
+		t.Setenv("USE_AZURE_TABLE", "true")
+		t.Setenv("USE_AZURITE", "false")
+		t.Setenv("AZURE_TABLE_ACCOUNT_NAME", "testaccount")
+		t.Setenv("AZURE_TABLE_ACCOUNT_KEY", "testkey")
+		t.Setenv("AZURE_TABLE_ENDPOINT", "example.com")
+		t.Setenv("AZURE_TABLE_NAME", "testitems")
 
 		// Load config
 		cfg, err := config.LoadConfig()
@@ -57,8 +60,8 @@ func TestAzureTableIntegration(t *testing.T) {
 
 		// Attempt to create repository (this will fail)
 		repo, err := database.NewRepository(cfg)
-		assert.Error(t, err) // Expected to fail with invalid Azure credentials
-		assert.Nil(t, repo)
+		require.Error(t, err) // Expected to fail with invalid Azure credentials
+		require.Nil(t, repo)
 
 		// Test the health check behavior - this only tests the conditional logic in main.go
 		// that configures the health check differently for Azure vs MySQL
@@ -78,12 +81,12 @@ func TestAzureTableIntegration(t *testing.T) {
 	// Test main.go conditional logic for Azurite
 	t.Run("Configure for Azurite emulator", func(t *testing.T) {
 		// Configure to use Azurite
-		os.Setenv("USE_AZURE_TABLE", "true")
-		os.Setenv("USE_AZURITE", "true")
-		os.Setenv("AZURE_TABLE_ACCOUNT_NAME", "devstoreaccount1")
-		os.Setenv("AZURE_TABLE_ACCOUNT_KEY", "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
-		os.Setenv("AZURE_TABLE_ENDPOINT", "127.0.0.1:10002")
-		os.Setenv("AZURE_TABLE_NAME", "items")
+		t.Setenv("USE_AZURE_TABLE", "true")
+		t.Setenv("USE_AZURITE", "true")
+		t.Setenv("AZURE_TABLE_ACCOUNT_NAME", "devstoreaccount1")
+		t.Setenv("AZURE_TABLE_ACCOUNT_KEY", "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
+		t.Setenv("AZURE_TABLE_ENDPOINT", "127.0.0.1:10002")
+		t.Setenv("AZURE_TABLE_NAME", "items")
 
 		// Load config
 		cfg, err := config.LoadConfig()
@@ -94,13 +97,14 @@ func TestAzureTableIntegration(t *testing.T) {
 		// Repository creation will fail without actual Azurite,
 		// but we can verify the config loading works
 		_, err = database.NewRepository(cfg)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "azure_client")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "create_table")
 	})
 }
 
 // TestDatabaseChoiceIntegration tests the database choice logic in main.go
 func TestDatabaseChoiceIntegration(t *testing.T) {
+	// Not parallel: subtests use t.Setenv
 	// Save current env vars for DB and Azure config
 	envVars := []string{
 		"USE_AZURE_TABLE",
@@ -112,7 +116,7 @@ func TestDatabaseChoiceIntegration(t *testing.T) {
 		savedValues[key] = os.Getenv(key)
 	}
 
-	defer func() {
+	t.Cleanup(func() {
 		// Restore environment variables
 		for key, value := range savedValues {
 			if value != "" {
@@ -121,7 +125,7 @@ func TestDatabaseChoiceIntegration(t *testing.T) {
 				os.Unsetenv(key)
 			}
 		}
-	}()
+	})
 
 	t.Run("Main selects correct database type", func(t *testing.T) {
 		// Test cases for different database configurations
@@ -147,9 +151,10 @@ func TestDatabaseChoiceIntegration(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
+				tc := tc // Capture range variable
 				// Set environment variables for this test case
-				os.Setenv("USE_AZURE_TABLE", tc.useAzureTable)
-				os.Setenv("DB_HOST", tc.dbHost)
+				t.Setenv("USE_AZURE_TABLE", tc.useAzureTable)
+				t.Setenv("DB_HOST", tc.dbHost)
 
 				// Load config
 				cfg, err := config.LoadConfig()
@@ -157,7 +162,7 @@ func TestDatabaseChoiceIntegration(t *testing.T) {
 
 				// Try to create repository (will fail with invalid credentials)
 				_, err = database.NewRepository(cfg)
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.expectErrorSubstring)
 			})
 		}

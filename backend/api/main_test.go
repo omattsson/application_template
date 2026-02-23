@@ -2,9 +2,8 @@ package main
 
 import (
 	"backend/internal/config"
-	"backend/internal/database"
 	"backend/internal/health"
-	"backend/internal/models"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -150,24 +149,13 @@ func mockLoadConfig() (*config.Config, error) {
 	}, nil
 }
 
-func mockNewFromAppConfig(cfg *config.Config) (*database.Database, error) {
-	// Return a mock database
-	return &database.Database{
-		DB: &gorm.DB{},
-	}, nil
-}
-
-func mockNewRepository(cfg *config.Config) (models.Repository, error) {
-	mockRepo := new(MockRepository)
-	return mockRepo, nil
-}
-
 // Tests for main.go functions
 
 func TestConfigLoading(t *testing.T) {
+	t.Parallel()
 	// Setup test environment
 	setupTestEnv()
-	defer cleanupTestEnv()
+	t.Cleanup(cleanupTestEnv)
 
 	// Test LoadConfig directly
 	cfg, err := config.LoadConfig()
@@ -181,22 +169,8 @@ func TestConfigLoading(t *testing.T) {
 	assert.Equal(t, "testhost", cfg.Database.Host)
 }
 
-func TestDatabaseInitialization(t *testing.T) {
-	setupTestEnv()
-	defer cleanupTestEnv()
-
-	cfg, err := config.LoadConfig()
-	require.NoError(t, err)
-
-	db, err := database.NewFromAppConfig(cfg)
-	require.NoError(t, err)
-	require.NotNil(t, db)
-
-	// This is a limited test since we can't easily test a real database connection in unit tests
-	// In a real scenario, you'd use a test database or mock
-}
-
 func TestHealthEndpoints(t *testing.T) {
+	t.Parallel()
 	// Create a test Gin router
 	gin.SetMode(gin.TestMode)
 	r := gin.Default()
@@ -222,7 +196,7 @@ func TestHealthEndpoints(t *testing.T) {
 
 	// Test liveness endpoint
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/health/live", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/health/live", nil)
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -230,7 +204,7 @@ func TestHealthEndpoints(t *testing.T) {
 
 	// Test readiness endpoint
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("GET", "/health/ready", nil)
+	req, _ = http.NewRequestWithContext(context.Background(), "GET", "/health/ready", nil)
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -242,7 +216,7 @@ func TestHealthEndpoints(t *testing.T) {
 	})
 
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("GET", "/health/ready", nil)
+	req, _ = http.NewRequestWithContext(context.Background(), "GET", "/health/ready", nil)
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
@@ -250,6 +224,7 @@ func TestHealthEndpoints(t *testing.T) {
 }
 
 func TestDatabaseHealthCheck(t *testing.T) {
+	t.Parallel()
 	// Create a new health checker
 	healthChecker := health.New()
 
@@ -291,6 +266,7 @@ func TestDatabaseHealthCheck(t *testing.T) {
 }
 
 func TestServerConfiguration(t *testing.T) {
+	t.Parallel()
 	// Test server configuration based on config
 	cfg, _ := mockLoadConfig()
 

@@ -1,8 +1,9 @@
-package azure
+package azure_test
 
 import (
 	"testing"
 
+	"backend/internal/database/azure"
 	"backend/pkg/dberrors"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,8 @@ import (
 
 // TestTableRepository_ConfigurationHandling tests how the repository handles various configurations
 func TestTableRepository_ConfigurationHandling(t *testing.T) {
+	t.Parallel()
+
 	// Test cases for different connection string configurations
 	testCases := []struct {
 		name        string
@@ -84,8 +87,10 @@ func TestTableRepository_ConfigurationHandling(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
+		tc := tc // capture range variable
 		t.Run(tc.name, func(t *testing.T) {
-			repo, err := NewTableRepository(
+			t.Parallel()
+			repo, err := azure.NewTableRepository(
 				tc.accountName,
 				tc.accountKey,
 				tc.endpoint,
@@ -112,14 +117,14 @@ func TestTableRepository_ConfigurationHandling(t *testing.T) {
 
 // TestTableRepository_InvalidData tests handling of invalid data in operations
 func TestTableRepository_InvalidData(t *testing.T) {
+	t.Parallel()
+
 	// Create a minimal repository for testing
-	repo := &TableRepository{
-		client:    nil, // Not used in these tests
-		tableName: "test",
-	}
+	repo := azure.NewTestTableRepository("testtable")
 
 	// Test invalid inputs for different operations
 	t.Run("Invalid inputs for Create", func(t *testing.T) {
+		t.Parallel()
 		// Test with nil
 		err := repo.Create(nil)
 		assert.Error(t, err)
@@ -132,6 +137,7 @@ func TestTableRepository_InvalidData(t *testing.T) {
 	})
 
 	t.Run("Invalid inputs for FindByID", func(t *testing.T) {
+		t.Parallel()
 		// Test with nil
 		err := repo.FindByID(1, nil)
 		assert.Error(t, err)
@@ -144,6 +150,7 @@ func TestTableRepository_InvalidData(t *testing.T) {
 	})
 
 	t.Run("Invalid inputs for Update", func(t *testing.T) {
+		t.Parallel()
 		// Test with nil
 		err := repo.Update(nil)
 		assert.Error(t, err)
@@ -156,6 +163,7 @@ func TestTableRepository_InvalidData(t *testing.T) {
 	})
 
 	t.Run("Invalid inputs for Delete", func(t *testing.T) {
+		t.Parallel()
 		// Test with nil
 		err := repo.Delete(nil)
 		assert.Error(t, err)
@@ -168,6 +176,7 @@ func TestTableRepository_InvalidData(t *testing.T) {
 	})
 
 	t.Run("Invalid inputs for List", func(t *testing.T) {
+		t.Parallel()
 		// Test with nil
 		err := repo.List(nil)
 		assert.Error(t, err)

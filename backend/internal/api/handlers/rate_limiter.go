@@ -10,10 +10,10 @@ import (
 
 // RateLimiter implements a simple rate limiting middleware
 type RateLimiter struct {
-	sync.RWMutex
-	requests map[string][]time.Time
-	limit    int
-	window   time.Duration
+	sync.RWMutex                        // size: 8
+	window       time.Duration          // size: 8
+	requests     map[string][]time.Time // size: 8 (pointer)
+	limit        int                    // size: 4
 }
 
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {

@@ -14,6 +14,7 @@ import (
 )
 
 func TestLoggerMiddleware(t *testing.T) {
+	t.Parallel()
 	// Set Gin to Test Mode
 	gin.SetMode(gin.TestMode)
 
@@ -49,6 +50,7 @@ func TestLoggerMiddleware(t *testing.T) {
 }
 
 func TestRecoveryMiddleware(t *testing.T) {
+	t.Parallel()
 	// Set Gin to Test Mode
 	gin.SetMode(gin.TestMode)
 

@@ -15,7 +15,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 }
 
 func TestMigrator(t *testing.T) {
+	t.Parallel()
+
 	t.Run("applies migrations in order", func(t *testing.T) {
+		t.Parallel()
 		db := setupTestDB(t)
 		migrator := NewMigrator(db)
 
@@ -58,6 +61,7 @@ func TestMigrator(t *testing.T) {
 	})
 
 	t.Run("rolls back last migration", func(t *testing.T) {
+		t.Parallel()
 		db := setupTestDB(t)
 		migrator := NewMigrator(db)
 
@@ -92,6 +96,7 @@ func TestMigrator(t *testing.T) {
 	})
 
 	t.Run("handles duplicate migrations", func(t *testing.T) {
+		t.Parallel()
 		db := setupTestDB(t)
 		migrator := NewMigrator(db)
 

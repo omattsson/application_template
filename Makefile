@@ -56,11 +56,58 @@ prune:
 # Run all tests
 test: test-backend test-frontend
 
+# Run backend unit tests only (no external dependencies needed)
 test-backend:
 	cd backend && go test ./... -v
 
+# Start infrastructure for integration tests
+integration-infra-start:
+	@echo "Starting integration test infrastructure..."
+	GO_ENV=test docker compose up -d db azurite
+	@echo "Waiting for MySQL to be ready..."
+	@until docker compose exec db mysqladmin ping -h localhost -u$${MYSQL_USER:-appuser} -p$${MYSQL_PASSWORD:-apppass} --silent 2>/dev/null; do \
+		echo "Waiting for MySQL..."; \
+		sleep 2; \
+	done
+	@echo "Waiting for Azurite to be ready..."
+	@until curl -s -o /dev/null http://localhost:10002/ 2>/dev/null; do \
+		echo "Waiting for Azurite..."; \
+		sleep 2; \
+	done
+	@echo "Integration infrastructure is ready!"
+
+# Stop infrastructure for integration tests
+integration-infra-stop:
+	@echo "Stopping integration test infrastructure..."
+	GO_ENV=test docker compose stop db azurite
+
+# Run backend integration tests (starts/stops infra automatically)
+test-backend-integration: integration-infra-start
+	cd backend && go test -tags integration ./... -v
+	$(MAKE) integration-infra-stop
+
+# Run all backend tests (unit + integration)
+test-backend-all: integration-infra-start
+	cd backend && go test -tags integration ./... -v
+	$(MAKE) integration-infra-stop
+
 test-frontend:
 	cd frontend && npm test
+
+# Run frontend e2e tests (requires MySQL running, starts backend natively)
+test-e2e: integration-infra-start
+	@echo "Building and starting backend..."
+	@cd backend && go build -o tmp/main ./api/main.go
+	@cd backend && DB_HOST=localhost DB_PORT=3306 DB_NAME=$${MYSQL_DATABASE:-app} DB_USER=$${MYSQL_USER:-appuser} DB_PASSWORD=$${MYSQL_PASSWORD:-apppass} PORT=8081 ./tmp/main &
+	@echo "Waiting for backend to be healthy..."
+	@until curl -sf http://localhost:8081/health/live >/dev/null 2>&1; do \
+		sleep 1; \
+	done
+	@echo "Backend is ready, running Playwright tests..."
+	cd frontend && npx playwright test || (kill $$(lsof -ti:8081) 2>/dev/null; $(MAKE) integration-infra-stop; exit 1)
+	@echo "Stopping backend..."
+	@kill $$(lsof -ti:8081) 2>/dev/null || true
+	$(MAKE) integration-infra-stop
 
 # Install dependencies
 install:

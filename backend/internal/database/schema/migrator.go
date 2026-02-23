@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -39,14 +40,14 @@ func (m *Migrator) AddMigration(migration Migration) {
 func (m *Migrator) MigrateUp() error {
 	// Ensure schema version table exists
 	if err := m.db.AutoMigrate(&SchemaVersion{}); err != nil {
-		return fmt.Errorf("failed to create schema version table: %v", err)
+		return fmt.Errorf("failed to create schema version table: %w", err)
 	}
 
 	for _, migration := range m.migrations {
 		var version SchemaVersion
 		result := m.db.Where("version = ?", migration.Version).First(&version)
 
-		if result.Error == gorm.ErrRecordNotFound {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			// Run migration in transaction
 			err := m.db.Transaction(func(tx *gorm.DB) error {
 				if err := migration.Up(tx); err != nil {

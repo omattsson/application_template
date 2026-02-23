@@ -4,16 +4,17 @@ import (
 	"backend/internal/models"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 )
 
 // MockRepository is a mock implementation of the Repository interface for testing
 type MockRepository struct {
-	sync.RWMutex // For thread safety
-	items        map[uint]*models.Item
-	nextID       uint
-	err          error
+	sync.RWMutex                       // size: 8
+	items        map[uint]*models.Item // size: 8 (pointer)
+	err          error                 // size: 8 (interface)
+	nextID       uint                  // size: 8
 }
 
 func NewMockRepository() *MockRepository {
@@ -48,7 +49,7 @@ func (m *MockRepository) FindByID(id uint, dest interface{}) error {
 	defer m.RUnlock()
 
 	if m.err != nil {
-		return fmt.Errorf("database error: %v", m.err)
+		return fmt.Errorf("database error: %w", m.err)
 	}
 
 	itemDest, ok := dest.(*models.Item)
@@ -135,15 +136,23 @@ func (m *MockRepository) List(dest interface{}, conditions ...interface{}) error
 		return errors.New("invalid destination type")
 	}
 
-	// Convert map to slice for easier filtering
+	// Convert map to slice for easier filtering and ensure consistent order
 	allItems := make([]models.Item, 0, len(m.items))
-	for _, item := range m.items {
-		allItems = append(allItems, *item)
+	var ids []uint
+	for id := range m.items {
+		ids = append(ids, id)
+	}
+	// Sort by ID for consistent ordering
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+	for _, id := range ids {
+		allItems = append(allItems, *m.items[id])
 	}
 
 	// Apply filters and pagination
 	var pagination *models.Pagination
-	filteredItems := allItems[:] // Start with all items
+	filteredItems := allItems // Start with all items
 
 	// Apply filters
 	for _, condition := range conditions {

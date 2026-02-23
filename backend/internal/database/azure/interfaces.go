@@ -6,11 +6,17 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/data/aztables"
 )
 
-// TableClient is an interface that matches the Azure Tables SDK client
-type TableClient interface {
-	AddEntity(context.Context, []byte, *aztables.AddEntityOptions) (aztables.AddEntityResponse, error)
-	GetEntity(context.Context, string, string, *aztables.GetEntityOptions) (aztables.GetEntityResponse, error)
-	UpdateEntity(context.Context, []byte, *aztables.UpdateEntityOptions) (aztables.UpdateEntityResponse, error)
-	DeleteEntity(context.Context, string, string, *aztables.DeleteEntityOptions) (aztables.DeleteEntityResponse, error)
-	NewListEntitiesPager(*aztables.ListEntitiesOptions) ListEntitiesPager
+// ListEntitiesPager is the interface for paging through Azure Table Storage entities
+type ListEntitiesPager interface {
+	More() bool
+	NextPage(context.Context) (aztables.ListEntitiesResponse, error)
+}
+
+// AzureTableClient defines the interface for Azure Table operations
+type AzureTableClient interface {
+	AddEntity(ctx context.Context, entity []byte, options *aztables.AddEntityOptions) (aztables.AddEntityResponse, error)
+	GetEntity(ctx context.Context, partitionKey, rowKey string, options *aztables.GetEntityOptions) (aztables.GetEntityResponse, error)
+	UpdateEntity(ctx context.Context, entity []byte, options *aztables.UpdateEntityOptions) (aztables.UpdateEntityResponse, error)
+	DeleteEntity(ctx context.Context, partitionKey, rowKey string, options *aztables.DeleteEntityOptions) (aztables.DeleteEntityResponse, error)
+	NewListEntitiesPager(options *aztables.ListEntitiesOptions) ListEntitiesPager
 }

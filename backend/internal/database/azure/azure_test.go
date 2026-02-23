@@ -1,6 +1,9 @@
-package azure
+//go:build integration
+
+package azure_test
 
 import (
+	"backend/internal/database/azure"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -8,34 +11,74 @@ import (
 )
 
 func TestHelperFunctions(t *testing.T) {
+	t.Parallel()
+
 	// Test isTableExistsError
 	t.Run("isTableExistsError handles different error types", func(t *testing.T) {
+		t.Parallel()
 		err := &azcore.ResponseError{ErrorCode: "TableAlreadyExists"}
-		assert.True(t, isTableExistsError(err))
-		assert.False(t, isTableExistsError(nil))
+		assert.True(t, azure.IsTableExistsError(err))
+		assert.False(t, azure.IsTableExistsError(nil))
 	})
 
 	// Test isEntityExistsError
 	t.Run("isEntityExistsError handles different error types", func(t *testing.T) {
+		t.Parallel()
 		err := &azcore.ResponseError{ErrorCode: "EntityAlreadyExists"}
-		assert.True(t, isEntityExistsError(err))
-		assert.False(t, isEntityExistsError(nil))
+		assert.True(t, azure.IsEntityExistsError(err))
+		assert.False(t, azure.IsEntityExistsError(nil))
 	})
 
 	// Test isNotFoundError
 	t.Run("isNotFoundError handles different error types", func(t *testing.T) {
+		t.Parallel()
 		err := &azcore.ResponseError{StatusCode: 404}
-		assert.True(t, isNotFoundError(err))
-		assert.False(t, isNotFoundError(nil))
+		assert.True(t, azure.IsNotFoundError(err))
+		assert.False(t, azure.IsNotFoundError(nil))
 	})
 }
 
-// This is a minimal test to verify our client adapter is working
-func TestClientAdapter(t *testing.T) {
-	t.Run("adapter can be created", func(t *testing.T) {
-		// We cannot actually create a client without valid credentials,
-		// but we can verify our adapter functions are working
-		adapter := &azureClientAdapter{Client: nil}
-		assert.NotNil(t, adapter)
+// TestNewTableRepository verifies repository instantiation with various configs
+func TestNewTableRepository(t *testing.T) {
+	t.Parallel()
+
+	t.Run("repository created with valid config", func(t *testing.T) {
+		t.Parallel()
+		repo, err := azure.NewTableRepository(
+			"testaccount",
+			"testkey",
+			"endpoint.com",
+			"testtable",
+			false,
+		)
+		// Should fail as we're not actually connecting to Azure
+		assert.Error(t, err)
+		assert.Nil(t, repo)
+	})
+
+	t.Run("repository fails with empty account", func(t *testing.T) {
+		t.Parallel()
+		repo, err := azure.NewTableRepository(
+			"",
+			"testkey",
+			"endpoint.com",
+			"testtable",
+			false,
+		)
+		assert.Error(t, err)
+		assert.Nil(t, repo)
+	})
+
+	t.Run("repository fails with empty key", func(t *testing.T) {
+		t.Parallel()
+		repo, err := azure.NewTableRepository(
+			"testaccount",
+			"",
+			"endpoint.com",
+			"testtable",
+			false,
+		)
+		assert.Error(t, err)
+		assert.Nil(t, repo)
 	})
 }

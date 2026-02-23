@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,24 +25,24 @@ func handleDBError(err error) (int, string) {
 		return http.StatusOK, ""
 	}
 
-	switch e := err.(type) {
-	case *database.DatabaseError:
-		switch e.Err {
-		case database.ErrValidation:
-			return http.StatusBadRequest, e.Error()
-		case database.ErrNotFound:
+	var dbErr *database.DatabaseError
+	if errors.As(err, &dbErr) {
+		if errors.Is(dbErr.Err, database.ErrValidation) {
+			return http.StatusBadRequest, dbErr.Error()
+		}
+		if errors.Is(dbErr.Err, database.ErrNotFound) {
 			return http.StatusNotFound, "Item not found"
-		case database.ErrDuplicateKey:
+		}
+		if errors.Is(dbErr.Err, database.ErrDuplicateKey) {
 			return http.StatusConflict, "Item already exists"
-		default:
-			return http.StatusInternalServerError, "Internal server error"
 		}
-	default:
-		if strings.Contains(err.Error(), "not found") {
-			return http.StatusNotFound, "Item not found"
-		}
-		return http.StatusInternalServerError, err.Error()
+		return http.StatusInternalServerError, "Internal server error"
 	}
+
+	if strings.Contains(err.Error(), "not found") {
+		return http.StatusNotFound, "Item not found"
+	}
+	return http.StatusInternalServerError, err.Error()
 }
 
 // CreateItem godoc

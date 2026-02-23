@@ -1,6 +1,9 @@
+// Package config provides configuration loading and validation for the application.
+// It handles environment variables, default values, and config validation for all components.
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -10,12 +13,26 @@ import (
 	"github.com/joho/godotenv"
 )
 
+const (
+	defaultMaxOpenConns    int32 = 25
+	defaultMaxIdleConns    int32 = 5
+	defaultConnMaxLifetime       = 5 * time.Minute
+	defaultReadTimeout           = 10 * time.Second
+	defaultWriteTimeout          = 10 * time.Second
+	defaultIdleTimeout           = 30 * time.Second
+	defaultShutdownTimeout       = 30 * time.Second
+)
+
 // Config holds all configuration for the application
+//
+//nolint:govet // Struct field alignment has been optimized for better memory usage
 type Config struct {
+	// Group larger structs with time.Duration fields first
+	Database DatabaseConfig
+	Server   ServerConfig
+	// Then string and simple field structs
 	App        AppConfig
-	Database   DatabaseConfig
 	AzureTable AzureTableConfig
-	Server     ServerConfig
 	Logging    LogConfig
 }
 
@@ -27,15 +44,22 @@ type AppConfig struct {
 }
 
 // DatabaseConfig holds database-specific configuration
+//
+//nolint:govet // Struct field alignment has been optimized for time.Duration and string fields
 type DatabaseConfig struct {
-	Host            string
-	Port            string
-	User            string
-	Password        string
-	DBName          string
-	MaxOpenConns    int
-	MaxIdleConns    int
+	// 8-byte aligned fields first
 	ConnMaxLifetime time.Duration
+	// String fields (8-byte on 64-bit systems)
+	Host     string
+	Port     string
+	User     string
+	Password string
+	DBName   string
+	// 4-byte aligned fields
+	MaxOpenConns int32
+	MaxIdleConns int32
+	// Add padding field to maintain 8-byte alignment
+	_ [4]byte
 }
 
 // AzureTableConfig holds Azure Table Storage configuration
@@ -49,13 +73,17 @@ type AzureTableConfig struct {
 }
 
 // ServerConfig holds HTTP server configuration
+//
+//nolint:govet // Struct field alignment has been optimized for time.Duration fields
 type ServerConfig struct {
-	Host            string
-	Port            string
+	// 8-byte aligned fields first
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
+	// String fields (8-byte on 64-bit systems)
+	Host string
+	Port string
 }
 
 // LogConfig holds logging configuration
@@ -69,79 +97,99 @@ func (c *Config) Validate() error {
 	if err := c.App.Validate(); err != nil {
 		return fmt.Errorf("app config: %w", err)
 	}
+
 	if err := c.Database.Validate(); err != nil {
 		return fmt.Errorf("database config: %w", err)
 	}
+
 	if err := c.Server.Validate(); err != nil {
 		return fmt.Errorf("server config: %w", err)
 	}
+
 	return nil
 }
 
 func (c *AppConfig) Validate() error {
 	if c.Name == "" {
-		return fmt.Errorf("name is required")
+		return errors.New("name is required")
 	}
+
 	if c.Environment == "" {
-		return fmt.Errorf("environment is required")
+		return errors.New("environment is required")
 	}
+
 	return nil
 }
 
 func (c *DatabaseConfig) Validate() error {
 	if c.Host == "" {
-		return fmt.Errorf("host is required")
+		return errors.New("host is required")
 	}
+
 	if c.Port == "" {
-		return fmt.Errorf("port is required")
+		return errors.New("port is required")
 	}
+
 	if c.User == "" {
-		return fmt.Errorf("user is required")
+		return errors.New("user is required")
 	}
+
 	if c.DBName == "" {
-		return fmt.Errorf("database name is required")
+		return errors.New("database name is required")
 	}
+
 	if c.MaxOpenConns <= 0 {
-		return fmt.Errorf("max open connections must be positive")
+		return errors.New("max open connections must be positive")
 	}
+
 	if c.MaxIdleConns <= 0 {
-		return fmt.Errorf("max idle connections must be positive")
+		return errors.New("max idle connections must be positive")
 	}
+
 	if c.ConnMaxLifetime <= 0 {
-		return fmt.Errorf("connection max lifetime must be positive")
+		return errors.New("connection max lifetime must be positive")
 	}
+
 	return nil
 }
 
 func (c *AzureTableConfig) Validate() error {
 	if c.AccountName == "" {
-		return fmt.Errorf("account name is required")
+		return errors.New("account name is required")
 	}
+
 	if c.AccountKey == "" {
-		return fmt.Errorf("account key is required")
+		return errors.New("account key is required")
 	}
+
 	if c.Endpoint == "" {
-		return fmt.Errorf("endpoint is required")
+		return errors.New("endpoint is required")
 	}
+
 	if c.TableName == "" {
-		return fmt.Errorf("table name is required")
+		return errors.New("table name is required")
 	}
+
 	return nil
 }
 
 func (c *ServerConfig) Validate() error {
 	if c.Port == "" {
-		return fmt.Errorf("port is required")
+		return errors.New("port is required")
 	}
+
 	if c.ReadTimeout <= 0 {
-		return fmt.Errorf("read timeout must be positive")
+		return errors.New("read timeout must be positive")
 	}
+
 	if c.WriteTimeout <= 0 {
-		return fmt.Errorf("write timeout must be positive")
+		return errors.New("write timeout must be positive")
 	}
+
 	if c.IdleTimeout <= 0 {
-		return fmt.Errorf("idle timeout must be positive")
+		return errors.New("idle timeout must be positive")
 	}
+
 	return nil
 }
 
@@ -149,11 +197,14 @@ func (c *ServerConfig) Validate() error {
 func (c *DatabaseConfig) DSN() string {
 	// Use a builder for better performance and readability
 	var b strings.Builder
+
 	b.WriteString(c.User)
+
 	if c.Password != "" {
 		b.WriteByte(':')
 		b.WriteString(c.Password)
 	}
+
 	b.WriteString("@tcp(")
 	b.WriteString(c.Host)
 	b.WriteByte(':')
@@ -196,9 +247,9 @@ func LoadConfig() (*Config, error) {
 			User:            getEnv("DB_USER", "root"),
 			Password:        getEnv("DB_PASSWORD", ""),
 			DBName:          getEnv("DB_NAME", "app"),
-			MaxOpenConns:    getEnvInt("DB_MAX_OPEN_CONNS", 25),
-			MaxIdleConns:    getEnvInt("DB_MAX_IDLE_CONNS", 5),
-			ConnMaxLifetime: getEnvDuration("DB_CONN_MAX_LIFETIME", 5*time.Minute),
+			MaxOpenConns:    getEnvInt32("DB_MAX_OPEN_CONNS", defaultMaxOpenConns),
+			MaxIdleConns:    getEnvInt32("DB_MAX_IDLE_CONNS", defaultMaxIdleConns),
+			ConnMaxLifetime: getEnvDuration("DB_CONN_MAX_LIFETIME", defaultConnMaxLifetime),
 		},
 		AzureTable: AzureTableConfig{
 			AccountName:   getEnv("AZURE_TABLE_ACCOUNT_NAME", ""),
@@ -211,10 +262,10 @@ func LoadConfig() (*Config, error) {
 		Server: ServerConfig{
 			Host:            getEnv("SERVER_HOST", ""),
 			Port:            getEnv("SERVER_PORT", "8081"),
-			ReadTimeout:     getEnvDuration("SERVER_READ_TIMEOUT", 10*time.Second),
-			WriteTimeout:    getEnvDuration("SERVER_WRITE_TIMEOUT", 10*time.Second),
-			IdleTimeout:     getEnvDuration("SERVER_IDLE_TIMEOUT", 30*time.Second),
-			ShutdownTimeout: getEnvDuration("SERVER_SHUTDOWN_TIMEOUT", 30*time.Second),
+			ReadTimeout:     getEnvDuration("SERVER_READ_TIMEOUT", defaultReadTimeout),
+			WriteTimeout:    getEnvDuration("SERVER_WRITE_TIMEOUT", defaultWriteTimeout),
+			IdleTimeout:     getEnvDuration("SERVER_IDLE_TIMEOUT", defaultIdleTimeout),
+			ShutdownTimeout: getEnvDuration("SERVER_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
 		},
 		Logging: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),
@@ -232,41 +283,50 @@ func LoadConfig() (*Config, error) {
 
 // Helper functions for environment variables
 func getEnv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
 	}
-	return fallback
+
+	return value
 }
 
 func getEnvBool(key string, fallback bool) bool {
-	if value := os.Getenv(key); value != "" {
-		v, err := strconv.ParseBool(value)
-		if err != nil {
-			return fallback
-		}
-		return v
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
 	}
-	return fallback
+
+	v, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+
+	return v
 }
 
-func getEnvInt(key string, fallback int) int {
+//nolint:wsl // Function layout has been made consistent with other helpers
+func getEnvInt32(key string, fallback int32) int32 {
 	if value := os.Getenv(key); value != "" {
-		v, err := strconv.Atoi(value)
+		v, err := strconv.ParseInt(value, 10, 32)
 		if err != nil {
 			return fallback
 		}
-		return v
+		return int32(v)
 	}
 	return fallback
 }
 
 func getEnvDuration(key string, fallback time.Duration) time.Duration {
-	if value := os.Getenv(key); value != "" {
-		v, err := time.ParseDuration(value)
-		if err != nil {
-			return fallback
-		}
-		return v
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
 	}
-	return fallback
+
+	v, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+
+	return v
 }

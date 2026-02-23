@@ -8,7 +8,10 @@ import (
 )
 
 func TestNewFromDBConfig(t *testing.T) {
+	t.Parallel()
+
 	t.Run("With SQLite configuration", func(t *testing.T) {
+		t.Parallel()
 		db, err := NewFromDBConfig(nil)
 		require.NoError(t, err)
 		require.NotNil(t, db)
@@ -23,6 +26,7 @@ func TestNewFromDBConfig(t *testing.T) {
 	})
 
 	t.Run("With MySQL configuration", func(t *testing.T) {
+		t.Parallel()
 		cfg := &Config{
 			Host:     "invalid",
 			Port:     "3306",

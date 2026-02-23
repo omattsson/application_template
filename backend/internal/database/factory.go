@@ -50,7 +50,7 @@ func NewFromAppConfig(cfg *config.Config) (*Database, error) {
 	}
 
 	if err != nil {
-		return nil, NewDatabaseError("connect", fmt.Errorf("failed after %d attempts: %v", retryCount, err))
+		return nil, NewDatabaseError("connect", fmt.Errorf("failed after %d attempts: %w", retryCount, err))
 	}
 
 	sqlDB, err := db.DB()
@@ -59,8 +59,8 @@ func NewFromAppConfig(cfg *config.Config) (*Database, error) {
 	}
 
 	// Set connection pool settings from config
-	sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
-	sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	sqlDB.SetMaxOpenConns(int(cfg.Database.MaxOpenConns))
+	sqlDB.SetMaxIdleConns(int(cfg.Database.MaxIdleConns))
 	sqlDB.SetConnMaxLifetime(cfg.Database.ConnMaxLifetime)
 
 	// Test the connection

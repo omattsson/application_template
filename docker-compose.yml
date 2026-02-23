@@ -111,7 +111,7 @@ services:
     networks:
       - backend-net
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "10002"]
+      test: ["CMD-SHELL", "node -e \"require('net').createConnection(10002,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 5

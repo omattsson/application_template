@@ -62,6 +62,7 @@ func validateJSONSchema(t *testing.T, schema string, data []byte) bool {
 }
 
 func TestCreateItem(t *testing.T) {
+	t.Parallel()
 	router, _ := setupTestRouter()
 
 	tests := []struct {
@@ -88,7 +89,9 @@ func TestCreateItem(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt // capture range variable
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			payload, _ := json.Marshal(tt.input)
 			w := httptest.NewRecorder()
 			req, _ := http.NewRequest("POST", "/api/v1/items", bytes.NewBuffer(payload))
@@ -116,6 +119,7 @@ func TestCreateItem(t *testing.T) {
 }
 
 func TestGetItem(t *testing.T) {
+	t.Parallel()
 	router, mockRepo := setupTestRouter()
 
 	// Create a test item
@@ -123,10 +127,10 @@ func TestGetItem(t *testing.T) {
 	mockRepo.Create(testItem)
 
 	tests := []struct {
-		name       string
-		itemID     string
-		wantStatus int
-		wantItem   *models.Item
+		wantItem   *models.Item // 8 bytes (pointer)
+		name       string       // 16 bytes
+		itemID     string       // 16 bytes
+		wantStatus int          // 4 bytes
 	}{
 		{
 			name:       "existing item",
@@ -149,7 +153,9 @@ func TestGetItem(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt // capture range variable
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			w := httptest.NewRecorder()
 			req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/items/%s", tt.itemID), nil)
 			router.ServeHTTP(w, req)
@@ -168,6 +174,7 @@ func TestGetItem(t *testing.T) {
 }
 
 func TestUpdateItem(t *testing.T) {
+	t.Parallel()
 	router, mockRepo := setupTestRouter()
 
 	// Create a test item
@@ -221,7 +228,9 @@ func TestUpdateItem(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt // capture range variable
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			payload, _ := json.Marshal(tt.input)
 			w := httptest.NewRecorder()
 			req, _ := http.NewRequest("PUT", fmt.Sprintf("/api/v1/items/%s", tt.itemID), bytes.NewBuffer(payload))
@@ -245,6 +254,7 @@ func TestUpdateItem(t *testing.T) {
 }
 
 func TestDeleteItem(t *testing.T) {
+	t.Parallel()
 	router, mockRepo := setupTestRouter()
 
 	// Create a test item
@@ -274,7 +284,9 @@ func TestDeleteItem(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt // capture range variable
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			w := httptest.NewRecorder()
 			req, _ := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/items/%s", tt.itemID), nil)
 			router.ServeHTTP(w, req)
@@ -285,6 +297,7 @@ func TestDeleteItem(t *testing.T) {
 }
 
 func TestListItems(t *testing.T) {
+	t.Parallel()
 	router, mockRepo := setupTestRouter()
 
 	// Create test items
@@ -301,11 +314,12 @@ func TestListItems(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		query      string
-		wantStatus int
-		wantCount  int
-		wantNames  []string
+		wantNames  []string // 24 bytes (slice)
+		name       string   // 16 bytes
+		query      string   // 16 bytes
+		wantStatus int      // 4 bytes
+		wantCount  int      // 4 bytes
+		_          [8]byte  // padding to ensure alignment
 	}{
 		{
 			name:       "list all items",
@@ -352,7 +366,9 @@ func TestListItems(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt // capture range variable
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			w := httptest.NewRecorder()
 			req, _ := http.NewRequest("GET", tt.query, nil)
 			router.ServeHTTP(w, req)
@@ -384,6 +400,7 @@ func TestListItems(t *testing.T) {
 
 // TestListItemsErrors tests error scenarios for the ListItems handler
 func TestListItemsErrors(t *testing.T) {
+	t.Parallel()
 	router, mockRepo := setupTestRouter()
 
 	// Mock repository that returns an error
@@ -402,6 +419,7 @@ func TestListItemsErrors(t *testing.T) {
 }
 
 func TestConcurrentItemOperations(t *testing.T) {
+	t.Parallel()
 	router, mockRepo := setupTestRouter()
 	const numConcurrentRequests = 10
 
@@ -520,6 +538,7 @@ func TestConcurrentItemOperations(t *testing.T) {
 }
 
 func TestRateLimiting(t *testing.T) {
+	t.Parallel()
 	router, _ := setupTestRouter()
 	const (
 		numRequests       = 60 // Increased number of requests
@@ -611,10 +630,10 @@ func TestRateLimiting(t *testing.T) {
 
 func BenchmarkItemOperations(b *testing.B) {
 	benchmarks := []struct {
-		name    string
-		method  string
-		pathGen func(mockRepo *MockRepository) string
-		bodyGen func(mockRepo *MockRepository) []byte
+		pathGen func(mockRepo *MockRepository) string // 8 bytes (func pointer)
+		bodyGen func(mockRepo *MockRepository) []byte // 8 bytes (func pointer)
+		name    string                                // 16 bytes
+		method  string                                // 16 bytes
 		setup   func(mockRepo *MockRepository)
 		cleanup func(mockRepo *MockRepository)
 	}{
@@ -629,7 +648,10 @@ func BenchmarkItemOperations(b *testing.B) {
 					Name:  "New Item",
 					Price: 149.99,
 				}
-				itemJSON, _ := json.Marshal(newItem)
+				itemJSON, err := json.Marshal(newItem)
+				if err != nil {
+					b.Fatalf("Failed to marshal item: %v", err)
+				}
 				return itemJSON
 			},
 		},
@@ -675,7 +697,10 @@ func BenchmarkItemOperations(b *testing.B) {
 					Price:   149.99,
 					Version: item.Version,
 				}
-				itemJSON, _ := json.Marshal(updateItem)
+				itemJSON, err := json.Marshal(updateItem)
+				if err != nil {
+					b.Fatalf("Failed to marshal update item: %v", err)
+				}
 				return itemJSON
 			},
 		},
@@ -711,6 +736,7 @@ func BenchmarkItemOperations(b *testing.B) {
 
 // TestConcurrentBatchOperations tests the API's behavior with batch operations
 func TestConcurrentBatchOperations(t *testing.T) {
+	t.Parallel()
 	router, _ := setupTestRouter()
 	const batchSize = 10 // Reduced batch size for testing
 
@@ -870,6 +896,7 @@ func TestConcurrentBatchOperations(t *testing.T) {
 	})
 }
 func TestHandleDBError(t *testing.T) {
+	t.Parallel()
 	type dbErr struct {
 		err      error
 		wantCode int
@@ -895,8 +922,12 @@ func TestHandleDBError(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		code, msg := handleDBError(tt.err)
-		assert.Equal(t, tt.wantCode, code)
-		assert.Equal(t, tt.wantMsg, msg)
+		tt := tt // Capture range variable
+		t.Run("test error handling", func(t *testing.T) {
+			t.Parallel()
+			code, msg := handleDBError(tt.err)
+			assert.Equal(t, tt.wantCode, code)
+			assert.Equal(t, tt.wantMsg, msg)
+		})
 	}
 }

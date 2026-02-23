@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 
 	"gorm.io/gorm"
@@ -60,7 +61,7 @@ func (m *GormSchemaManager) AddColumn(model interface{}, field string, dataType 
 	// Parse model to get table name
 	stmt := &gorm.Statement{DB: m.db}
 	if err := stmt.Parse(model); err != nil {
-		return fmt.Errorf("failed to parse model: %v", err)
+		return fmt.Errorf("failed to parse model: %w", err)
 	}
 
 	// Use a transaction for DDL operation
@@ -68,7 +69,7 @@ func (m *GormSchemaManager) AddColumn(model interface{}, field string, dataType 
 		// Create the column using parameterized query
 		sql := "ALTER TABLE ? ADD COLUMN ? ?"
 		if err := tx.Exec(sql, gorm.Expr(stmt.Table), gorm.Expr(field), gorm.Expr(dataType)).Error; err != nil {
-			return fmt.Errorf("failed to add column %s: %v", field, err)
+			return fmt.Errorf("failed to add column %s: %w", field, err)
 		}
 		return nil
 	})
@@ -83,7 +84,7 @@ func (m *GormSchemaManager) DropColumn(model interface{}, field string) error {
 	// Parse model to get table name
 	stmt := &gorm.Statement{DB: m.db}
 	if err := stmt.Parse(model); err != nil {
-		return fmt.Errorf("failed to parse model: %v", err)
+		return fmt.Errorf("failed to parse model: %w", err)
 	}
 
 	// Use a transaction for DDL operation
@@ -91,7 +92,7 @@ func (m *GormSchemaManager) DropColumn(model interface{}, field string) error {
 		// Drop column using parameterized query
 		sql := "ALTER TABLE ? DROP COLUMN ?"
 		if err := tx.Exec(sql, gorm.Expr(stmt.Table), gorm.Expr(field)).Error; err != nil {
-			return fmt.Errorf("failed to drop column %s: %v", field, err)
+			return fmt.Errorf("failed to drop column %s: %w", field, err)
 		}
 		return nil
 	})
@@ -112,7 +113,7 @@ func (m *GormSchemaManager) AddIndex(model interface{}, name string, columns ...
 	// Get table name
 	stmt := &gorm.Statement{DB: m.db}
 	if err := stmt.Parse(model); err != nil {
-		return fmt.Errorf("failed to parse model: %v", err)
+		return fmt.Errorf("failed to parse model: %w", err)
 	}
 
 	// Validate columns exist
@@ -137,7 +138,7 @@ func (m *GormSchemaManager) AddIndex(model interface{}, name string, columns ...
 			gorm.Expr(stmt.Table),
 			gorm.Expr(strings.Join(columnList, ", ")),
 		).Error; err != nil {
-			return fmt.Errorf("failed to create index %s: %v", name, err)
+			return fmt.Errorf("failed to create index %s: %w", name, err)
 		}
 		return nil
 	})
@@ -149,4 +150,24 @@ func (m *GormSchemaManager) DropIndex(model interface{}, name string) error {
 		return fmt.Errorf("index %s does not exist", name)
 	}
 	return migrator.DropIndex(model, name)
+}
+
+func (m *GormSchemaManager) ParseModelSchema(model interface{}) error {
+	modelType := reflect.TypeOf(model)
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+
+	if modelType.Kind() != reflect.Struct {
+		return fmt.Errorf("failed to parse model: %w", fmt.Errorf("expected struct, got %v", modelType.Kind()))
+	}
+
+	// Parse model to get table name
+	stmt := &gorm.Statement{DB: m.db}
+	if err := stmt.Parse(model); err != nil {
+		return fmt.Errorf("failed to parse model: %w", err)
+	}
+
+	// By default, if the model can be parsed by GORM, we'll consider it valid
+	return nil
 }
