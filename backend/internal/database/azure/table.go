@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"backend/internal/models"
@@ -16,7 +17,19 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/data/aztables"
 )
 
-// TableRepository implements the Repository interface for Azure Table Storage
+// idCounter is a monotonic counter used to generate unique IDs for Azure Table entities.
+// Seeded from the current Unix timestamp in milliseconds so IDs are globally unique
+// across restarts (within millisecond granularity).
+var idCounter atomic.Uint64
+
+func init() {
+	idCounter.Store(uint64(time.Now().UnixMilli()))
+}
+
+func nextID() uint {
+	return uint(idCounter.Add(1))
+}
+
 // TableRepository implements the Repository interface for Azure Table Storage
 type TableRepository struct {
 	client    AzureTableClient
@@ -104,9 +117,14 @@ func (r *TableRepository) Create(ctx context.Context, entity interface{}) error 
 	// Create Azure Table entity
 	now := time.Now().UTC()
 
+	// Generate a numeric ID (Azure Table Storage has no auto-increment)
+	if item.ID == 0 {
+		item.ID = nextID()
+	}
+
 	entityJSON := map[string]interface{}{
 		"PartitionKey": "items",
-		"RowKey":       item.Name, // Using Name as the unique key for testing
+		"RowKey":       strconv.FormatUint(uint64(item.ID), 10),
 		"Name":         item.Name,
 		"Price":        item.Price,
 		"Version":      item.Version,

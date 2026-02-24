@@ -94,9 +94,10 @@ func TestTableClientOperations(t *testing.T) {
 		}
 		err := repo.Create(context.Background(), item)
 		assert.NoError(t, err)
+		assert.NotZero(t, item.ID, "Create should assign an ID")
 
 		var retrieved models.Item
-		err = repo.FindByID(context.Background(), 1, &retrieved)
+		err = repo.FindByID(context.Background(), item.ID, &retrieved)
 		assert.NoError(t, err)
 		assert.Equal(t, item.Name, retrieved.Name)
 		assert.InDelta(t, item.Price, retrieved.Price, 0.001)
