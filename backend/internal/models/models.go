@@ -138,11 +138,22 @@ func (r *GenericRepository) Delete(ctx context.Context, entity interface{}) erro
 	return nil
 }
 
+// allowedFilterFields is a whitelist of column names that may be used in filter queries.
+// This prevents SQL injection via the Filter.Field parameter.
+var allowedFilterFields = map[string]bool{
+	"name":  true,
+	"price": true,
+}
+
 func (r *GenericRepository) List(ctx context.Context, dest interface{}, conditions ...interface{}) error {
 	query := r.db.WithContext(ctx)
 	for _, cond := range conditions {
 		switch c := cond.(type) {
 		case Filter:
+			if !allowedFilterFields[c.Field] {
+				return dberrors.NewDatabaseError("list",
+					fmt.Errorf("invalid filter field: %q", c.Field))
+			}
 			switch c.Op {
 			case "exact":
 				query = query.Where(fmt.Sprintf("%s = ?", c.Field), c.Value)

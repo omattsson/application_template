@@ -91,7 +91,6 @@ func main() {
 	defer cancel()
 
 	err = srv.Shutdown(ctx)
-	cancel()
 
 	if err != nil {
 		slog.Error("Server forced to shutdown", "error", err)

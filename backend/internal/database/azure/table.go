@@ -104,6 +104,7 @@ func (r *TableRepository) Create(ctx context.Context, entity interface{}) error 
 		"RowKey":       item.Name, // Using Name as the unique key for testing
 		"Name":         item.Name,
 		"Price":        item.Price,
+		"Version":      item.Version,
 		"CreatedAt":    now.Format(time.RFC3339),
 		"UpdatedAt":    now.Format(time.RFC3339),
 	}
@@ -154,6 +155,11 @@ func (r *TableRepository) FindByID(ctx context.Context, id uint, dest interface{
 	item.ID = id
 	item.Name = entityData["Name"].(string)
 	item.Price = entityData["Price"].(float64)
+	if v, ok := entityData["Version"]; ok {
+		if vf, ok := v.(float64); ok {
+			item.Version = uint(vf)
+		}
+	}
 
 	createdAt, err := time.Parse(time.RFC3339, entityData["CreatedAt"].(string))
 	if err != nil {
@@ -170,21 +176,51 @@ func (r *TableRepository) FindByID(ctx context.Context, id uint, dest interface{
 	return nil
 }
 
-// Update implements the Repository interface
+// Update implements the Repository interface.
+// For models that implement Versionable (e.g. Item), optimistic locking is enforced:
+// the entity is fetched first to compare versions, and the ETag from the GET response
+// is passed to UpdateEntity so Azure Table Storage rejects stale writes.
 func (r *TableRepository) Update(ctx context.Context, entity interface{}) error {
 	item, ok := entity.(*models.Item)
 	if !ok {
 		return dberrors.NewDatabaseError("type_assertion", fmt.Errorf("entity must be *models.Item"))
 	}
 
-	// Check if entity exists first
-	_, err := r.client.GetEntity(ctx, "items", strconv.FormatUint(uint64(item.ID), 10), nil)
+	// Fetch existing entity (also validates existence)
+	existing, err := r.client.GetEntity(ctx, "items", strconv.FormatUint(uint64(item.ID), 10), nil)
 	if err != nil {
 		var respErr *azcore.ResponseError
 		if errors.As(err, &respErr) && respErr.StatusCode == 404 {
 			return dberrors.NewDatabaseError("update", dberrors.ErrNotFound)
 		}
 		return dberrors.NewDatabaseError("find", err)
+	}
+
+	// Optimistic locking: compare version if the entity is Versionable
+	if ver, ok := entity.(models.Versionable); ok {
+		currentVersion := ver.GetVersion()
+
+		// Parse existing entity to check stored version
+		var existingData map[string]interface{}
+		if err := json.Unmarshal(existing.Value, &existingData); err != nil {
+			return dberrors.NewDatabaseError("unmarshal", err)
+		}
+		if storedVersion, ok := existingData["Version"]; ok {
+			var sv uint
+			switch v := storedVersion.(type) {
+			case float64:
+				sv = uint(v)
+			case json.Number:
+				n, _ := v.Int64()
+				sv = uint(n)
+			}
+			if currentVersion != sv {
+				return dberrors.NewDatabaseError("update", errors.New("version mismatch"))
+			}
+		}
+
+		// Increment version for the update
+		ver.SetVersion(currentVersion + 1)
 	}
 
 	// Create Azure Table entity
@@ -194,6 +230,7 @@ func (r *TableRepository) Update(ctx context.Context, entity interface{}) error 
 		"RowKey":       strconv.FormatUint(uint64(item.ID), 10),
 		"Name":         item.Name,
 		"Price":        item.Price,
+		"Version":      item.Version,
 		"CreatedAt":    item.CreatedAt.Format(time.RFC3339),
 		"UpdatedAt":    now.Format(time.RFC3339),
 	}
@@ -203,8 +240,21 @@ func (r *TableRepository) Update(ctx context.Context, entity interface{}) error 
 		return dberrors.NewDatabaseError("marshal", err)
 	}
 
-	_, err = r.client.UpdateEntity(ctx, entityBytes, nil)
+	// Use ETag from the GET response for conditional update
+	updateOpts := &aztables.UpdateEntityOptions{
+		IfMatch:    &existing.ETag,
+		UpdateMode: aztables.UpdateModeMerge,
+	}
+	_, err = r.client.UpdateEntity(ctx, entityBytes, updateOpts)
 	if err != nil {
+		var respErr *azcore.ResponseError
+		if errors.As(err, &respErr) && respErr.StatusCode == 412 {
+			// Precondition failed — concurrent modification
+			if ver, ok := entity.(models.Versionable); ok {
+				ver.SetVersion(ver.GetVersion() - 1) // Roll back
+			}
+			return dberrors.NewDatabaseError("update", errors.New("version mismatch"))
+		}
 		return dberrors.NewDatabaseError("update", err)
 	}
 

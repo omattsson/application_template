@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -74,4 +75,119 @@ func TestRecoveryMiddleware(t *testing.T) {
 	err := json.NewDecoder(w.Body).Decode(&response)
 	assert.Nil(t, err)
 	assert.Equal(t, "Internal Server Error", response["error"])
+}
+
+func TestRequestIDMiddleware(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	t.Run("Generates new request ID when none provided", func(t *testing.T) {
+		t.Parallel()
+		r := gin.New()
+		r.Use(RequestID())
+		var capturedID string
+		r.GET("/test", func(c *gin.Context) {
+			if v, ok := c.Get("request_id"); ok {
+				capturedID = v.(string)
+			}
+			c.Status(http.StatusOK)
+		})
+
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/test", nil)
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
+		assert.NotEmpty(t, capturedID)
+		assert.Equal(t, w.Header().Get("X-Request-ID"), capturedID)
+	})
+
+	t.Run("Reuses client-provided X-Request-ID", func(t *testing.T) {
+		t.Parallel()
+		r := gin.New()
+		r.Use(RequestID())
+		var capturedID string
+		r.GET("/test", func(c *gin.Context) {
+			if v, ok := c.Get("request_id"); ok {
+				capturedID = v.(string)
+			}
+			c.Status(http.StatusOK)
+		})
+
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/test", nil)
+		req.Header.Set("X-Request-ID", "client-id-123")
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "client-id-123", w.Header().Get("X-Request-ID"))
+		assert.Equal(t, "client-id-123", capturedID)
+	})
+
+	t.Run("Generated IDs are unique", func(t *testing.T) {
+		t.Parallel()
+		r := gin.New()
+		r.Use(RequestID())
+		r.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+		ids := make(map[string]bool)
+		for i := 0; i < 10; i++ {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/test", nil)
+			r.ServeHTTP(w, req)
+			id := w.Header().Get("X-Request-ID")
+			assert.False(t, ids[id], "duplicate request ID generated")
+			ids[id] = true
+		}
+	})
+}
+
+func TestMaxBodySizeMiddleware(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	t.Run("Allows request within size limit", func(t *testing.T) {
+		t.Parallel()
+		r := gin.New()
+		r.Use(MaxBodySize(1024)) // 1 KB
+		r.POST("/test", func(c *gin.Context) {
+			body := make([]byte, 512)
+			_, err := c.Request.Body.Read(body)
+			if err != nil && err.Error() != "EOF" {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "body too large"})
+				return
+			}
+			c.Status(http.StatusOK)
+		})
+
+		w := httptest.NewRecorder()
+		body := strings.NewReader(strings.Repeat("a", 100))
+		req, _ := http.NewRequest("POST", "/test", body)
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("Rejects request exceeding size limit", func(t *testing.T) {
+		t.Parallel()
+		r := gin.New()
+		r.Use(MaxBodySize(64)) // 64 bytes
+		r.POST("/test", func(c *gin.Context) {
+			body := make([]byte, 128)
+			_, err := c.Request.Body.Read(body)
+			if err != nil {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "body too large"})
+				return
+			}
+			c.Status(http.StatusOK)
+		})
+
+		w := httptest.NewRecorder()
+		body := strings.NewReader(strings.Repeat("a", 128))
+		req, _ := http.NewRequest("POST", "/test", body)
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	})
 }
