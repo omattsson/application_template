@@ -155,6 +155,7 @@ func TestTableClientOperations(t *testing.T) {
 			Price:   10.5,
 			Version: 1,
 		}
+		item.ID = 1
 		err := repo.Update(context.Background(), item)
 		assert.NoError(t, err)
 		assert.Equal(t, uint(2), item.Version, "Version should be incremented after update")
@@ -180,6 +181,7 @@ func TestTableClientOperations(t *testing.T) {
 			Price:   15.0,
 			Version: 1, // Stale version
 		}
+		item.ID = 1
 		err := repo.Update(context.Background(), item)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "version mismatch")
@@ -202,6 +204,7 @@ func TestTableClientOperations(t *testing.T) {
 			Name:  "test",
 			Price: 10.5,
 		}
+		item.ID = 1
 		err := repo.Delete(context.Background(), item)
 		assert.NoError(t, err)
 	})

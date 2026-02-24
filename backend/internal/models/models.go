@@ -65,12 +65,28 @@ type Repository interface {
 
 // GenericRepository implements the Repository interface
 type GenericRepository struct {
-	db *gorm.DB
+	db                  *gorm.DB
+	allowedFilterFields map[string]bool
 }
 
-// NewRepository creates a new GenericRepository
+// NewRepository creates a new GenericRepository with default allowed filter fields.
 func NewRepository(db *gorm.DB) Repository {
-	return &GenericRepository{db: db}
+	return &GenericRepository{
+		db: db,
+		allowedFilterFields: map[string]bool{
+			"name":  true,
+			"price": true,
+		},
+	}
+}
+
+// NewRepositoryWithFilterFields creates a GenericRepository with a custom filter field whitelist.
+func NewRepositoryWithFilterFields(db *gorm.DB, fields []string) Repository {
+	allowed := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		allowed[f] = true
+	}
+	return &GenericRepository{db: db, allowedFilterFields: allowed}
 }
 
 // Ping checks if the database is reachable
@@ -138,19 +154,12 @@ func (r *GenericRepository) Delete(ctx context.Context, entity interface{}) erro
 	return nil
 }
 
-// allowedFilterFields is a whitelist of column names that may be used in filter queries.
-// This prevents SQL injection via the Filter.Field parameter.
-var allowedFilterFields = map[string]bool{
-	"name":  true,
-	"price": true,
-}
-
 func (r *GenericRepository) List(ctx context.Context, dest interface{}, conditions ...interface{}) error {
 	query := r.db.WithContext(ctx)
 	for _, cond := range conditions {
 		switch c := cond.(type) {
 		case Filter:
-			if !allowedFilterFields[c.Field] {
+			if !r.allowedFilterFields[c.Field] {
 				return dberrors.NewDatabaseError("list",
 					fmt.Errorf("invalid filter field: %q", c.Field))
 			}

@@ -20,12 +20,22 @@ func CORS(allowedOrigins string) gin.HandlerFunc {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		} else {
 			requestOrigin := c.Request.Header.Get("Origin")
+			allowed := false
 			for _, origin := range strings.Split(allowedOrigins, ",") {
 				if strings.TrimSpace(origin) == requestOrigin {
 					c.Writer.Header().Set("Access-Control-Allow-Origin", requestOrigin)
 					c.Writer.Header().Set("Vary", "Origin")
+					allowed = true
 					break
 				}
+			}
+			if !allowed {
+				if c.Request.Method == "OPTIONS" {
+					c.AbortWithStatus(http.StatusNoContent)
+					return
+				}
+				c.Next()
+				return
 			}
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

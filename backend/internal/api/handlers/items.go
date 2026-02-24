@@ -194,15 +194,15 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 		return
 	}
 
-	// Version check for optimistic locking (if version was provided in request)
-	if updateItem.Version > 0 && updateItem.Version != currentItem.Version {
-		c.JSON(http.StatusConflict, gin.H{"error": "Item has been modified by another request"})
-		return
-	}
-
-	// Update fields from request but keep DB version for repository-level optimistic locking
+	// Update fields from request
 	currentItem.Name = updateItem.Name
 	currentItem.Price = updateItem.Price
+
+	// If the client provided a version, use it for optimistic locking;
+	// otherwise keep the DB version so the repository check passes.
+	if updateItem.Version > 0 {
+		currentItem.Version = updateItem.Version
+	}
 
 	if err := h.repository.Update(c.Request.Context(), &currentItem); err != nil {
 		if strings.Contains(err.Error(), "version mismatch") {

@@ -158,21 +158,40 @@ func (r *TableRepository) FindByID(ctx context.Context, id uint, dest interface{
 
 	// Map entity to item
 	item.ID = id
-	item.Name = entityData["Name"].(string)
-	item.Price = entityData["Price"].(float64)
+
+	name, ok := entityData["Name"].(string)
+	if !ok {
+		return dberrors.NewDatabaseError("unmarshal", fmt.Errorf("missing or invalid Name field"))
+	}
+	item.Name = name
+
+	price, ok := entityData["Price"].(float64)
+	if !ok {
+		return dberrors.NewDatabaseError("unmarshal", fmt.Errorf("missing or invalid Price field"))
+	}
+	item.Price = price
+
 	if v, ok := entityData["Version"]; ok {
 		if vf, ok := v.(float64); ok {
 			item.Version = uint(vf)
 		}
 	}
 
-	createdAt, err := time.Parse(time.RFC3339, entityData["CreatedAt"].(string))
+	createdAtStr, ok := entityData["CreatedAt"].(string)
+	if !ok {
+		return dberrors.NewDatabaseError("unmarshal", fmt.Errorf("missing or invalid CreatedAt field"))
+	}
+	createdAt, err := time.Parse(time.RFC3339, createdAtStr)
 	if err != nil {
 		return dberrors.NewDatabaseError("parse_time", err)
 	}
 	item.CreatedAt = createdAt
 
-	updatedAt, err := time.Parse(time.RFC3339, entityData["UpdatedAt"].(string))
+	updatedAtStr, ok := entityData["UpdatedAt"].(string)
+	if !ok {
+		return dberrors.NewDatabaseError("unmarshal", fmt.Errorf("missing or invalid UpdatedAt field"))
+	}
+	updatedAt, err := time.Parse(time.RFC3339, updatedAtStr)
 	if err != nil {
 		return dberrors.NewDatabaseError("parse_time", err)
 	}
@@ -189,6 +208,10 @@ func (r *TableRepository) Update(ctx context.Context, entity interface{}) error 
 	item, ok := entity.(*models.Item)
 	if !ok {
 		return dberrors.NewDatabaseError("type_assertion", fmt.Errorf("entity must be *models.Item"))
+	}
+
+	if item.ID == 0 {
+		return dberrors.NewDatabaseError("update", dberrors.ErrValidation)
 	}
 
 	// Fetch existing entity (also validates existence)
@@ -274,6 +297,10 @@ func (r *TableRepository) Delete(ctx context.Context, entity interface{}) error 
 		return dberrors.NewDatabaseError("type_assertion", fmt.Errorf("entity must be *models.Item"))
 	}
 
+	if item.ID == 0 {
+		return dberrors.NewDatabaseError("delete", dberrors.ErrValidation)
+	}
+
 	_, err := r.client.DeleteEntity(ctx, "items", strconv.FormatUint(uint64(item.ID), 10), nil)
 	if err != nil {
 		var respErr *azcore.ResponseError
@@ -349,9 +376,14 @@ func (r *TableRepository) List(ctx context.Context, dest interface{}, conditions
 				return dberrors.NewDatabaseError("unmarshal", err)
 			}
 
-			id, _ := strconv.ParseUint(entityData["RowKey"].(string), 10, 32)
-			createdAt, _ := time.Parse(time.RFC3339, entityData["CreatedAt"].(string))
-			updatedAt, _ := time.Parse(time.RFC3339, entityData["UpdatedAt"].(string))
+			rowKey, _ := entityData["RowKey"].(string)
+			id, _ := strconv.ParseUint(rowKey, 10, 32)
+			createdAtStr, _ := entityData["CreatedAt"].(string)
+			createdAt, _ := time.Parse(time.RFC3339, createdAtStr)
+			updatedAtStr, _ := entityData["UpdatedAt"].(string)
+			updatedAt, _ := time.Parse(time.RFC3339, updatedAtStr)
+			name, _ := entityData["Name"].(string)
+			price, _ := entityData["Price"].(float64)
 
 			item := models.Item{
 				Base: models.Base{
@@ -359,8 +391,8 @@ func (r *TableRepository) List(ctx context.Context, dest interface{}, conditions
 					CreatedAt: createdAt,
 					UpdatedAt: updatedAt,
 				},
-				Name:  entityData["Name"].(string),
-				Price: entityData["Price"].(float64),
+				Name:  name,
+				Price: price,
 			}
 
 			// Apply name contains filter if specified
