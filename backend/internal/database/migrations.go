@@ -1,7 +1,7 @@
 package database
 
 import (
-	"log"
+	"log/slog"
 
 	"backend/internal/database/schema"
 	"backend/internal/models"
@@ -11,7 +11,7 @@ import (
 
 // AutoMigrate runs database migrations for all models
 func (d *Database) AutoMigrate() error {
-	log.Println("Running database migrations...")
+	slog.Info("Running database migrations...")
 
 	// Initialize migrator
 	migrator := schema.NewMigrator(d.DB)
@@ -66,6 +66,6 @@ func (d *Database) AutoMigrate() error {
 		return err
 	}
 
-	log.Println("Database migrations completed successfully")
+	slog.Info("Database migrations completed successfully")
 	return nil
 }

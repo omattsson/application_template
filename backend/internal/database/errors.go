@@ -1,39 +1,16 @@
+// Package database provides database connectivity, migrations, and repository factories.
+// Error types are re-exported from pkg/dberrors to maintain a single source of truth.
 package database
 
-import (
-	"errors"
-	"fmt"
-)
+import "backend/pkg/dberrors"
 
-// Common database errors
+// Re-export error types from pkg/dberrors for backward compatibility.
+type DatabaseError = dberrors.DatabaseError
+
 var (
-	ErrNotFound         = errors.New("record not found")
-	ErrDuplicateKey     = errors.New("duplicate key violation")
-	ErrValidation       = errors.New("validation error")
-	ErrConnectionFailed = errors.New("database connection failed")
+	ErrNotFound         = dberrors.ErrNotFound
+	ErrDuplicateKey     = dberrors.ErrDuplicateKey
+	ErrValidation       = dberrors.ErrValidation
+	ErrConnectionFailed = dberrors.ErrConnectionFailed
+	NewDatabaseError    = dberrors.NewDatabaseError
 )
-
-// DatabaseError wraps database-specific errors with additional context
-type DatabaseError struct {
-	Op  string
-	Err error
-}
-
-func (e *DatabaseError) Error() string {
-	if e.Op != "" {
-		return fmt.Sprintf("%s: %v", e.Op, e.Err)
-	}
-	return e.Err.Error()
-}
-
-func (e *DatabaseError) Unwrap() error {
-	return e.Err
-}
-
-// NewDatabaseError creates a new database error with operation context
-func NewDatabaseError(op string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return &DatabaseError{Op: op, Err: err}
-}

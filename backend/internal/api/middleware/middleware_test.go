@@ -3,10 +3,9 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -18,12 +17,12 @@ func TestLoggerMiddleware(t *testing.T) {
 	// Set Gin to Test Mode
 	gin.SetMode(gin.TestMode)
 
-	// Create a buffer to capture log output
+	// Create a buffer to capture slog output
 	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer func() {
-		log.SetOutput(os.Stdout)
-	}()
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(origLogger)
 
 	// Setup router with middleware
 	r := gin.New()

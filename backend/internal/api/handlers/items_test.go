@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,7 +125,7 @@ func TestGetItem(t *testing.T) {
 
 	// Create a test item
 	testItem := &models.Item{Name: "Test Item", Price: 99.99}
-	mockRepo.Create(testItem)
+	mockRepo.Create(context.Background(), testItem)
 
 	tests := []struct {
 		wantItem   *models.Item // 8 bytes (pointer)
@@ -179,7 +180,7 @@ func TestUpdateItem(t *testing.T) {
 
 	// Create a test item
 	testItem := &models.Item{Name: "Test Item", Price: 99.99}
-	mockRepo.Create(testItem)
+	mockRepo.Create(context.Background(), testItem)
 
 	tests := []struct {
 		name       string
@@ -259,7 +260,7 @@ func TestDeleteItem(t *testing.T) {
 
 	// Create a test item
 	testItem := &models.Item{Name: "Test Item", Price: 99.99}
-	mockRepo.Create(testItem)
+	mockRepo.Create(context.Background(), testItem)
 
 	tests := []struct {
 		name       string
@@ -310,7 +311,7 @@ func TestListItems(t *testing.T) {
 	}
 
 	for _, item := range items {
-		mockRepo.Create(&item)
+		mockRepo.Create(context.Background(), &item)
 	}
 
 	tests := []struct {
@@ -415,7 +416,7 @@ func TestListItemsErrors(t *testing.T) {
 	var response map[string]string
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(t, err)
-	assert.Contains(t, response["error"], "database error")
+	assert.Contains(t, response["error"], "Internal server error")
 }
 
 func TestConcurrentItemOperations(t *testing.T) {
@@ -460,7 +461,7 @@ func TestConcurrentItemOperations(t *testing.T) {
 	t.Run("concurrent item updates with version validation", func(t *testing.T) {
 		// Create an item to update
 		item := &models.Item{Name: "Test Item", Price: 99.99}
-		mockRepo.Create(item)
+		mockRepo.Create(context.Background(), item)
 		itemID := fmt.Sprint(item.ID)
 
 		// Channel to collect successful updates
@@ -660,7 +661,7 @@ func BenchmarkItemOperations(b *testing.B) {
 			method: "GET",
 			pathGen: func(mockRepo *MockRepository) string {
 				testItem := &models.Item{Name: "Test Item", Price: 99.99}
-				mockRepo.Create(testItem)
+				mockRepo.Create(context.Background(), testItem)
 				return "/api/v1/items/" + fmt.Sprint(testItem.ID)
 			},
 			bodyGen: func(_ *MockRepository) []byte { return nil },
@@ -678,7 +679,7 @@ func BenchmarkItemOperations(b *testing.B) {
 			method: "PUT",
 			pathGen: func(mockRepo *MockRepository) string {
 				testItem := &models.Item{Name: "Test Item", Price: 99.99}
-				mockRepo.Create(testItem)
+				mockRepo.Create(context.Background(), testItem)
 				return "/api/v1/items/" + fmt.Sprint(testItem.ID)
 			},
 			bodyGen: func(mockRepo *MockRepository) []byte {
@@ -918,7 +919,7 @@ func TestHandleDBError(t *testing.T) {
 		{err: duplicateErr, wantCode: http.StatusConflict, wantMsg: "Item already exists"},
 		{err: otherDBErr, wantCode: http.StatusInternalServerError, wantMsg: "Internal server error"},
 		{err: plainNotFound, wantCode: http.StatusNotFound, wantMsg: "Item not found"},
-		{err: plainOther, wantCode: http.StatusInternalServerError, wantMsg: plainOther.Error()},
+		{err: plainOther, wantCode: http.StatusInternalServerError, wantMsg: "Internal server error"},
 	}
 
 	for _, tt := range tests {

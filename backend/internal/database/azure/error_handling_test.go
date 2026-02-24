@@ -1,6 +1,7 @@
 package azure_test
 
 import (
+	"context"
 	"testing"
 
 	"backend/internal/database/azure"
@@ -121,17 +122,18 @@ func TestTableRepository_InvalidData(t *testing.T) {
 
 	// Create a minimal repository for testing
 	repo := azure.NewTestTableRepository("testtable")
+	ctx := context.Background()
 
 	// Test invalid inputs for different operations
 	t.Run("Invalid inputs for Create", func(t *testing.T) {
 		t.Parallel()
 		// Test with nil
-		err := repo.Create(nil)
+		err := repo.Create(ctx, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "type_assertion")
 
 		// Test with wrong type
-		err = repo.Create("string")
+		err = repo.Create(ctx, "string")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "entity must be *models.Item")
 	})
@@ -139,12 +141,12 @@ func TestTableRepository_InvalidData(t *testing.T) {
 	t.Run("Invalid inputs for FindByID", func(t *testing.T) {
 		t.Parallel()
 		// Test with nil
-		err := repo.FindByID(1, nil)
+		err := repo.FindByID(ctx, 1, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "type_assertion")
 
 		// Test with wrong type
-		err = repo.FindByID(1, "string")
+		err = repo.FindByID(ctx, 1, "string")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "dest must be *models.Item")
 	})
@@ -152,12 +154,12 @@ func TestTableRepository_InvalidData(t *testing.T) {
 	t.Run("Invalid inputs for Update", func(t *testing.T) {
 		t.Parallel()
 		// Test with nil
-		err := repo.Update(nil)
+		err := repo.Update(ctx, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "type_assertion")
 
 		// Test with wrong type
-		err = repo.Update("string")
+		err = repo.Update(ctx, "string")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "entity must be *models.Item")
 	})
@@ -165,12 +167,12 @@ func TestTableRepository_InvalidData(t *testing.T) {
 	t.Run("Invalid inputs for Delete", func(t *testing.T) {
 		t.Parallel()
 		// Test with nil
-		err := repo.Delete(nil)
+		err := repo.Delete(ctx, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "type_assertion")
 
 		// Test with wrong type
-		err = repo.Delete("string")
+		err = repo.Delete(ctx, "string")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "entity must be *models.Item")
 	})
@@ -178,12 +180,12 @@ func TestTableRepository_InvalidData(t *testing.T) {
 	t.Run("Invalid inputs for List", func(t *testing.T) {
 		t.Parallel()
 		// Test with nil
-		err := repo.List(nil)
+		err := repo.List(ctx, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "type_assertion")
 
 		// Test with wrong type
-		err = repo.List("string")
+		err = repo.List(ctx, "string")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "dest must be *[]models.Item")
 	})

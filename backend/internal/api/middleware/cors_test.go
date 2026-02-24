@@ -16,7 +16,7 @@ func TestCORSMiddleware(t *testing.T) {
 
 	// Setup router with middleware
 	r := gin.New()
-	r.Use(CORS())
+	r.Use(CORS("*"))
 	r.Any("/test", func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
@@ -30,7 +30,7 @@ func TestCORSMiddleware(t *testing.T) {
 		// Check CORS headers
 		assert.Equal(t, "*", w.Header().Get("Access-Control-Allow-Origin"))
 		assert.Equal(t, "GET, POST, PUT, DELETE, OPTIONS", w.Header().Get("Access-Control-Allow-Methods"))
-		assert.Equal(t, "Content-Type, Content-Length, Accept-Encoding, Authorization", w.Header().Get("Access-Control-Allow-Headers"))
+		assert.Equal(t, "Content-Type, Content-Length, Accept-Encoding, Authorization, X-Request-ID", w.Header().Get("Access-Control-Allow-Headers"))
 		assert.Equal(t, http.StatusOK, w.Code)
 	})
 
@@ -43,7 +43,7 @@ func TestCORSMiddleware(t *testing.T) {
 		// Check CORS headers
 		assert.Equal(t, "*", w.Header().Get("Access-Control-Allow-Origin"))
 		assert.Equal(t, "GET, POST, PUT, DELETE, OPTIONS", w.Header().Get("Access-Control-Allow-Methods"))
-		assert.Equal(t, "Content-Type, Content-Length, Accept-Encoding, Authorization", w.Header().Get("Access-Control-Allow-Headers"))
+		assert.Equal(t, "Content-Type, Content-Length, Accept-Encoding, Authorization, X-Request-ID", w.Header().Get("Access-Control-Allow-Headers"))
 		assert.Equal(t, http.StatusNoContent, w.Code) // OPTIONS request should return 204 No Content
 	})
 }

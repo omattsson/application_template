@@ -38,33 +38,33 @@ type MockRepository struct {
 	mock.Mock
 }
 
-func (m *MockRepository) Create(entity interface{}) error {
-	args := m.Called(entity)
+func (m *MockRepository) Create(ctx context.Context, entity interface{}) error {
+	args := m.Called(ctx, entity)
 	return args.Error(0)
 }
 
-func (m *MockRepository) FindByID(id uint, dest interface{}) error {
-	args := m.Called(id, dest)
+func (m *MockRepository) FindByID(ctx context.Context, id uint, dest interface{}) error {
+	args := m.Called(ctx, id, dest)
 	return args.Error(0)
 }
 
-func (m *MockRepository) Update(entity interface{}) error {
-	args := m.Called(entity)
+func (m *MockRepository) Update(ctx context.Context, entity interface{}) error {
+	args := m.Called(ctx, entity)
 	return args.Error(0)
 }
 
-func (m *MockRepository) Delete(entity interface{}) error {
-	args := m.Called(entity)
+func (m *MockRepository) Delete(ctx context.Context, entity interface{}) error {
+	args := m.Called(ctx, entity)
 	return args.Error(0)
 }
 
-func (m *MockRepository) List(dest interface{}, conditions ...interface{}) error {
-	args := m.Called(dest, conditions)
+func (m *MockRepository) List(ctx context.Context, dest interface{}, conditions ...interface{}) error {
+	args := m.Called(ctx, dest, conditions)
 	return args.Error(0)
 }
 
-func (m *MockRepository) Ping() error {
-	args := m.Called()
+func (m *MockRepository) Ping(ctx context.Context) error {
+	args := m.Called(ctx)
 	return args.Error(0)
 }
 
@@ -181,12 +181,12 @@ func TestHealthEndpoints(t *testing.T) {
 
 	// Register health endpoints
 	r.GET("/health/live", func(c *gin.Context) {
-		status := healthChecker.CheckLiveness()
+		status := healthChecker.CheckLiveness(c.Request.Context())
 		c.JSON(http.StatusOK, status)
 	})
 
 	r.GET("/health/ready", func(c *gin.Context) {
-		status := healthChecker.CheckReadiness()
+		status := healthChecker.CheckReadiness(c.Request.Context())
 		if status.Status == "DOWN" {
 			c.JSON(http.StatusServiceUnavailable, status)
 			return
@@ -211,7 +211,7 @@ func TestHealthEndpoints(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "UP")
 
 	// Test with failing health check
-	healthChecker.AddCheck("test", func() error {
+	healthChecker.AddCheck("test", func(_ context.Context) error {
 		return errors.New("test error")
 	})
 
@@ -230,36 +230,36 @@ func TestDatabaseHealthCheck(t *testing.T) {
 
 	// Test with SQLite database
 	mockRepo := new(MockRepository)
-	mockRepo.On("Ping").Return(nil)
+	mockRepo.On("Ping", mock.Anything).Return(nil)
 
 	// Add database health check
-	healthChecker.AddCheck("database", func() error {
-		return mockRepo.Ping()
+	healthChecker.AddCheck("database", func(_ context.Context) error {
+		return mockRepo.Ping(context.Background())
 	})
 
 	// Check readiness
-	status := healthChecker.CheckReadiness()
+	status := healthChecker.CheckReadiness(context.Background())
 	assert.Equal(t, "DOWN", status.Status) // Initially DOWN because we haven't set ready
 
 	// Mark as ready
 	healthChecker.SetReady(true)
 
 	// Check again
-	status = healthChecker.CheckReadiness()
+	status = healthChecker.CheckReadiness(context.Background())
 	assert.Equal(t, "UP", status.Status)
 	assert.Equal(t, "UP", status.Checks["database"].Status)
 
 	// Test with failing database connection
 	mockRepo = new(MockRepository)
-	mockRepo.On("Ping").Return(errors.New("connection failed"))
+	mockRepo.On("Ping", mock.Anything).Return(errors.New("connection failed"))
 
 	healthChecker = health.New()
 	healthChecker.SetReady(true)
-	healthChecker.AddCheck("database", func() error {
-		return mockRepo.Ping()
+	healthChecker.AddCheck("database", func(_ context.Context) error {
+		return mockRepo.Ping(context.Background())
 	})
 
-	status = healthChecker.CheckReadiness()
+	status = healthChecker.CheckReadiness(context.Background())
 	assert.Equal(t, "DOWN", status.Status)
 	assert.Equal(t, "DOWN", status.Checks["database"].Status)
 	assert.Contains(t, status.Checks["database"].Message, "connection failed")

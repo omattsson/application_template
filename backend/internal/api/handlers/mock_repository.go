@@ -1,12 +1,14 @@
 package handlers
 
 import (
-	"backend/internal/models"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
+
+	"backend/internal/models"
 )
 
 // MockRepository is a mock implementation of the Repository interface for testing
@@ -24,7 +26,7 @@ func NewMockRepository() *MockRepository {
 	}
 }
 
-func (m *MockRepository) Create(entity interface{}) error {
+func (m *MockRepository) Create(_ context.Context, entity interface{}) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -38,13 +40,13 @@ func (m *MockRepository) Create(entity interface{}) error {
 	}
 
 	item.ID = m.nextID
-	item.Version = 0 // Initialize version
+	item.Version = 1 // Initialize version (1 = first version; 0 = "not provided" sentinel)
 	m.nextID++
 	m.items[item.ID] = item
 	return nil
 }
 
-func (m *MockRepository) FindByID(id uint, dest interface{}) error {
+func (m *MockRepository) FindByID(_ context.Context, id uint, dest interface{}) error {
 	m.RLock()
 	defer m.RUnlock()
 
@@ -66,7 +68,7 @@ func (m *MockRepository) FindByID(id uint, dest interface{}) error {
 	return nil
 }
 
-func (m *MockRepository) Update(entity interface{}) error {
+func (m *MockRepository) Update(_ context.Context, entity interface{}) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -102,7 +104,7 @@ func (m *MockRepository) Update(entity interface{}) error {
 	return nil
 }
 
-func (m *MockRepository) Delete(entity interface{}) error {
+func (m *MockRepository) Delete(_ context.Context, entity interface{}) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -123,7 +125,7 @@ func (m *MockRepository) Delete(entity interface{}) error {
 	return nil
 }
 
-func (m *MockRepository) List(dest interface{}, conditions ...interface{}) error {
+func (m *MockRepository) List(_ context.Context, dest interface{}, conditions ...interface{}) error {
 	m.RLock()
 	defer m.RUnlock()
 
@@ -218,7 +220,7 @@ func (m *MockRepository) List(dest interface{}, conditions ...interface{}) error
 }
 
 // Ping implements the Repository interface
-func (m *MockRepository) Ping() error {
+func (m *MockRepository) Ping(_ context.Context) error {
 	return nil
 }
 

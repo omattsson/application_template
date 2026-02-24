@@ -10,7 +10,7 @@ import (
 	"backend/internal/health"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -38,22 +38,27 @@ func main() {
 	// Load configuration
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		slog.Error("Failed to load configuration", "error", err)
+		os.Exit(1)
 	}
 
-	// Initialize database
-	db, err := database.NewFromAppConfig(cfg)
+	// Initialize repository using the factory (selects MySQL or Azure Table based on config)
+	repo, err := database.NewRepository(cfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		slog.Error("Failed to initialize repository", "error", err)
+		os.Exit(1)
 	}
 
-	// Initialize health checker
+	// Initialize health checker with actual database dependency
 	healthChecker := health.New()
-	healthChecker.AddCheck("database", db.Ping)
+	healthChecker.AddCheck("database", func(ctx context.Context) error {
+		return repo.Ping(ctx)
+	})
+	healthChecker.SetReady(true)
 
 	// Setup router
 	router := gin.Default()
-	routes.SetupRoutes(router, db)
+	routes.SetupRoutes(router, repo, healthChecker, cfg)
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// Create server with timeouts
@@ -68,28 +73,30 @@ func main() {
 	// Start server in a goroutine
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+			slog.Error("Failed to start server", "error", err)
+			os.Exit(1)
 		}
 	}()
+
+	slog.Info("Server started", "addr", srv.Addr)
 
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Shutting down server...")
+	slog.Info("Shutting down server...")
 
-	// Give outstanding requests 5 seconds to complete
+	// Give outstanding requests time to complete
 	ctx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
 	defer cancel()
 
 	err = srv.Shutdown(ctx)
-	// Always execute cleanup
 	cancel()
 
 	if err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
-		return // Return with error status from main
+		slog.Error("Server forced to shutdown", "error", err)
+		return
 	}
 
-	log.Println("Server exiting")
+	slog.Info("Server exited gracefully")
 }

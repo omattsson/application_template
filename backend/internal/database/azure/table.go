@@ -90,7 +90,7 @@ func NewTestTableRepository(tableName string) *TableRepository {
 }
 
 // Create implements the Repository interface
-func (r *TableRepository) Create(entity interface{}) error {
+func (r *TableRepository) Create(ctx context.Context, entity interface{}) error {
 	item, ok := entity.(*models.Item)
 	if !ok {
 		return dberrors.NewDatabaseError("type_assertion", errors.New("entity must be *models.Item"))
@@ -113,8 +113,7 @@ func (r *TableRepository) Create(entity interface{}) error {
 		return dberrors.NewDatabaseError("marshal", err)
 	}
 
-	// Create the entity
-	_, err = r.client.AddEntity(context.Background(), entityBytes, nil)
+	_, err = r.client.AddEntity(ctx, entityBytes, nil)
 	if err != nil {
 		var respErr *azcore.ResponseError
 		if errors.As(err, &respErr) && respErr.ErrorCode == "EntityAlreadyExists" {
@@ -129,14 +128,14 @@ func (r *TableRepository) Create(entity interface{}) error {
 }
 
 // FindByID implements the Repository interface
-func (r *TableRepository) FindByID(id uint, dest interface{}) error {
+func (r *TableRepository) FindByID(ctx context.Context, id uint, dest interface{}) error {
 	item, ok := dest.(*models.Item)
 	if !ok {
 		return dberrors.NewDatabaseError("type_assertion", fmt.Errorf("dest must be *models.Item"))
 	}
 
 	// Get the entity
-	result, err := r.client.GetEntity(context.Background(), "items", strconv.FormatUint(uint64(id), 10), nil)
+	result, err := r.client.GetEntity(ctx, "items", strconv.FormatUint(uint64(id), 10), nil)
 	if err != nil {
 		var respErr *azcore.ResponseError
 		if errors.As(err, &respErr) && respErr.StatusCode == 404 {
@@ -172,14 +171,14 @@ func (r *TableRepository) FindByID(id uint, dest interface{}) error {
 }
 
 // Update implements the Repository interface
-func (r *TableRepository) Update(entity interface{}) error {
+func (r *TableRepository) Update(ctx context.Context, entity interface{}) error {
 	item, ok := entity.(*models.Item)
 	if !ok {
 		return dberrors.NewDatabaseError("type_assertion", fmt.Errorf("entity must be *models.Item"))
 	}
 
 	// Check if entity exists first
-	_, err := r.client.GetEntity(context.Background(), "items", strconv.FormatUint(uint64(item.ID), 10), nil)
+	_, err := r.client.GetEntity(ctx, "items", strconv.FormatUint(uint64(item.ID), 10), nil)
 	if err != nil {
 		var respErr *azcore.ResponseError
 		if errors.As(err, &respErr) && respErr.StatusCode == 404 {
@@ -204,8 +203,7 @@ func (r *TableRepository) Update(entity interface{}) error {
 		return dberrors.NewDatabaseError("marshal", err)
 	}
 
-	// Update the entity
-	_, err = r.client.UpdateEntity(context.Background(), entityBytes, nil)
+	_, err = r.client.UpdateEntity(ctx, entityBytes, nil)
 	if err != nil {
 		return dberrors.NewDatabaseError("update", err)
 	}
@@ -215,13 +213,13 @@ func (r *TableRepository) Update(entity interface{}) error {
 }
 
 // Delete implements the Repository interface
-func (r *TableRepository) Delete(entity interface{}) error {
+func (r *TableRepository) Delete(ctx context.Context, entity interface{}) error {
 	item, ok := entity.(*models.Item)
 	if !ok {
 		return dberrors.NewDatabaseError("type_assertion", fmt.Errorf("entity must be *models.Item"))
 	}
 
-	_, err := r.client.DeleteEntity(context.Background(), "items", strconv.FormatUint(uint64(item.ID), 10), nil)
+	_, err := r.client.DeleteEntity(ctx, "items", strconv.FormatUint(uint64(item.ID), 10), nil)
 	if err != nil {
 		var respErr *azcore.ResponseError
 		if errors.As(err, &respErr) && respErr.StatusCode == 404 {
@@ -234,7 +232,7 @@ func (r *TableRepository) Delete(entity interface{}) error {
 }
 
 // List implements the Repository interface
-func (r *TableRepository) List(dest interface{}, conditions ...interface{}) error {
+func (r *TableRepository) List(ctx context.Context, dest interface{}, conditions ...interface{}) error {
 	items, ok := dest.(*[]models.Item)
 	if !ok {
 		return dberrors.NewDatabaseError("type_assertion", fmt.Errorf("dest must be *[]models.Item"))
@@ -285,7 +283,7 @@ func (r *TableRepository) List(dest interface{}, conditions ...interface{}) erro
 
 	// Fetch and process all entities
 	for pager.More() {
-		response, err := pager.NextPage(context.Background())
+		response, err := pager.NextPage(ctx)
 		if err != nil {
 			return dberrors.NewDatabaseError("list", err)
 		}
@@ -341,10 +339,10 @@ func (r *TableRepository) List(dest interface{}, conditions ...interface{}) erro
 }
 
 // Ping implements the Repository interface
-func (r *TableRepository) Ping() error {
+func (r *TableRepository) Ping(ctx context.Context) error {
 	// List tables to check connectivity
 	pager := r.client.NewListEntitiesPager(nil)
-	_, err := pager.NextPage(context.Background())
+	_, err := pager.NextPage(ctx)
 	if err != nil {
 		return dberrors.NewDatabaseError("ping", err)
 	}

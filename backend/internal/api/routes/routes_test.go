@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"backend/internal/api/handlers"
+	"backend/internal/config"
 	"backend/internal/health"
 
 	"github.com/gin-gonic/gin"
@@ -22,10 +23,18 @@ func TestSetupRoutes(t *testing.T) {
 	mockRepo := handlers.NewMockRepository()
 
 	// Initialize health checker and set it as ready
-	health.New().SetReady(true)
+	healthChecker := health.New()
+	healthChecker.SetReady(true)
+
+	// Create a minimal config for testing
+	cfg := &config.Config{
+		CORS: config.CORSConfig{
+			AllowedOrigins: "*",
+		},
+	}
 
 	// Setup routes
-	SetupRoutes(router, mockRepo)
+	SetupRoutes(router, mockRepo, healthChecker, cfg)
 
 	// Test cases
 	tests := []struct {

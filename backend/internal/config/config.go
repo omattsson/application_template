@@ -23,6 +23,11 @@ const (
 	defaultShutdownTimeout       = 30 * time.Second
 )
 
+// CORSConfig holds CORS configuration
+type CORSConfig struct {
+	AllowedOrigins string
+}
+
 // Config holds all configuration for the application
 //
 //nolint:govet // Struct field alignment has been optimized for better memory usage
@@ -33,6 +38,7 @@ type Config struct {
 	// Then string and simple field structs
 	App        AppConfig
 	AzureTable AzureTableConfig
+	CORS       CORSConfig
 	Logging    LogConfig
 }
 
@@ -96,6 +102,12 @@ type LogConfig struct {
 func (c *Config) Validate() error {
 	if err := c.App.Validate(); err != nil {
 		return fmt.Errorf("app config: %w", err)
+	}
+
+	if c.AzureTable.UseAzureTable {
+		if err := c.AzureTable.Validate(); err != nil {
+			return fmt.Errorf("azure table config: %w", err)
+		}
 	}
 
 	if err := c.Database.Validate(); err != nil {
@@ -212,7 +224,7 @@ func (c *DatabaseConfig) DSN() string {
 	b.WriteByte(')')
 	b.WriteByte('/')
 	b.WriteString(c.DBName)
-	b.WriteString("?charset=utf8mb4&parseTime=True&loc=Local")
+	b.WriteString("?charset=utf8mb4&parseTime=True&loc=UTC")
 
 	if c.MaxOpenConns > 0 {
 		b.WriteString("&maxAllowedPacket=0") // Let server control packet size
@@ -266,6 +278,9 @@ func LoadConfig() (*Config, error) {
 			WriteTimeout:    getEnvDuration("SERVER_WRITE_TIMEOUT", defaultWriteTimeout),
 			IdleTimeout:     getEnvDuration("SERVER_IDLE_TIMEOUT", defaultIdleTimeout),
 			ShutdownTimeout: getEnvDuration("SERVER_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
+		},
+		CORS: CORSConfig{
+			AllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
 		},
 		Logging: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),

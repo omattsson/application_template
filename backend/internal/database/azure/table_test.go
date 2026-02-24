@@ -92,11 +92,11 @@ func TestTableClientOperations(t *testing.T) {
 			Name:  "test",
 			Price: 10.5,
 		}
-		err := repo.Create(item)
+		err := repo.Create(context.Background(), item)
 		assert.NoError(t, err)
 
 		var retrieved models.Item
-		err = repo.FindByID(1, &retrieved)
+		err = repo.FindByID(context.Background(), 1, &retrieved)
 		assert.NoError(t, err)
 		assert.Equal(t, item.Name, retrieved.Name)
 		assert.InDelta(t, item.Price, retrieved.Price, 0.001)
@@ -121,7 +121,7 @@ func TestTableClientOperations(t *testing.T) {
 		repo.SetTestClient(mockClient)
 
 		var items []models.Item
-		err := repo.List(&items)
+		err := repo.List(context.Background(), &items)
 		assert.NoError(t, err)
 		assert.Len(t, items, 3)
 		assert.Equal(t, "item1", items[0].Name)
@@ -150,7 +150,7 @@ func TestTableClientOperations(t *testing.T) {
 			Name:  "test",
 			Price: 10.5,
 		}
-		err := repo.Update(item)
+		err := repo.Update(context.Background(), item)
 		assert.NoError(t, err)
 	})
 
@@ -170,7 +170,7 @@ func TestTableClientOperations(t *testing.T) {
 			Name:  "test",
 			Price: 10.5,
 		}
-		err := repo.Delete(item)
+		err := repo.Delete(context.Background(), item)
 		assert.NoError(t, err)
 	})
 }

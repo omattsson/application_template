@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -16,7 +17,7 @@ func TestNew(t *testing.T) {
 func TestLivenessCheck(t *testing.T) {
 	t.Parallel()
 	h := New()
-	status := h.CheckLiveness()
+	status := h.CheckLiveness(context.Background())
 
 	if status.Status != "UP" {
 		t.Errorf("Expected status UP, got %s", status.Status)
@@ -33,7 +34,7 @@ func TestReadinessCheck(t *testing.T) {
 	t.Run("Service not ready", func(t *testing.T) {
 		t.Parallel()
 		h := New() // Create a fresh instance for this subtest
-		status := h.CheckReadiness()
+		status := h.CheckReadiness(context.Background())
 		if status.Status != "DOWN" {
 			t.Errorf("Expected status DOWN, got %s", status.Status)
 		}
@@ -43,7 +44,7 @@ func TestReadinessCheck(t *testing.T) {
 		t.Parallel()
 		h := New() // Create a fresh instance for this subtest
 		h.SetReady(true)
-		status := h.CheckReadiness()
+		status := h.CheckReadiness(context.Background())
 		if status.Status != "UP" {
 			t.Errorf("Expected status UP, got %s", status.Status)
 		}
@@ -57,8 +58,8 @@ func TestHealthChecks(t *testing.T) {
 		t.Parallel()
 		h := New() // Create a fresh instance for this subtest
 		h.SetReady(true)
-		h.AddCheck("test", func() error { return nil })
-		status := h.CheckReadiness()
+		h.AddCheck("test", func(_ context.Context) error { return nil })
+		status := h.CheckReadiness(context.Background())
 		if status.Status != "UP" {
 			t.Errorf("Expected status UP, got %s", status.Status)
 		}
@@ -71,8 +72,8 @@ func TestHealthChecks(t *testing.T) {
 		t.Parallel()
 		h := New() // Create a fresh instance for this subtest
 		h.SetReady(true)
-		h.AddCheck("failing", func() error { return errors.New("test error") })
-		status := h.CheckReadiness()
+		h.AddCheck("failing", func(_ context.Context) error { return errors.New("test error") })
+		status := h.CheckReadiness(context.Background())
 		if status.Status != "DOWN" {
 			t.Errorf("Expected status DOWN, got %s", status.Status)
 		}

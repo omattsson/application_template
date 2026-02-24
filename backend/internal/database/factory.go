@@ -3,7 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"backend/internal/config"
@@ -43,8 +43,12 @@ func NewFromAppConfig(cfg *config.Config) (*Database, error) {
 
 		retryCount++
 		if retryCount < maxRetries {
-			log.Printf("Failed to connect to database (attempt %d/%d): %v. Retrying in %v...",
-				retryCount, maxRetries, err, retryDelay)
+			slog.Warn("Failed to connect to database, retrying...",
+				"attempt", retryCount,
+				"maxRetries", maxRetries,
+				"error", err,
+				"retryDelay", retryDelay,
+			)
 			time.Sleep(retryDelay)
 		}
 	}
@@ -121,8 +125,12 @@ func NewFromDBConfig(cfg *Config) (*Database, error) {
 
 		retryCount++
 		if retryCount < maxRetries {
-			log.Printf("Failed to connect to database (attempt %d/%d): %v. Retrying in %v...",
-				retryCount, maxRetries, err, retryDelay)
+			slog.Warn("Failed to connect to database, retrying...",
+				"attempt", retryCount,
+				"maxRetries", maxRetries,
+				"error", err,
+				"retryDelay", retryDelay,
+			)
 			time.Sleep(retryDelay)
 		}
 	}

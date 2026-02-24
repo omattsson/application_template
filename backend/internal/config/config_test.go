@@ -149,7 +149,7 @@ func TestDatabaseDSN(t *testing.T) {
 		DBName:   "testdb",
 	}
 
-	expected := "testuser:testpass@tcp(testhost:3306)/testdb?charset=utf8mb4&parseTime=True&loc=Local"
+	expected := "testuser:testpass@tcp(testhost:3306)/testdb?charset=utf8mb4&parseTime=True&loc=UTC"
 	assert.Equal(t, expected, dbConfig.DSN())
 }
 func TestConfigValidate(t *testing.T) {

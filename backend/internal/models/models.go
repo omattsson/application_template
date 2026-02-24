@@ -1,6 +1,9 @@
 package models
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -22,7 +25,7 @@ type Item struct {
 	Base
 	Name    string  `gorm:"size:255;not null" json:"name"`
 	Price   float64 `json:"price"`
-	Version uint    `gorm:"not null;default:0" json:"version"` // For optimistic locking
+	Version uint    `gorm:"not null;default:1" json:"version"` // For optimistic locking (1 = initial; 0 = not provided)
 }
 
 // User represents a user in the system
@@ -38,14 +41,26 @@ type Validator interface {
 	Validate() error
 }
 
-// Repository defines the interface for database operations
+// Versionable is an interface for models that support optimistic locking.
+type Versionable interface {
+	GetVersion() uint
+	SetVersion(v uint)
+}
+
+// GetVersion implements Versionable for Item.
+func (i *Item) GetVersion() uint { return i.Version }
+
+// SetVersion implements Versionable for Item.
+func (i *Item) SetVersion(v uint) { i.Version = v }
+
+// Repository defines the interface for database operations.
 type Repository interface {
-	Create(interface{}) error
-	FindByID(id uint, dest interface{}) error
-	Update(interface{}) error
-	Delete(interface{}) error
-	List(dest interface{}, conditions ...interface{}) error
-	Ping() error
+	Create(ctx context.Context, entity interface{}) error
+	FindByID(ctx context.Context, id uint, dest interface{}) error
+	Update(ctx context.Context, entity interface{}) error
+	Delete(ctx context.Context, entity interface{}) error
+	List(ctx context.Context, dest interface{}, conditions ...interface{}) error
+	Ping(ctx context.Context) error
 }
 
 // GenericRepository implements the Repository interface
@@ -59,56 +74,96 @@ func NewRepository(db *gorm.DB) Repository {
 }
 
 // Ping checks if the database is reachable
-func (r *GenericRepository) Ping() error {
+func (r *GenericRepository) Ping(ctx context.Context) error {
 	sqlDB, err := r.db.DB()
 	if err != nil {
 		return err
 	}
-	return sqlDB.Ping()
+	return sqlDB.PingContext(ctx)
 }
 
-func (r *GenericRepository) Create(entity interface{}) error {
+func (r *GenericRepository) Create(ctx context.Context, entity interface{}) error {
 	if v, ok := entity.(Validator); ok {
 		if err := v.Validate(); err != nil {
 			return dberrors.NewDatabaseError("validate", err)
 		}
 	}
 
-	if err := r.db.Create(entity).Error; err != nil {
+	if err := r.db.WithContext(ctx).Create(entity).Error; err != nil {
 		return r.handleError("create", err)
 	}
 	return nil
 }
 
-func (r *GenericRepository) FindByID(id uint, dest interface{}) error {
-	if err := r.db.First(dest, id).Error; err != nil {
+func (r *GenericRepository) FindByID(ctx context.Context, id uint, dest interface{}) error {
+	if err := r.db.WithContext(ctx).First(dest, id).Error; err != nil {
 		return r.handleError("find", err)
 	}
 	return nil
 }
 
-func (r *GenericRepository) Update(entity interface{}) error {
+func (r *GenericRepository) Update(ctx context.Context, entity interface{}) error {
 	if v, ok := entity.(Validator); ok {
 		if err := v.Validate(); err != nil {
 			return dberrors.NewDatabaseError("validate", err)
 		}
 	}
 
-	if err := r.db.Save(entity).Error; err != nil {
+	// Optimistic locking for Versionable entities
+	if ver, ok := entity.(Versionable); ok {
+		currentVersion := ver.GetVersion()
+		ver.SetVersion(currentVersion + 1)
+		result := r.db.WithContext(ctx).Where("version = ?", currentVersion).Save(entity)
+		if result.Error != nil {
+			ver.SetVersion(currentVersion) // Roll back version on error
+			return r.handleError("update", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			ver.SetVersion(currentVersion) // Roll back version on mismatch
+			return dberrors.NewDatabaseError("update", errors.New("version mismatch"))
+		}
+		return nil
+	}
+
+	if err := r.db.WithContext(ctx).Save(entity).Error; err != nil {
 		return r.handleError("update", err)
 	}
 	return nil
 }
 
-func (r *GenericRepository) Delete(entity interface{}) error {
-	if err := r.db.Delete(entity).Error; err != nil {
+func (r *GenericRepository) Delete(ctx context.Context, entity interface{}) error {
+	if err := r.db.WithContext(ctx).Delete(entity).Error; err != nil {
 		return r.handleError("delete", err)
 	}
 	return nil
 }
 
-func (r *GenericRepository) List(dest interface{}, conditions ...interface{}) error {
-	if err := r.db.Find(dest, conditions...).Error; err != nil {
+func (r *GenericRepository) List(ctx context.Context, dest interface{}, conditions ...interface{}) error {
+	query := r.db.WithContext(ctx)
+	for _, cond := range conditions {
+		switch c := cond.(type) {
+		case Filter:
+			switch c.Op {
+			case "exact":
+				query = query.Where(fmt.Sprintf("%s = ?", c.Field), c.Value)
+			case ">=":
+				query = query.Where(fmt.Sprintf("%s >= ?", c.Field), c.Value)
+			case "<=":
+				query = query.Where(fmt.Sprintf("%s <= ?", c.Field), c.Value)
+			default:
+				// Default to LIKE for substring matching
+				query = query.Where(fmt.Sprintf("%s LIKE ?", c.Field), fmt.Sprintf("%%%v%%", c.Value))
+			}
+		case Pagination:
+			if c.Limit > 0 {
+				query = query.Limit(c.Limit)
+			}
+			if c.Offset > 0 {
+				query = query.Offset(c.Offset)
+			}
+		}
+	}
+	if err := query.Find(dest).Error; err != nil {
 		return r.handleError("list", err)
 	}
 	return nil
