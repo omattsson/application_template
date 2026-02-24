@@ -15,6 +15,7 @@ type RateLimiter struct {
 	requests     map[string][]time.Time // size: 8 (pointer)
 	done         chan struct{}          // size: 8
 	limit        int                    // size: 4
+	stopOnce     sync.Once              // ensures Stop is idempotent
 }
 
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
@@ -29,8 +30,11 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 }
 
 // Stop terminates the background cleanup goroutine.
+// It is safe to call Stop multiple times.
 func (rl *RateLimiter) Stop() {
-	close(rl.done)
+	rl.stopOnce.Do(func() {
+		close(rl.done)
+	})
 }
 
 func (rl *RateLimiter) RateLimit() gin.HandlerFunc {

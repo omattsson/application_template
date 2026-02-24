@@ -111,7 +111,6 @@ func TestItemCRUD(t *testing.T) {
 	t.Parallel()
 	db := setupTestDB(t)
 	require.NoError(t, db.AutoMigrate())
-	ctx := context.Background()
 
 	t.Run("Create Item", func(t *testing.T) {
 		t.Parallel()
@@ -200,5 +199,4 @@ func TestItemCRUD(t *testing.T) {
 		assert.Error(t, err, "Should not find deleted item")
 	})
 
-	_ = ctx // suppress unused variable (used only in subtests)
 }

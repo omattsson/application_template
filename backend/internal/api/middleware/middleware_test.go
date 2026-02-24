@@ -13,7 +13,7 @@ import (
 )
 
 func TestLoggerMiddleware(t *testing.T) {
-	t.Parallel()
+	// Not parallel: this test mutates the global slog default logger.
 	// Set Gin to Test Mode
 	gin.SetMode(gin.TestMode)
 

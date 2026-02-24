@@ -56,8 +56,8 @@ func main() {
 	})
 	healthChecker.SetReady(true)
 
-	// Setup router
-	router := gin.Default()
+	// Setup router — use gin.New() since SetupRoutes registers its own Logger and Recovery middleware.
+	router := gin.New()
 	routes.SetupRoutes(router, repo, healthChecker, cfg)
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
