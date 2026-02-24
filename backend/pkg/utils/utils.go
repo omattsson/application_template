@@ -6,12 +6,6 @@ import (
 	"math/big"
 )
 
-// CheckError returns the error for the caller to handle.
-// Deprecated: Use explicit error handling instead of this wrapper.
-func CheckError(err error) error {
-	return err
-}
-
 // GenerateRandomString generates a cryptographically random string of the specified length.
 // Returns an error if length is negative or if the system random source fails.
 func GenerateRandomString(length int) (string, error) {

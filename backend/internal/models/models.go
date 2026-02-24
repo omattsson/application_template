@@ -163,7 +163,7 @@ func (r *GenericRepository) List(ctx context.Context, dest interface{}, conditio
 				query = query.Where(fmt.Sprintf("%s <= ?", c.Field), c.Value)
 			default:
 				// Default to LIKE for substring matching
-				query = query.Where(fmt.Sprintf("%s LIKE ?", c.Field), fmt.Sprintf("%%%v%%", c.Value))
+				query = query.Where(fmt.Sprintf("%s LIKE ?", c.Field), "%"+fmt.Sprint(c.Value)+"%")
 			}
 		case Pagination:
 			if c.Limit > 0 {

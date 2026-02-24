@@ -96,6 +96,11 @@ func (r *TableRepository) Create(ctx context.Context, entity interface{}) error 
 		return dberrors.NewDatabaseError("type_assertion", errors.New("entity must be *models.Item"))
 	}
 
+	// Initialize version for new entities (consistent with GORM default:1 and MockRepository)
+	if item.Version == 0 {
+		item.Version = 1
+	}
+
 	// Create Azure Table entity
 	now := time.Now().UTC()
 

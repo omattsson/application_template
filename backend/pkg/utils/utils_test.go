@@ -41,10 +41,4 @@ func TestUtilFunctions(t *testing.T) {
 				"unexpected character: %c", c)
 		}
 	})
-
-	t.Run("CheckError returns the error", func(t *testing.T) {
-		t.Parallel()
-		assert.Nil(t, CheckError(nil))
-		assert.Error(t, CheckError(assert.AnError))
-	})
 }

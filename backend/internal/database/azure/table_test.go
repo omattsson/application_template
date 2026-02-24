@@ -135,7 +135,7 @@ func TestTableClientOperations(t *testing.T) {
 		mockClient := &mockClient{
 			getEntity: func(ctx context.Context, partitionKey, rowKey string, options *aztables.GetEntityOptions) (aztables.GetEntityResponse, error) {
 				return aztables.GetEntityResponse{
-					ETag: "etag-1",
+					ETag:  "etag-1",
 					Value: []byte(`{"Name":"test","Price":10.5,"Version":1}`),
 				}, nil
 			},
@@ -166,7 +166,7 @@ func TestTableClientOperations(t *testing.T) {
 		mockClient := &mockClient{
 			getEntity: func(ctx context.Context, partitionKey, rowKey string, options *aztables.GetEntityOptions) (aztables.GetEntityResponse, error) {
 				return aztables.GetEntityResponse{
-					ETag: "etag-1",
+					ETag:  "etag-1",
 					Value: []byte(`{"Name":"test","Price":10.5,"Version":2}`),
 				}, nil
 			},
