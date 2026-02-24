@@ -28,5 +28,10 @@ func NewRepository(cfg *config.Config) (models.Repository, error) {
 		return nil, fmt.Errorf("failed to initialize MySQL database: %w", err)
 	}
 
+	// Run database migrations
+	if err := db.AutoMigrate(); err != nil {
+		return nil, fmt.Errorf("failed to run database migrations: %w", err)
+	}
+
 	return models.NewRepository(db.DB), nil
 }

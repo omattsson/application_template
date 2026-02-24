@@ -233,15 +233,10 @@ func (h *Handler) DeleteItem(c *gin.Context) {
 		return
 	}
 
-	// Verify item exists before attempting delete
-	var item models.Item
-	if err := h.repository.FindByID(c.Request.Context(), uint(id), &item); err != nil {
-		status, message := handleDBError(err)
-		c.JSON(status, gin.H{"error": message})
-		return
-	}
-
-	if err := h.repository.Delete(c.Request.Context(), &item); err != nil {
+	// Delete directly — the repository returns ErrNotFound if the item doesn't exist.
+	// This avoids a race condition between a FindByID check and the actual delete.
+	item := &models.Item{Base: models.Base{ID: uint(id)}}
+	if err := h.repository.Delete(c.Request.Context(), item); err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})
 		return

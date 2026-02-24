@@ -34,7 +34,8 @@ func TestSetupRoutes(t *testing.T) {
 	}
 
 	// Setup routes
-	SetupRoutes(router, mockRepo, healthChecker, cfg)
+	rl := SetupRoutes(router, mockRepo, healthChecker, cfg)
+	defer rl.Stop()
 
 	// Test cases
 	tests := []struct {

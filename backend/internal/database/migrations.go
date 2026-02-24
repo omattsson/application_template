@@ -61,6 +61,30 @@ func (d *Database) AutoMigrate() error {
 		},
 	})
 
+	// Update existing items with Version=0 to Version=1 and change column default
+	migrator.AddMigration(schema.Migration{
+		Version:     "20231201000003",
+		Name:        "update_items_version_default",
+		Description: "Set Version default to 1 for optimistic locking and update existing rows",
+		Up: func(tx *gorm.DB) error {
+			// Update existing rows that have the old default of 0
+			if err := tx.Exec("UPDATE items SET version = 1 WHERE version = 0").Error; err != nil {
+				return err
+			}
+			// Alter column default to 1 (MySQL syntax; SQLite defaults are set via AutoMigrate)
+			if tx.Dialector.Name() == "mysql" {
+				return tx.Exec("ALTER TABLE items ALTER COLUMN version SET DEFAULT 1").Error
+			}
+			return nil
+		},
+		Down: func(tx *gorm.DB) error {
+			if tx.Dialector.Name() == "mysql" {
+				return tx.Exec("ALTER TABLE items ALTER COLUMN version SET DEFAULT 0").Error
+			}
+			return nil
+		},
+	})
+
 	// Run migrations
 	if err := migrator.MigrateUp(); err != nil {
 		return err

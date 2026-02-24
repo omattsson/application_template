@@ -6,13 +6,15 @@ import (
 	"backend/internal/config"
 	"backend/internal/health"
 	"backend/internal/models"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 // SetupRoutes configures all the routes for our application.
 // healthChecker is injected from main so the readiness endpoint reflects real dependency health.
-func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker *health.HealthChecker, cfg *config.Config) {
+// Returns the rate limiter so the caller can stop it during shutdown.
+func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker *health.HealthChecker, cfg *config.Config) *handlers.RateLimiter {
 	// Add middleware
 	router.Use(middleware.RequestID())
 	router.Use(middleware.Logger())
@@ -28,8 +30,12 @@ func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker
 		healthGroup.GET("", handlers.HealthCheck) // Keep the original health check for backward compatibility
 	}
 
+	// Rate limiter for API routes
+	rateLimiter := handlers.NewRateLimiter(100, time.Minute)
+
 	// API v1 routes
 	v1 := router.Group("/api/v1")
+	v1.Use(rateLimiter.RateLimit())
 	{
 		// Ping endpoint
 		v1.GET("/ping", handlers.Ping)
@@ -45,4 +51,6 @@ func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker
 			items.DELETE("/:id", itemsHandler.DeleteItem)
 		}
 	}
+
+	return rateLimiter
 }
