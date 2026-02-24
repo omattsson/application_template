@@ -3,6 +3,8 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -154,7 +156,7 @@ func TestMaxBodySizeMiddleware(t *testing.T) {
 		r.POST("/test", func(c *gin.Context) {
 			body := make([]byte, 512)
 			_, err := c.Request.Body.Read(body)
-			if err != nil && err.Error() != "EOF" {
+			if err != nil && !errors.Is(err, io.EOF) {
 				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "body too large"})
 				return
 			}

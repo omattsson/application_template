@@ -24,7 +24,7 @@ func GenerateRandomString(length int) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to generate random byte at index %d: %w", i, err)
 		}
-		b[i] = charset[n.Int64()]
+		b[i] = charset[int(n.Int64())]
 	}
 	return string(b), nil
 }

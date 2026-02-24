@@ -376,14 +376,42 @@ func (r *TableRepository) List(ctx context.Context, dest interface{}, conditions
 				return dberrors.NewDatabaseError("unmarshal", err)
 			}
 
-			rowKey, _ := entityData["RowKey"].(string)
-			id, _ := strconv.ParseUint(rowKey, 10, 32)
-			createdAtStr, _ := entityData["CreatedAt"].(string)
-			createdAt, _ := time.Parse(time.RFC3339, createdAtStr)
-			updatedAtStr, _ := entityData["UpdatedAt"].(string)
-			updatedAt, _ := time.Parse(time.RFC3339, updatedAtStr)
-			name, _ := entityData["Name"].(string)
-			price, _ := entityData["Price"].(float64)
+			rowKey, ok := entityData["RowKey"].(string)
+			if !ok || rowKey == "" {
+				return dberrors.NewDatabaseError("list", fmt.Errorf("entity missing or invalid RowKey"))
+			}
+			id, err := strconv.ParseUint(rowKey, 10, 32)
+			if err != nil {
+				return dberrors.NewDatabaseError("list", fmt.Errorf("invalid RowKey %q: %w", rowKey, err))
+			}
+
+			createdAtStr, ok := entityData["CreatedAt"].(string)
+			if !ok || createdAtStr == "" {
+				return dberrors.NewDatabaseError("list", fmt.Errorf("entity missing or invalid CreatedAt"))
+			}
+			createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+			if err != nil {
+				return dberrors.NewDatabaseError("list", fmt.Errorf("invalid CreatedAt %q: %w", createdAtStr, err))
+			}
+
+			updatedAtStr, ok := entityData["UpdatedAt"].(string)
+			if !ok || updatedAtStr == "" {
+				return dberrors.NewDatabaseError("list", fmt.Errorf("entity missing or invalid UpdatedAt"))
+			}
+			updatedAt, err := time.Parse(time.RFC3339, updatedAtStr)
+			if err != nil {
+				return dberrors.NewDatabaseError("list", fmt.Errorf("invalid UpdatedAt %q: %w", updatedAtStr, err))
+			}
+
+			name, ok := entityData["Name"].(string)
+			if !ok {
+				return dberrors.NewDatabaseError("list", fmt.Errorf("entity missing or invalid Name"))
+			}
+
+			price, ok := entityData["Price"].(float64)
+			if !ok {
+				return dberrors.NewDatabaseError("list", fmt.Errorf("entity missing or invalid Price"))
+			}
 
 			item := models.Item{
 				Base: models.Base{
