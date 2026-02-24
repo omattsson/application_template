@@ -2,12 +2,13 @@ package azure
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"backend/internal/models"
@@ -17,17 +18,16 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/data/aztables"
 )
 
-// idCounter is a monotonic counter used to generate unique IDs for Azure Table entities.
-// Seeded from the current Unix timestamp in milliseconds so IDs are globally unique
-// across restarts (within millisecond granularity).
-var idCounter atomic.Uint64
-
-func init() {
-	idCounter.Store(uint64(time.Now().UnixMilli()))
-}
-
-func nextID() uint {
-	return uint(idCounter.Add(1))
+// nextID generates a collision-resistant numeric ID by combining
+// the current Unix timestamp in nanoseconds with a random component.
+func nextID() (uint, error) {
+	// Use upper 48 bits from time, lower 16 bits from crypto/rand
+	ts := uint64(time.Now().UnixNano())
+	rb, err := rand.Int(rand.Reader, big.NewInt(1<<16))
+	if err != nil {
+		return 0, fmt.Errorf("failed to generate random ID component: %w", err)
+	}
+	return uint((ts << 16) | rb.Uint64()), nil
 }
 
 // TableRepository implements the Repository interface for Azure Table Storage
@@ -119,7 +119,11 @@ func (r *TableRepository) Create(ctx context.Context, entity interface{}) error 
 
 	// Generate a numeric ID (Azure Table Storage has no auto-increment)
 	if item.ID == 0 {
-		item.ID = nextID()
+		id, err := nextID()
+		if err != nil {
+			return dberrors.NewDatabaseError("create", err)
+		}
+		item.ID = id
 	}
 
 	entityJSON := map[string]interface{}{
@@ -439,6 +443,13 @@ func (r *TableRepository) List(ctx context.Context, dest interface{}, conditions
 				},
 				Name:  name,
 				Price: price,
+			}
+
+			// Populate Version if present
+			if v, ok := entityData["Version"]; ok {
+				if vf, ok := v.(float64); ok {
+					item.Version = uint(vf)
+				}
 			}
 
 			// Apply name contains filter if specified
