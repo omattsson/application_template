@@ -73,13 +73,12 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
+		slog.Info("Server starting", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("Failed to start server", "error", err)
 			os.Exit(1)
 		}
 	}()
-
-	slog.Info("Server started", "addr", srv.Addr)
 
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)

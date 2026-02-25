@@ -40,43 +40,38 @@ func (rl *RateLimiter) Stop() {
 func (rl *RateLimiter) RateLimit() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
-
-		rl.Lock()
-		defer rl.Unlock()
-
 		now := time.Now()
 		windowStart := now.Add(-rl.window)
 
-		// Initialize requests map for this IP if needed
-		if _, exists := rl.requests[ip]; !exists {
-			rl.requests[ip] = make([]time.Time, 0)
-		}
-
-		// Remove old requests (outside our time window)
-		var valid []time.Time
-		for _, t := range rl.requests[ip] {
+		// Read-lock to check current count without blocking other readers.
+		rl.RLock()
+		times := rl.requests[ip]
+		count := 0
+		for _, t := range times {
 			if t.After(windowStart) {
-				valid = append(valid, t)
+				count++
 			}
 		}
-		rl.requests[ip] = valid
+		rl.RUnlock()
 
-		// Check if limit exceeded
-		if len(rl.requests[ip]) >= rl.limit {
+		if count >= rl.limit {
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate limit exceeded"})
 			c.Abort()
 			return
 		}
 
-		// Add current request
+		// Write-lock only to add the new request timestamp.
+		rl.Lock()
 		rl.requests[ip] = append(rl.requests[ip], now)
+		rl.Unlock()
+
 		c.Next()
 	}
 }
 
 // cleanup periodically removes expired entries to prevent memory leaks.
 func (rl *RateLimiter) cleanup() {
-	ticker := time.NewTicker(rl.window * 2)
+	ticker := time.NewTicker(rl.window / 2)
 	defer ticker.Stop()
 	for {
 		select {

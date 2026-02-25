@@ -30,11 +30,9 @@ func CORS(allowedOrigins string) gin.HandlerFunc {
 				}
 			}
 			if !allowed {
-				if c.Request.Method == "OPTIONS" {
-					c.AbortWithStatus(http.StatusNoContent)
-					return
-				}
-				c.Next()
+				// Block requests from non-whitelisted origins as defense-in-depth;
+				// browsers enforce CORS client-side, but we also enforce server-side.
+				c.AbortWithStatus(http.StatusForbidden)
 				return
 			}
 		}

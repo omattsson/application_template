@@ -127,7 +127,13 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 		}
 	}
 
-	// Optimistic locking for Versionable entities
+	// Optimistic locking for Versionable entities.
+	// We increment the version optimistically before Save, then use a
+	// WHERE version=old clause. If no rows are affected, it means another
+	// transaction modified this entity \u2014 we roll back the in-memory version
+	// and return a version-mismatch error. Note: Save() issues an UPDATE
+	// for all columns, which is safe here because the handler loaded the
+	// entity first (FindByID), then applied changes on top of it.
 	if ver, ok := entity.(Versionable); ok {
 		currentVersion := ver.GetVersion()
 		ver.SetVersion(currentVersion + 1)
@@ -165,6 +171,9 @@ func (r *GenericRepository) List(ctx context.Context, dest interface{}, conditio
 				return dberrors.NewDatabaseError("list",
 					fmt.Errorf("invalid filter field: %q", c.Field))
 			}
+			// SAFETY: c.Field is interpolated into fmt.Sprintf below, but it is
+			// guaranteed to be one of the whitelisted column names checked above,
+			// so SQL injection via field names is not possible.
 			switch c.Op {
 			case "exact":
 				query = query.Where(fmt.Sprintf("%s = ?", c.Field), c.Value)
@@ -173,8 +182,10 @@ func (r *GenericRepository) List(ctx context.Context, dest interface{}, conditio
 			case "<=":
 				query = query.Where(fmt.Sprintf("%s <= ?", c.Field), c.Value)
 			default:
-				// Default to LIKE for substring matching
-				query = query.Where(fmt.Sprintf("%s LIKE ?", c.Field), "%"+fmt.Sprint(c.Value)+"%")
+				// Default to LIKE for substring matching.
+				// Escape SQL wildcards (% and _) so they are treated as literals.
+				escaped := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(fmt.Sprint(c.Value))
+				query = query.Where(fmt.Sprintf("%s LIKE ?", c.Field), "%"+escaped+"%")
 			}
 		case Pagination:
 			if c.Limit > 0 {

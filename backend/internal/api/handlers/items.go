@@ -198,8 +198,11 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 	currentItem.Name = updateItem.Name
 	currentItem.Price = updateItem.Price
 
-	// If the client provided a version, use it for optimistic locking;
-	// otherwise keep the DB version so the repository check passes.
+	// Optimistic locking: if the client provided a version, use it so the
+	// repository can detect conflicts. If version=0 (not provided), the
+	// repository uses the version we just read — this still detects conflicts
+	// that occur between our FindByID and the repository's WHERE-version check,
+	// but the client must send the version to guarantee end-to-end safety.
 	if updateItem.Version > 0 {
 		currentItem.Version = updateItem.Version
 	}

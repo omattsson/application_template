@@ -88,10 +88,10 @@ func TestCORSMiddleware(t *testing.T) {
 		assert.Empty(t, w.Header().Get("Vary"))
 		assert.Empty(t, w.Header().Get("Access-Control-Allow-Methods"))
 		assert.Empty(t, w.Header().Get("Access-Control-Allow-Headers"))
-		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 
-	t.Run("Disallowed origin OPTIONS preflight returns 204 without CORS headers", func(t *testing.T) {
+	t.Run("Disallowed origin OPTIONS preflight returns 403 without CORS headers", func(t *testing.T) {
 		t.Parallel()
 		r := gin.New()
 		r.Use(CORS("https://example.com"))
@@ -104,7 +104,7 @@ func TestCORSMiddleware(t *testing.T) {
 
 		assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"))
 		assert.Empty(t, w.Header().Get("Access-Control-Allow-Methods"))
-		assert.Equal(t, http.StatusNoContent, w.Code)
+		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 
 	t.Run("OPTIONS preflight returns 204", func(t *testing.T) {

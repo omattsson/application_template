@@ -22,7 +22,7 @@ func GenerateRandomString(length int) (string, error) {
 	for i := range b {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
-			return "", fmt.Errorf("failed to generate random byte at index %d: %w", i, err)
+			return "", fmt.Errorf("crypto/rand failure: %w", err)
 		}
 		b[i] = charset[int(n.Int64())]
 	}

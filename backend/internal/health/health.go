@@ -49,6 +49,9 @@ func (h *HealthChecker) SetReady(ready bool) {
 	h.isReady = ready
 }
 
+// CheckLiveness returns a simple UP status. The context parameter is unused
+// because liveness is intentionally trivial — it only reports uptime and
+// does not call any external dependencies that would need cancellation.
 func (h *HealthChecker) CheckLiveness(_ context.Context) HealthStatus {
 	uptime := time.Since(h.startTime).String()
 	return HealthStatus{

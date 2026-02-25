@@ -18,16 +18,16 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/data/aztables"
 )
 
-// nextID generates a collision-resistant numeric ID by combining
-// the current Unix timestamp in nanoseconds with a random component.
+// nextID generates a collision-resistant numeric ID using a cryptographically
+// secure random component. We use 48 bits of randomness to keep collision
+// probability extremely low even under concurrency across multiple instances.
 func nextID() (uint, error) {
-	// Use upper 48 bits from time, lower 16 bits from crypto/rand
-	ts := uint64(time.Now().UnixNano())
-	rb, err := rand.Int(rand.Reader, big.NewInt(1<<16))
+	max := new(big.Int).Lsh(big.NewInt(1), 48)
+	rb, err := rand.Int(rand.Reader, max)
 	if err != nil {
 		return 0, fmt.Errorf("failed to generate random ID component: %w", err)
 	}
-	return uint((ts << 16) | rb.Uint64()), nil
+	return uint(rb.Uint64()), nil
 }
 
 // TableRepository implements the Repository interface for Azure Table Storage
@@ -261,7 +261,10 @@ func (r *TableRepository) Update(ctx context.Context, entity interface{}) error 
 			case float64:
 				sv = uint(v)
 			case json.Number:
-				n, _ := v.Int64()
+				n, err := v.Int64()
+				if err != nil || n < 0 {
+					return dberrors.NewDatabaseError("update", fmt.Errorf("invalid stored version value: %v", v))
+				}
 				sv = uint(n)
 			}
 			if currentVersion != sv {
@@ -445,11 +448,15 @@ func (r *TableRepository) List(ctx context.Context, dest interface{}, conditions
 				Price: price,
 			}
 
-			// Populate Version if present
+			// Populate Version if present; default to 1 when absent or invalid
 			if v, ok := entityData["Version"]; ok {
 				if vf, ok := v.(float64); ok {
 					item.Version = uint(vf)
+				} else {
+					item.Version = 1
 				}
+			} else {
+				item.Version = 1
 			}
 
 			// Apply name contains filter if specified
