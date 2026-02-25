@@ -92,6 +92,11 @@ func main() {
 
 	err = srv.Shutdown(ctx)
 
+	// Close repository connections (database pool, etc.)
+	if closeErr := repo.Close(); closeErr != nil {
+		slog.Error("Failed to close repository", "error", closeErr)
+	}
+
 	if err != nil {
 		slog.Error("Server forced to shutdown", "error", err)
 		return

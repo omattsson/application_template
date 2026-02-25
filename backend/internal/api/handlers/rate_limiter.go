@@ -43,25 +43,23 @@ func (rl *RateLimiter) RateLimit() gin.HandlerFunc {
 		now := time.Now()
 		windowStart := now.Add(-rl.window)
 
-		// Read-lock to check current count without blocking other readers.
-		rl.RLock()
-		times := rl.requests[ip]
+		// Single write lock for the check-and-add to avoid a TOCTOU race
+		// where concurrent requests could both pass the limit check.
+		rl.Lock()
 		count := 0
-		for _, t := range times {
+		for _, t := range rl.requests[ip] {
 			if t.After(windowStart) {
 				count++
 			}
 		}
-		rl.RUnlock()
 
 		if count >= rl.limit {
+			rl.Unlock()
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate limit exceeded"})
 			c.Abort()
 			return
 		}
 
-		// Write-lock only to add the new request timestamp.
-		rl.Lock()
 		rl.requests[ip] = append(rl.requests[ip], now)
 		rl.Unlock()
 

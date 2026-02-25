@@ -68,6 +68,11 @@ func (m *MockRepository) Ping(ctx context.Context) error {
 	return args.Error(0)
 }
 
+func (m *MockRepository) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
 // MockSQLDB is a mock implementation of the sql.DB interface
 type MockSQLDB struct {
 	mock.Mock

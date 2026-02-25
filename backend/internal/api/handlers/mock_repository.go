@@ -224,6 +224,11 @@ func (m *MockRepository) Ping(_ context.Context) error {
 	return nil
 }
 
+// Close implements the Repository interface
+func (m *MockRepository) Close() error {
+	return nil
+}
+
 func (m *MockRepository) SetError(err error) {
 	m.Lock()
 	defer m.Unlock()

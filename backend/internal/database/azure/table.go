@@ -500,6 +500,12 @@ func (r *TableRepository) Ping(ctx context.Context) error {
 	return nil
 }
 
+// Close implements the Repository interface. Azure Table Storage uses HTTP
+// clients that don't require explicit cleanup, so this is a no-op.
+func (r *TableRepository) Close() error {
+	return nil
+}
+
 // Helper functions for error handling
 
 // IsTableExistsError checks if the error is a TableAlreadyExists error

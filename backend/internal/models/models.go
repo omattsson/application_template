@@ -61,6 +61,7 @@ type Repository interface {
 	Delete(ctx context.Context, entity interface{}) error
 	List(ctx context.Context, dest interface{}, conditions ...interface{}) error
 	Ping(ctx context.Context) error
+	Close() error
 }
 
 // GenericRepository implements the Repository interface
@@ -98,11 +99,19 @@ func (r *GenericRepository) Ping(ctx context.Context) error {
 	return sqlDB.PingContext(ctx)
 }
 
+// Close releases the underlying database connection pool.
+func (r *GenericRepository) Close() error {
+	sqlDB, err := r.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
+}
+
 func (r *GenericRepository) Create(ctx context.Context, entity interface{}) error {
 	if v, ok := entity.(Validator); ok {
 		if err := v.Validate(); err != nil {
-			return dberrors.NewDatabaseError("validate",
-				fmt.Errorf("%w: %s", dberrors.ErrValidation, err.Error()))
+			return dberrors.NewDatabaseError("validate", err)
 		}
 	}
 
@@ -122,8 +131,7 @@ func (r *GenericRepository) FindByID(ctx context.Context, id uint, dest interfac
 func (r *GenericRepository) Update(ctx context.Context, entity interface{}) error {
 	if v, ok := entity.(Validator); ok {
 		if err := v.Validate(); err != nil {
-			return dberrors.NewDatabaseError("validate",
-				fmt.Errorf("%w: %s", dberrors.ErrValidation, err.Error()))
+			return dberrors.NewDatabaseError("validate", err)
 		}
 	}
 

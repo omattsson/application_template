@@ -67,15 +67,8 @@ func (d *Database) AutoMigrate() error {
 		Name:        "update_items_version_default",
 		Description: "Set Version default to 1 for optimistic locking and update existing rows",
 		Up: func(tx *gorm.DB) error {
-			// Find the current max version to avoid collisions with already-updated items
-			var maxVersion int64
-			if err := tx.Table("items").Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
-				return err
-			}
-			newVersion := maxVersion + 1
-
-			// Update existing rows that still have the old default of 0
-			if err := tx.Exec("UPDATE items SET version = ? WHERE version = 0", newVersion).Error; err != nil {
+			// Update existing rows that still have the old default of 0 to the new default of 1
+			if err := tx.Exec("UPDATE items SET version = 1 WHERE version = 0").Error; err != nil {
 				return err
 			}
 			// Alter column default to 1 (MySQL syntax; SQLite defaults are set via AutoMigrate)
