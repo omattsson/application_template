@@ -249,15 +249,16 @@ func (r *TableRepository) Update(ctx context.Context, entity interface{}) error 
 		return dberrors.NewDatabaseError("find", err)
 	}
 
+	// Parse existing entity once for version checking and CreatedAt preservation.
+	var existingData map[string]interface{}
+	if err := json.Unmarshal(existing.Value, &existingData); err != nil {
+		return dberrors.NewDatabaseError("unmarshal", err)
+	}
+
 	// Optimistic locking: compare version if the entity is Versionable
 	if ver, ok := entity.(models.Versionable); ok {
 		currentVersion := ver.GetVersion()
 
-		// Parse existing entity to check stored version
-		var existingData map[string]interface{}
-		if err := json.Unmarshal(existing.Value, &existingData); err != nil {
-			return dberrors.NewDatabaseError("unmarshal", err)
-		}
 		if storedVersion, ok := existingData["Version"]; ok {
 			var sv uint
 			switch v := storedVersion.(type) {
@@ -286,12 +287,9 @@ func (r *TableRepository) Update(ctx context.Context, entity interface{}) error 
 	// updating don't accidentally clobber it with a zero time.
 	createdAt := item.CreatedAt
 	if createdAt.IsZero() {
-		var existingData2 map[string]interface{}
-		if err := json.Unmarshal(existing.Value, &existingData2); err == nil {
-			if caStr, ok := existingData2["CreatedAt"].(string); ok {
-				if parsed, parseErr := time.Parse(time.RFC3339, caStr); parseErr == nil {
-					createdAt = parsed
-				}
+		if caStr, ok := existingData["CreatedAt"].(string); ok {
+			if parsed, parseErr := time.Parse(time.RFC3339, caStr); parseErr == nil {
+				createdAt = parsed
 			}
 		}
 	}
