@@ -36,7 +36,7 @@ func TestUtilFunctions(t *testing.T) {
 		s, err := GenerateRandomString(100)
 		require.NoError(t, err)
 		for _, c := range s {
-			assert.True(t,
+			assert.Truef(t,
 				(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'),
 				"unexpected character: %c", c)
 		}

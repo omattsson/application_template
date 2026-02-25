@@ -68,6 +68,9 @@ func (h *Handler) CreateItem(c *gin.Context) {
 		return
 	}
 
+	// Version is server-managed; force initial value regardless of client input.
+	item.Version = 0
+
 	if err := h.repository.Create(c.Request.Context(), &item); err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})

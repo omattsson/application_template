@@ -193,8 +193,11 @@ func (r *TableRepository) FindByID(ctx context.Context, id uint, dest interface{
 	}
 	item.Price = price
 
+	// Default to version 1 when the Version field is missing or invalid to
+	// keep optimistic-lock semantics consistent with the GORM repository.
+	item.Version = 1
 	if v, ok := entityData["Version"]; ok {
-		if vf, ok := v.(float64); ok {
+		if vf, ok := v.(float64); ok && vf > 0 {
 			item.Version = uint(vf)
 		}
 	}
@@ -278,13 +281,28 @@ func (r *TableRepository) Update(ctx context.Context, entity interface{}) error 
 
 	// Create Azure Table entity
 	now := time.Now().UTC()
+
+	// Preserve the stored CreatedAt so callers that skip FindByID before
+	// updating don't accidentally clobber it with a zero time.
+	createdAt := item.CreatedAt
+	if createdAt.IsZero() {
+		var existingData2 map[string]interface{}
+		if err := json.Unmarshal(existing.Value, &existingData2); err == nil {
+			if caStr, ok := existingData2["CreatedAt"].(string); ok {
+				if parsed, parseErr := time.Parse(time.RFC3339, caStr); parseErr == nil {
+					createdAt = parsed
+				}
+			}
+		}
+	}
+
 	entityJson := map[string]interface{}{
 		"PartitionKey": "items",
 		"RowKey":       strconv.FormatUint(uint64(item.ID), 10),
 		"Name":         item.Name,
 		"Price":        item.Price,
 		"Version":      item.Version,
-		"CreatedAt":    item.CreatedAt.Format(time.RFC3339),
+		"CreatedAt":    createdAt.Format(time.RFC3339),
 		"UpdatedAt":    now.Format(time.RFC3339),
 	}
 
