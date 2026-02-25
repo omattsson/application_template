@@ -270,6 +270,8 @@ func (r *TableRepository) Update(ctx context.Context, entity interface{}) error 
 					return dberrors.NewDatabaseError("update", fmt.Errorf("invalid stored version value: %v", v))
 				}
 				sv = uint(n)
+			default:
+				return dberrors.NewDatabaseError("update", fmt.Errorf("unexpected version type: %T", storedVersion))
 			}
 			if currentVersion != sv {
 				return dberrors.NewDatabaseError("update", errors.New("version mismatch"))

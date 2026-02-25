@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	gracefulShutdownTimeout = 5 * time.Second
+	defaultShutdownTimeout = 5 * time.Second
 )
 
 // @title           Backend API
@@ -87,7 +87,11 @@ func main() {
 	slog.Info("Shutting down server...")
 
 	// Give outstanding requests time to complete
-	ctx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+	shutdownTimeout := cfg.Server.ShutdownTimeout
+	if shutdownTimeout == 0 {
+		shutdownTimeout = defaultShutdownTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	err = srv.Shutdown(ctx)

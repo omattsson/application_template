@@ -108,10 +108,10 @@ func (c *Config) Validate() error {
 		if err := c.AzureTable.Validate(); err != nil {
 			return fmt.Errorf("azure table config: %w", err)
 		}
-	}
-
-	if err := c.Database.Validate(); err != nil {
-		return fmt.Errorf("database config: %w", err)
+	} else {
+		if err := c.Database.Validate(); err != nil {
+			return fmt.Errorf("database config: %w", err)
+		}
 	}
 
 	if err := c.Server.Validate(); err != nil {

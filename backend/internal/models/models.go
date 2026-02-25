@@ -70,7 +70,8 @@ type GenericRepository struct {
 	allowedFilterFields map[string]bool
 }
 
-// NewRepository creates a new GenericRepository with default allowed filter fields.
+// NewRepository creates a new GenericRepository with filter fields for the Item
+// entity ("name", "price"). For other entity types, use NewRepositoryWithFilterFields.
 func NewRepository(db *gorm.DB) Repository {
 	return &GenericRepository{
 		db: db,
