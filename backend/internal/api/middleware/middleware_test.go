@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -15,10 +16,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestMain(m *testing.M) {
+	gin.SetMode(gin.TestMode)
+	os.Exit(m.Run())
+}
+
 func TestLoggerMiddleware(t *testing.T) {
 	// Not parallel: this test mutates the global slog default logger.
-	// Set Gin to Test Mode
-	gin.SetMode(gin.TestMode)
 
 	// Create a buffer to capture slog output
 	var buf bytes.Buffer
@@ -53,8 +57,6 @@ func TestLoggerMiddleware(t *testing.T) {
 
 func TestRecoveryMiddleware(t *testing.T) {
 	t.Parallel()
-	// Set Gin to Test Mode
-	gin.SetMode(gin.TestMode)
 
 	// Setup router with middleware
 	r := gin.New()
@@ -81,7 +83,6 @@ func TestRecoveryMiddleware(t *testing.T) {
 
 func TestRequestIDMiddleware(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	t.Run("Generates new request ID when none provided", func(t *testing.T) {
 		t.Parallel()
@@ -147,7 +148,6 @@ func TestRequestIDMiddleware(t *testing.T) {
 
 func TestMaxBodySizeMiddleware(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	t.Run("Allows request within size limit", func(t *testing.T) {
 		t.Parallel()

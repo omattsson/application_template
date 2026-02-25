@@ -164,8 +164,12 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 }
 
 func (r *GenericRepository) Delete(ctx context.Context, entity interface{}) error {
-	if err := r.db.WithContext(ctx).Delete(entity).Error; err != nil {
-		return r.handleError("delete", err)
+	result := r.db.WithContext(ctx).Delete(entity)
+	if result.Error != nil {
+		return r.handleError("delete", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return dberrors.NewDatabaseError("delete", dberrors.ErrNotFound)
 	}
 	return nil
 }

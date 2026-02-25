@@ -11,7 +11,6 @@ import (
 
 func TestCORSMiddleware(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	t.Run("Wildcard allows all origins", func(t *testing.T) {
 		t.Parallel()
