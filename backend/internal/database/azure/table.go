@@ -427,7 +427,7 @@ func (r *TableRepository) List(ctx context.Context, dest interface{}, conditions
 			if !ok || rowKey == "" {
 				return dberrors.NewDatabaseError("list", fmt.Errorf("entity missing or invalid RowKey"))
 			}
-			id, err := strconv.ParseUint(rowKey, 10, 32)
+			id, err := strconv.ParseUint(rowKey, 10, 64)
 			if err != nil {
 				return dberrors.NewDatabaseError("list", fmt.Errorf("invalid RowKey %q: %w", rowKey, err))
 			}

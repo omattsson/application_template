@@ -199,4 +199,45 @@ func TestItemCRUD(t *testing.T) {
 		assert.Error(t, err, "Should not find deleted item")
 	})
 
+	t.Run("Optimistic Locking - version mismatch", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NoError(t, db.AutoMigrate())
+		repo := models.NewRepository(db.DB)
+		ctx := context.Background()
+
+		// Create an item (version starts at 1 after create).
+		item := &models.Item{
+			Name:  "Versioned Item",
+			Price: 10.00,
+		}
+		require.NoError(t, repo.Create(ctx, item))
+		assert.Equal(t, uint(1), item.Version)
+
+		// Simulate two concurrent reads.
+		var copy1, copy2 models.Item
+		require.NoError(t, repo.FindByID(ctx, item.ID, &copy1))
+		require.NoError(t, repo.FindByID(ctx, item.ID, &copy2))
+
+		// First update succeeds: version 1 → 2.
+		copy1.Price = 20.00
+		require.NoError(t, repo.Update(ctx, &copy1))
+		assert.Equal(t, uint(2), copy1.Version)
+
+		// Second update uses stale version 1 — should fail.
+		copy2.Price = 30.00
+		err := repo.Update(ctx, &copy2)
+		assert.Error(t, err, "Update with stale version should fail")
+		assert.Contains(t, err.Error(), "version mismatch")
+
+		// The in-memory version should be rolled back.
+		assert.Equal(t, uint(1), copy2.Version, "Version should be rolled back on mismatch")
+
+		// Database should still have the first update's data.
+		var current models.Item
+		require.NoError(t, repo.FindByID(ctx, item.ID, &current))
+		assert.Equal(t, 20.00, current.Price, "Price should reflect the first successful update")
+		assert.Equal(t, uint(2), current.Version, "Version in DB should be 2")
+	})
+
 }

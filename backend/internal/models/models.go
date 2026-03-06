@@ -139,16 +139,22 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 	}
 
 	// Optimistic locking for Versionable entities.
-	// We increment the version optimistically before Save, then use a
+	// We increment the version optimistically, then issue an UPDATE with a
 	// WHERE version=old clause. If no rows are affected, it means another
-	// transaction modified this entity \u2014 we roll back the in-memory version
-	// and return a version-mismatch error. Note: Save() issues an UPDATE
-	// for all columns, which is safe here because the handler loaded the
-	// entity first (FindByID), then applied changes on top of it.
+	// transaction modified this entity — we roll back the in-memory version
+	// and return a version-mismatch error.
+	// We use Model().Where().Select("*").Updates() instead of Where().Save()
+	// because Save() may generate an upsert (INSERT … ON CONFLICT) on some
+	// dialects (e.g. SQLite), which bypasses the WHERE version clause.
+	// Select("*") ensures all columns are written, matching Save() semantics.
 	if ver, ok := entity.(Versionable); ok {
 		currentVersion := ver.GetVersion()
 		ver.SetVersion(currentVersion + 1)
-		result := r.db.WithContext(ctx).Where("version = ?", currentVersion).Save(entity)
+		result := r.db.WithContext(ctx).
+			Model(entity).
+			Where("version = ?", currentVersion).
+			Select("*").
+			Updates(entity)
 		if result.Error != nil {
 			ver.SetVersion(currentVersion) // Roll back version on error
 			return r.handleError("update", result.Error)
