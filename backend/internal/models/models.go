@@ -112,7 +112,8 @@ func (r *GenericRepository) Close() error {
 func (r *GenericRepository) Create(ctx context.Context, entity interface{}) error {
 	if v, ok := entity.(Validator); ok {
 		if err := v.Validate(); err != nil {
-			return dberrors.NewDatabaseError("validate", err)
+			return dberrors.NewDatabaseError("validate",
+				fmt.Errorf("%w: %s", dberrors.ErrValidation, err.Error()))
 		}
 	}
 
@@ -132,7 +133,8 @@ func (r *GenericRepository) FindByID(ctx context.Context, id uint, dest interfac
 func (r *GenericRepository) Update(ctx context.Context, entity interface{}) error {
 	if v, ok := entity.(Validator); ok {
 		if err := v.Validate(); err != nil {
-			return dberrors.NewDatabaseError("validate", err)
+			return dberrors.NewDatabaseError("validate",
+				fmt.Errorf("%w: %s", dberrors.ErrValidation, err.Error()))
 		}
 	}
 

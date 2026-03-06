@@ -266,11 +266,13 @@ func (r *TableRepository) Update(ctx context.Context, entity interface{}) error 
 		if storedVersion, ok := existingData["Version"]; ok {
 			switch v := storedVersion.(type) {
 			case float64:
-				if v >= 0 {
+				// Only treat strictly positive values as valid stored versions.
+				// Non-positive values leave the default of 1, matching FindByID.
+				if v > 0 {
 					storedVersionUint = uint(v)
 				}
 			case json.Number:
-				if n, err := v.Int64(); err == nil && n >= 0 {
+				if n, err := v.Int64(); err == nil && n > 0 {
 					storedVersionUint = uint(n)
 				}
 			}

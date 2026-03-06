@@ -90,6 +90,21 @@ func TestCORSMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 
+	t.Run("No Origin header passes through as non-CORS request", func(t *testing.T) {
+		t.Parallel()
+		r := gin.New()
+		r.Use(CORS("https://example.com"))
+		r.Any("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/test", nil)
+		// No Origin header set — non-browser / same-origin request
+		r.ServeHTTP(w, req)
+
+		assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"))
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
 	t.Run("Disallowed origin OPTIONS preflight returns 403 without CORS headers", func(t *testing.T) {
 		t.Parallel()
 		r := gin.New()

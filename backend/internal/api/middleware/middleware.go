@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -21,21 +22,25 @@ func CORS(allowedOrigins string) gin.HandlerFunc {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		} else {
 			requestOrigin := c.Request.Header.Get("Origin")
-			allowed := false
-			for _, origin := range strings.Split(allowedOrigins, ",") {
-				if strings.TrimSpace(origin) == requestOrigin {
-					c.Writer.Header().Set("Access-Control-Allow-Origin", requestOrigin)
-					c.Writer.Header().Set("Vary", "Origin")
-					allowed = true
-					break
+			if requestOrigin != "" {
+				allowed := false
+				for _, origin := range strings.Split(allowedOrigins, ",") {
+					if strings.TrimSpace(origin) == requestOrigin {
+						c.Writer.Header().Set("Access-Control-Allow-Origin", requestOrigin)
+						c.Writer.Header().Set("Vary", "Origin")
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					// Block requests from non-whitelisted origins as defense-in-depth;
+					// browsers enforce CORS client-side, but we also enforce server-side.
+					c.AbortWithStatus(http.StatusForbidden)
+					return
 				}
 			}
-			if !allowed {
-				// Block requests from non-whitelisted origins as defense-in-depth;
-				// browsers enforce CORS client-side, but we also enforce server-side.
-				c.AbortWithStatus(http.StatusForbidden)
-				return
-			}
+			// If there is no Origin header, treat this as a non-CORS request:
+			// allow it through without setting Access-Control-Allow-Origin.
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, Authorization, X-Request-ID")
@@ -88,23 +93,42 @@ func RequestID() gin.HandlerFunc {
 	}
 }
 
+// maxBytesBodyCapture wraps an io.ReadCloser to detect *http.MaxBytesError.
+type maxBytesBodyCapture struct {
+	rc       io.ReadCloser
+	exceeded *bool
+}
+
+func (m *maxBytesBodyCapture) Read(p []byte) (int, error) {
+	n, err := m.rc.Read(p)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			*m.exceeded = true
+		}
+	}
+	return n, err
+}
+
+func (m *maxBytesBodyCapture) Close() error {
+	return m.rc.Close()
+}
+
 // MaxBodySize limits the size of the request body to prevent memory exhaustion.
 // Oversized payloads are translated to a 413 Request Entity Too Large response.
 func MaxBodySize(maxBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+		var exceeded bool
+		limitedReader := http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+		c.Request.Body = &maxBytesBodyCapture{rc: limitedReader, exceeded: &exceeded}
 		c.Next()
 
-		// If reading the body hit the limit, MaxBytesReader returns
-		// *http.MaxBytesError. Detect this and override the status code
-		// so clients receive a proper 413 instead of a generic 400.
-		if c.Errors.Last() != nil {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(c.Errors.Last().Err, &maxBytesErr) {
-				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge,
-					gin.H{"error": "request body too large"})
-				return
-			}
+		// If the body size was exceeded and the handler has not yet written
+		// a response, return a 413 so clients get a clear signal.
+		if exceeded && !c.Writer.Written() {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge,
+				gin.H{"error": "request body too large"})
+			return
 		}
 	}
 }
