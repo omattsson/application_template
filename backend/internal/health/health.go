@@ -61,10 +61,17 @@ func (h *HealthChecker) CheckLiveness(_ context.Context) HealthStatus {
 }
 
 func (h *HealthChecker) CheckReadiness(ctx context.Context) HealthStatus {
+	// Copy state under lock, then release before running I/O-bound checks
+	// to avoid holding the mutex during potentially slow dependency calls.
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+	ready := h.isReady
+	deps := make(map[string]HealthCheck, len(h.dependencies))
+	for k, v := range h.dependencies {
+		deps[k] = v
+	}
+	h.mu.RUnlock()
 
-	if !h.isReady {
+	if !ready {
 		return HealthStatus{
 			Status: "DOWN",
 			Checks: map[string]CheckStatus{
@@ -78,7 +85,7 @@ func (h *HealthChecker) CheckReadiness(ctx context.Context) HealthStatus {
 		Checks: make(map[string]CheckStatus),
 	}
 
-	for name, check := range h.dependencies {
+	for name, check := range deps {
 		if err := check(ctx); err != nil {
 			status.Status = "DOWN"
 			status.Checks[name] = CheckStatus{

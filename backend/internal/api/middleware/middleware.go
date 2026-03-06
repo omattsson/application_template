@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -88,10 +89,23 @@ func RequestID() gin.HandlerFunc {
 }
 
 // MaxBodySize limits the size of the request body to prevent memory exhaustion.
+// Oversized payloads are translated to a 413 Request Entity Too Large response.
 func MaxBodySize(maxBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
 		c.Next()
+
+		// If reading the body hit the limit, MaxBytesReader returns
+		// *http.MaxBytesError. Detect this and override the status code
+		// so clients receive a proper 413 instead of a generic 400.
+		if c.Errors.Last() != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(c.Errors.Last().Err, &maxBytesErr) {
+				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge,
+					gin.H{"error": "request body too large"})
+				return
+			}
+		}
 	}
 }
 

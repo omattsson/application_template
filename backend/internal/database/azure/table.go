@@ -259,23 +259,25 @@ func (r *TableRepository) Update(ctx context.Context, entity interface{}) error 
 	if ver, ok := entity.(models.Versionable); ok {
 		currentVersion := ver.GetVersion()
 
+		// Default stored version to 1 for legacy rows that predate versioning,
+		// consistent with the model default and FindByID behavior.
+		storedVersionUint := uint(1)
+
 		if storedVersion, ok := existingData["Version"]; ok {
-			var sv uint
 			switch v := storedVersion.(type) {
 			case float64:
-				sv = uint(v)
-			case json.Number:
-				n, err := v.Int64()
-				if err != nil || n < 0 {
-					return dberrors.NewDatabaseError("update", fmt.Errorf("invalid stored version value: %v", v))
+				if v >= 0 {
+					storedVersionUint = uint(v)
 				}
-				sv = uint(n)
-			default:
-				return dberrors.NewDatabaseError("update", fmt.Errorf("unexpected version type: %T", storedVersion))
+			case json.Number:
+				if n, err := v.Int64(); err == nil && n >= 0 {
+					storedVersionUint = uint(n)
+				}
 			}
-			if currentVersion != sv {
-				return dberrors.NewDatabaseError("update", errors.New("version mismatch"))
-			}
+		}
+
+		if currentVersion != storedVersionUint {
+			return dberrors.NewDatabaseError("update", errors.New("version mismatch"))
 		}
 
 		// Increment version for the update
