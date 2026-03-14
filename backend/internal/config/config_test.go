@@ -122,8 +122,7 @@ func TestLoadConfig(t *testing.T) {
 		assert.Empty(t, config.Server.Host)
 		assert.Equal(t, "8081", config.Server.Port)
 		assert.Equal(t, 10*time.Second, config.Server.ReadTimeout)
-		assert.Equal(t, 10*time.Second, config.Server.WriteTimeout)
-		assert.Equal(t, 30*time.Second, config.Server.ShutdownTimeout)
+		assert.Equal(t, time.Duration(0), config.Server.WriteTimeout) // disabled; per-write deadlines enforced in WebSocket write pump
 
 		// Check default logging config
 		assert.Equal(t, "info", config.Logging.Level)
@@ -280,6 +279,62 @@ func TestConfigValidate(t *testing.T) {
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "server config")
+	})
+
+	t.Run("zero WriteTimeout passes validation", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Config{
+			App: config.AppConfig{
+				Name:        "myapp",
+				Environment: "production",
+			},
+			Database: config.DatabaseConfig{
+				Host:            "localhost",
+				Port:            "3306",
+				User:            "user",
+				DBName:          "dbname",
+				MaxOpenConns:    10,
+				MaxIdleConns:    5,
+				ConnMaxLifetime: 1 * time.Minute,
+			},
+			Server: config.ServerConfig{
+				Port:            "8080",
+				ReadTimeout:     5 * time.Second,
+				WriteTimeout:    0, // disabled at server level; per-write deadlines in WebSocket pump
+				IdleTimeout:     30 * time.Second,
+				ShutdownTimeout: 10 * time.Second,
+			},
+		}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("negative WriteTimeout fails validation", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Config{
+			App: config.AppConfig{
+				Name:        "myapp",
+				Environment: "production",
+			},
+			Database: config.DatabaseConfig{
+				Host:            "localhost",
+				Port:            "3306",
+				User:            "user",
+				DBName:          "dbname",
+				MaxOpenConns:    10,
+				MaxIdleConns:    5,
+				ConnMaxLifetime: 1 * time.Minute,
+			},
+			Server: config.ServerConfig{
+				Port:            "8080",
+				ReadTimeout:     5 * time.Second,
+				WriteTimeout:    -1 * time.Second,
+				IdleTimeout:     30 * time.Second,
+				ShutdownTimeout: 10 * time.Second,
+			},
+		}
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "write timeout")
 	})
 }
 func TestAzureTableConfigValidate(t *testing.T) {

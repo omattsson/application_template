@@ -141,7 +141,7 @@ func mockLoadConfig() (*config.Config, error) {
 			Host:            "localhost",
 			Port:            "8082",
 			ReadTimeout:     10 * time.Second,
-			WriteTimeout:    10 * time.Second,
+			WriteTimeout:    time.Duration(0),
 			ShutdownTimeout: 30 * time.Second,
 		},
 		Logging: config.LogConfig{
@@ -288,5 +288,5 @@ func TestServerConfiguration(t *testing.T) {
 
 	assert.Equal(t, addr, server.Addr)
 	assert.Equal(t, 10*time.Second, server.ReadTimeout)
-	assert.Equal(t, 10*time.Second, server.WriteTimeout)
+	assert.Equal(t, time.Duration(0), server.WriteTimeout)
 }
