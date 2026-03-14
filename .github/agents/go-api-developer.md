@@ -1,7 +1,17 @@
 ---
 name: Go API Developer
 description: Expert Go backend developer for implementing API features from GitHub issues. Builds secure, scalable, well-tested code following this project's established patterns.
-tools: [read, agent, edit, search/codebase, web/fetch, todo, execute]
+model: Claude Sonnet 4.6 (copilot)
+tools:
+  - codebase
+  - terminal
+  - github
+  - fetch
+  - problems
+  - edit
+  - agent
+  - todo
+  - execute
 ---
 
 # Go API Developer Agent

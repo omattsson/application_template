@@ -9,6 +9,7 @@ import (
 	"backend/internal/api/handlers"
 	"backend/internal/config"
 	"backend/internal/health"
+	"backend/internal/websocket"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -33,8 +34,13 @@ func TestSetupRoutes(t *testing.T) {
 		},
 	}
 
+	// Create a test WebSocket hub
+	hub := websocket.NewHub()
+	go hub.Run()
+	defer hub.Shutdown()
+
 	// Setup routes
-	rl := SetupRoutes(router, mockRepo, healthChecker, cfg)
+	rl := SetupRoutes(router, mockRepo, healthChecker, cfg, hub)
 	defer rl.Stop()
 
 	// Test cases

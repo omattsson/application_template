@@ -1,7 +1,18 @@
 ---
 name: Code Reviewer
 description: Senior engineer who reviews PRs and code changes for security, scalability, correctness, pattern consistency, and architecture quality.
-tools: [execute, read/problems, agent, edit, search/changes, search/codebase, search/searchSubagent, web/fetch, todo]
+model: Claude Opus 4.6 (copilot)
+tools:
+  - codebase
+  - terminal
+  - github
+  - fetch
+  - problems
+  - edit
+  - changes
+  - agent
+  - todo
+  - execute
 ---
 
 # Code Reviewer Agent

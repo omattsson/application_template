@@ -5,6 +5,9 @@ import "github.com/swaggo/swag"
 
 const docTemplate = `{
     "schemes": {{ marshal .Schemes }},
+    "produces": [
+        "application/json"
+    ],
     "swagger": "2.0",
     "info": {
         "description": "{{escape .Description}}",
@@ -289,6 +292,38 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/ws": {
+            "get": {
+                "description": "Upgrades the HTTP connection to a WebSocket for real-time events.",
+                "tags": [
+                    "websocket"
+                ],
+                "summary": "Open a WebSocket connection",
+                "responses": {
+                    "101": {
+                        "description": "Switching Protocols"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -346,7 +381,7 @@ const docTemplate = `{
                     "example": "2025-06-02T10:00:00Z"
                 },
                 "version": {
-                    "description": "For optimistic locking",
+                    "description": "For optimistic locking (1 = initial; 0 = not provided)",
                     "type": "integer"
                 }
             }
@@ -359,7 +394,7 @@ var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
 	Host:             "localhost:8081",
 	BasePath:         "/",
-	Schemes:          []string{},
+	Schemes:          []string{"http", "https"},
 	Title:            "Backend API",
 	Description:      "This is the API documentation for the backend service",
 	InfoInstanceName: "swagger",

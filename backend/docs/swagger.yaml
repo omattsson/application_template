@@ -37,7 +37,7 @@ definitions:
         example: "2025-06-02T10:00:00Z"
         type: string
       version:
-        description: For optimistic locking
+        description: For optimistic locking (1 = initial; 0 = not provided)
         type: integer
     type: object
 host: localhost:8081
@@ -228,4 +228,30 @@ paths:
       summary: Readiness Check
       tags:
       - health
+  /ws:
+    get:
+      description: Upgrades the HTTP connection to a WebSocket for real-time events.
+      responses:
+        "101":
+          description: Switching Protocols
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Open a WebSocket connection
+      tags:
+      - websocket
+produces:
+- application/json
+schemes:
+- http
+- https
 swagger: "2.0"
