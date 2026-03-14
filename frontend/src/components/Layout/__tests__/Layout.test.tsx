@@ -17,10 +17,11 @@ describe('Layout', () => {
     expect(screen.getByText('Full Stack App')).toBeInTheDocument();
   });
 
-  it('renders Home and Health nav links', () => {
+  it('renders Home, Health, and Items nav links', () => {
     renderLayout();
     expect(screen.getByRole('link', { name: /home/i })).toHaveAttribute('href', '/');
     expect(screen.getByRole('link', { name: /health/i })).toHaveAttribute('href', '/health');
+    expect(screen.getByRole('link', { name: /items/i })).toHaveAttribute('href', '/items');
   });
 
   it('renders children content', () => {

@@ -20,6 +20,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           <Button color="inherit" component={RouterLink} to="/health">
             Health
           </Button>
+          <Button color="inherit" component={RouterLink} to="/items">
+            Items
+          </Button>
         </Toolbar>
       </AppBar>
       <Container component="main" sx={{ mt: 4, mb: 4, flex: '1 0 auto' }}>

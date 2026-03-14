@@ -13,3 +13,10 @@ export const axiosConfig = {
     'Content-Type': 'application/json',
   },
 };
+
+// WebSocket base URL. In production, derived from the current page origin;
+// in development, points directly at the backend dev server.
+export const WS_BASE_URL =
+  process.env.NODE_ENV === 'production'
+    ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
+    : 'ws://localhost:8081';
