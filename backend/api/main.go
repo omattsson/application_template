@@ -8,6 +8,7 @@ import (
 	"backend/internal/config"
 	"backend/internal/database"
 	"backend/internal/health"
+	"backend/internal/websocket"
 	"context"
 	"fmt"
 	"log/slog"
@@ -56,9 +57,13 @@ func main() {
 	})
 	healthChecker.SetReady(true)
 
+	// Create and start WebSocket hub
+	hub := websocket.NewHub()
+	go hub.Run()
+
 	// Setup router — use gin.New() since SetupRoutes registers its own Logger and Recovery middleware.
 	router := gin.New()
-	rateLimiter := routes.SetupRoutes(router, repo, healthChecker, cfg)
+	rateLimiter := routes.SetupRoutes(router, repo, healthChecker, cfg, hub)
 	defer rateLimiter.Stop()
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
@@ -85,6 +90,9 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	slog.Info("Shutting down server...")
+
+	// Shut down WebSocket hub (closes all client connections)
+	hub.Shutdown()
 
 	// Give outstanding requests time to complete
 	shutdownTimeout := cfg.Server.ShutdownTimeout

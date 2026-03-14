@@ -6,6 +6,7 @@ import (
 	"backend/internal/config"
 	"backend/internal/health"
 	"backend/internal/models"
+	"backend/internal/websocket"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,13 +15,17 @@ import (
 // SetupRoutes configures all the routes for our application.
 // healthChecker is injected from main so the readiness endpoint reflects real dependency health.
 // Returns the rate limiter so the caller can stop it during shutdown.
-func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker *health.HealthChecker, cfg *config.Config) *handlers.RateLimiter {
+func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker *health.HealthChecker, cfg *config.Config, hub *websocket.Hub) *handlers.RateLimiter {
 	// Add middleware
 	router.Use(middleware.RequestID())
 	router.Use(middleware.Logger())
 	router.Use(middleware.Recovery())
 	router.Use(middleware.CORS(cfg.CORS.AllowedOrigins))
 	router.Use(middleware.MaxBodySize(1 << 20)) // 1 MB default
+
+	// WebSocket endpoint (top-level, outside rate limiter — connections are long-lived)
+	wsHandler := handlers.NewWebSocketHandler(hub, cfg.CORS.AllowedOrigins)
+	router.GET("/ws", wsHandler.HandleWebSocket)
 
 	// Health check endpoints
 	healthGroup := router.Group("/health")

@@ -1,4 +1,11 @@
 {
+    "produces": [
+        "application/json"
+    ],
+    "schemes": [
+        "http",
+        "https"
+    ],
     "swagger": "2.0",
     "info": {
         "description": "This is the API documentation for the backend service",
@@ -283,6 +290,38 @@
                     }
                 }
             }
+        },
+        "/ws": {
+            "get": {
+                "description": "Upgrades the HTTP connection to a WebSocket for real-time events.",
+                "tags": [
+                    "websocket"
+                ],
+                "summary": "Open a WebSocket connection",
+                "responses": {
+                    "101": {
+                        "description": "Switching Protocols"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -340,7 +379,7 @@
                     "example": "2025-06-02T10:00:00Z"
                 },
                 "version": {
-                    "description": "For optimistic locking",
+                    "description": "For optimistic locking (1 = initial; 0 = not provided)",
                     "type": "integer"
                 }
             }
