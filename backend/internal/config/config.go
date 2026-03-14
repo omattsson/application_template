@@ -18,9 +18,13 @@ const (
 	defaultMaxIdleConns    int32 = 5
 	defaultConnMaxLifetime       = 5 * time.Minute
 	defaultReadTimeout           = 10 * time.Second
-	defaultWriteTimeout          = 10 * time.Second
-	defaultIdleTimeout           = 30 * time.Second
-	defaultShutdownTimeout       = 30 * time.Second
+	// defaultWriteTimeout is 0 (disabled at the server level) because per-write
+	// deadlines are enforced in the WebSocket write pump (websocket/client.go).
+	// A non-zero server-level write timeout would prematurely terminate idle
+	// WebSocket connections.
+	defaultWriteTimeout    = time.Duration(0)
+	defaultIdleTimeout     = 30 * time.Second
+	defaultShutdownTimeout = 30 * time.Second
 )
 
 // CORSConfig holds CORS configuration
@@ -83,7 +87,15 @@ type AzureTableConfig struct {
 //nolint:govet // Struct field alignment has been optimized for time.Duration fields
 type ServerConfig struct {
 	// 8-byte aligned fields first
-	ReadTimeout     time.Duration
+	ReadTimeout time.Duration
+	// WriteTimeout is 0 (disabled) at the server level. Per-write deadlines are
+	// enforced inside the WebSocket write pump (websocket/client.go), so a
+	// server-level write timeout must be disabled to prevent premature
+	// termination of idle WebSocket connections. Standard REST handlers complete
+	// quickly in practice, but setting WriteTimeout to 0 does mean slow or
+	// stalled clients can hold a connection indefinitely. Operators who want
+	// protection against slow clients should set SERVER_WRITE_TIMEOUT to a
+	// positive value (e.g. 30s); per-handler context deadlines can also be applied.
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
@@ -194,8 +206,10 @@ func (c *ServerConfig) Validate() error {
 		return errors.New("read timeout must be positive")
 	}
 
-	if c.WriteTimeout <= 0 {
-		return errors.New("write timeout must be positive")
+	// WriteTimeout of 0 is valid — it disables the server-level write timeout
+	// (per-write deadlines are handled in the WebSocket write pump instead).
+	if c.WriteTimeout < 0 {
+		return errors.New("write timeout must be non-negative (0 to disable)")
 	}
 
 	if c.IdleTimeout <= 0 {

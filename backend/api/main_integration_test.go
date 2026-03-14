@@ -34,7 +34,7 @@ func TestDatabaseInitialization(t *testing.T) {
 			Host:            "localhost",
 			Port:            "8082",
 			ReadTimeout:     10 * time.Second,
-			WriteTimeout:    10 * time.Second,
+			WriteTimeout:    time.Duration(0),
 			ShutdownTimeout: 30 * time.Second,
 		},
 		Logging: config.LogConfig{
