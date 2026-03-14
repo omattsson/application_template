@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Typography,
   Box,
@@ -33,33 +33,42 @@ const Items = () => {
   const [toast, setToast] = useState<Toast>({ open: false, message: '', severity: 'success' });
   const { subscribe } = useWebSocketContext();
 
-  useEffect(() => {
-    const fetchItems = async () => {
-      try {
-        const data = await itemService.list();
-        setItems(data);
-      } catch {
+  const fetchItems = useCallback(async (silent = false) => {
+    try {
+      const data = await itemService.list();
+      setItems(data);
+      setError(null);
+    } catch {
+      if (!silent) {
         setError('Failed to load items');
-      } finally {
-        setLoading(false);
       }
-    };
-    fetchItems();
+    }
   }, []);
+
+  useEffect(() => {
+    const load = async () => {
+      await fetchItems();
+      setLoading(false);
+    };
+    void load();
+  }, [fetchItems]);
 
   useEffect(() => {
     const unsubCreated = subscribe('item.created', (msg: WebSocketMessage) => {
       const item = msg.payload as Item;
       setToast({ open: true, message: `Item '${item.name}' created`, severity: 'success' });
+      void fetchItems(true);
     });
 
     const unsubUpdated = subscribe('item.updated', (msg: WebSocketMessage) => {
       const item = msg.payload as Item;
       setToast({ open: true, message: `Item '${item.name}' updated`, severity: 'info' });
+      void fetchItems(true);
     });
 
     const unsubDeleted = subscribe('item.deleted', () => {
       setToast({ open: true, message: 'Item deleted', severity: 'warning' });
+      void fetchItems(true);
     });
 
     return () => {
@@ -67,7 +76,7 @@ const Items = () => {
       unsubUpdated();
       unsubDeleted();
     };
-  }, [subscribe]);
+  }, [subscribe, fetchItems]);
 
   const handleToastClose = () => {
     setToast((prev) => ({ ...prev, open: false }));
