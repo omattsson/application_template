@@ -52,6 +52,7 @@ describe('Items Page', () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('shows a loading spinner initially', () => {
@@ -199,6 +200,8 @@ describe('Items Page', () => {
 
     expect(itemService.list).toHaveBeenCalledTimes(1);
 
+    vi.useFakeTimers();
+
     act(() => {
       handlers['item.created']({
         type: 'item.created',
@@ -206,9 +209,11 @@ describe('Items Page', () => {
       });
     });
 
-    await waitFor(() => {
-      expect(itemService.list).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      vi.runAllTimers();
     });
+
+    expect(itemService.list).toHaveBeenCalledTimes(2);
   });
 
   it('re-fetches items when item.updated event arrives', async () => {
@@ -223,6 +228,8 @@ describe('Items Page', () => {
 
     expect(itemService.list).toHaveBeenCalledTimes(1);
 
+    vi.useFakeTimers();
+
     act(() => {
       handlers['item.updated']({
         type: 'item.updated',
@@ -230,9 +237,11 @@ describe('Items Page', () => {
       });
     });
 
-    await waitFor(() => {
-      expect(itemService.list).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      vi.runAllTimers();
     });
+
+    expect(itemService.list).toHaveBeenCalledTimes(2);
   });
 
   it('re-fetches items when item.deleted event arrives', async () => {
@@ -247,13 +256,17 @@ describe('Items Page', () => {
 
     expect(itemService.list).toHaveBeenCalledTimes(1);
 
+    vi.useFakeTimers();
+
     act(() => {
       handlers['item.deleted']({ type: 'item.deleted', payload: { id: 1 } });
     });
 
-    await waitFor(() => {
-      expect(itemService.list).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      vi.runAllTimers();
     });
+
+    expect(itemService.list).toHaveBeenCalledTimes(2);
   });
 
   it('unsubscribes on unmount', async () => {
@@ -483,6 +496,8 @@ describe('Items Page', () => {
       expect(screen.getByText('Widget')).toBeInTheDocument();
     });
 
+    vi.useFakeTimers();
+
     act(() => {
       handlers['item.created']({
         type: 'item.created',
@@ -495,9 +510,12 @@ describe('Items Page', () => {
       handlers['item.deleted']({ type: 'item.deleted', payload: { id: 2 } });
     });
 
-    await waitFor(() => {
-      expect(itemService.list).toHaveBeenCalledTimes(4); // 1 initial + 3 events
+    // All 3 events are coalesced into a single debounced fetch
+    await act(async () => {
+      vi.runAllTimers();
     });
+
+    expect(itemService.list).toHaveBeenCalledTimes(2); // 1 initial + 1 debounced
 
     // Component must not crash; latest mocked data (mockItems) should be shown
     expect(screen.getByText('Widget')).toBeInTheDocument();
