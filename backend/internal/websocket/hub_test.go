@@ -2,11 +2,21 @@ package websocket
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// waitForClientCount polls hub.ClientCount until it equals want or the timeout expires.
+func waitForClientCount(t *testing.T, hub *Hub, want int) {
+	t.Helper()
+	assert.Eventually(t, func() bool {
+		return hub.ClientCount() == want
+	}, time.Second, 5*time.Millisecond, "expected %d clients", want)
+}
 
 func TestHub_RegisterUnregister(t *testing.T) {
 	t.Parallel()
@@ -47,23 +57,23 @@ func TestHub_RegisterUnregister(t *testing.T) {
 			defer hub.Shutdown()
 
 			clients := make([]*Client, tt.registerCount)
-			for i := range tt.registerCount {
+			for i := 0; i < tt.registerCount; i++ {
 				c := &Client{
 					hub:  hub,
 					send: make(chan []byte, sendBufferSize),
 				}
-				hub.register <- c
+				err := hub.Register(c)
+				require.NoError(t, err)
 				clients[i] = c
 			}
 
-			time.Sleep(50 * time.Millisecond)
-			assert.Equal(t, tt.registerCount, hub.ClientCount())
+			waitForClientCount(t, hub, tt.registerCount)
 
 			if tt.unregisterAll {
 				for _, c := range clients {
-					hub.unregister <- c
+					hub.Unregister(c)
 				}
-				time.Sleep(50 * time.Millisecond)
+				waitForClientCount(t, hub, 0)
 			}
 
 			assert.Equal(t, tt.wantCount, hub.ClientCount())
@@ -80,9 +90,11 @@ func TestHub_Broadcast(t *testing.T) {
 
 	c1 := &Client{hub: hub, send: make(chan []byte, sendBufferSize)}
 	c2 := &Client{hub: hub, send: make(chan []byte, sendBufferSize)}
-	hub.register <- c1
-	hub.register <- c2
-	time.Sleep(50 * time.Millisecond)
+	err := hub.Register(c1)
+	require.NoError(t, err)
+	err = hub.Register(c2)
+	require.NoError(t, err)
+	waitForClientCount(t, hub, 2)
 
 	msg := []byte(`{"type":"test","payload":"hello"}`)
 	hub.Broadcast(msg)
@@ -109,12 +121,12 @@ func TestHub_Shutdown(t *testing.T) {
 	go hub.Run()
 
 	c := &Client{hub: hub, send: make(chan []byte, sendBufferSize)}
-	hub.register <- c
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 1, hub.ClientCount())
+	err := hub.Register(c)
+	require.NoError(t, err)
+	waitForClientCount(t, hub, 1)
 
 	hub.Shutdown()
-	time.Sleep(50 * time.Millisecond)
+	waitForClientCount(t, hub, 0)
 
 	assert.Equal(t, 0, hub.ClientCount())
 
@@ -130,21 +142,73 @@ func TestHub_BroadcastDropsSlowClient(t *testing.T) {
 	defer hub.Shutdown()
 
 	slow := &Client{hub: hub, send: make(chan []byte, 1)}
-	hub.register <- slow
-	time.Sleep(50 * time.Millisecond)
+	err := hub.Register(slow)
+	require.NoError(t, err)
+	waitForClientCount(t, hub, 1)
 
 	slow.send <- []byte("fill")
 
 	hub.Broadcast([]byte("overflow"))
-	time.Sleep(100 * time.Millisecond)
 
-	assert.Equal(t, 0, hub.ClientCount(), "slow client should have been dropped")
+	waitForClientCount(t, hub, 0)
 }
 
 func TestHub_ImplementsBroadcastSender(t *testing.T) {
 	t.Parallel()
 
 	var _ BroadcastSender = (*Hub)(nil)
+}
+
+func TestHub_ShutdownIdempotent(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub()
+	go hub.Run()
+
+	// Calling Shutdown multiple times must not panic.
+	hub.Shutdown()
+	hub.Shutdown()
+}
+
+func TestHub_RegisterAfterShutdown(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub()
+	go hub.Run()
+	hub.Shutdown()
+
+	waitForClientCount(t, hub, 0)
+
+	c := &Client{hub: hub, send: make(chan []byte, sendBufferSize)}
+	err := hub.Register(c)
+	assert.ErrorIs(t, err, ErrHubClosed)
+}
+
+func TestHub_BroadcastChannelFull(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub()
+	// Do NOT start hub.Run() — we test Broadcast() in isolation so the
+	// Run loop cannot drain the channel concurrently.
+
+	// Fill the broadcast channel to capacity.
+	for i := 0; i < cap(hub.broadcast); i++ {
+		hub.broadcast <- []byte("fill")
+	}
+
+	// The next Broadcast must not block — it should drop the message.
+	done := make(chan struct{})
+	go func() {
+		hub.Broadcast([]byte("overflow"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success — Broadcast returned without blocking.
+	case <-time.After(time.Second):
+		t.Fatal("Broadcast blocked when channel was full")
+	}
 }
 
 func TestNewMessage(t *testing.T) {
@@ -156,6 +220,7 @@ func TestNewMessage(t *testing.T) {
 		payload     interface{}
 		wantType    string
 		wantPayload string
+		wantErr     bool
 	}{
 		{
 			name:        "string payload",
@@ -178,6 +243,12 @@ func TestNewMessage(t *testing.T) {
 			wantType:    "ping",
 			wantPayload: "null",
 		},
+		{
+			name:    "unmarshallable payload returns error",
+			msgType: "bad",
+			payload: math.Inf(1),
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -186,7 +257,11 @@ func TestNewMessage(t *testing.T) {
 			t.Parallel()
 
 			msg, err := NewMessage(tt.msgType, tt.payload)
-			assert.NoError(t, err)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantType, msg.Type)
 			assert.JSONEq(t, tt.wantPayload, string(msg.Payload))
 		})
@@ -197,10 +272,10 @@ func TestMessage_Bytes(t *testing.T) {
 	t.Parallel()
 
 	msg, err := NewMessage("item.updated", map[string]int{"id": 1})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	b, err := msg.Bytes()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	var parsed Message
 	err = json.Unmarshal(b, &parsed)

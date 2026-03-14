@@ -7,6 +7,10 @@ import (
 	"sync"
 )
 
+// broadcastBufferSize is the capacity of the Hub's broadcast channel.
+// Messages exceeding this buffer are dropped with a warning log.
+const broadcastBufferSize = 256
+
 // ErrHubClosed is returned when attempting to register a client on a shut-down hub.
 var ErrHubClosed = errHubClosed{}
 
@@ -50,7 +54,7 @@ type Hub struct {
 func NewHub() *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte, 256),
+		broadcast:  make(chan []byte, broadcastBufferSize),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		done:       make(chan struct{}),
@@ -80,20 +84,25 @@ func (h *Hub) Run() {
 			slog.Info("WebSocket client unregistered", "clients", h.ClientCount())
 		case message := <-h.broadcast:
 			h.mu.RLock()
+			var slow []*Client
 			for client := range h.clients {
 				select {
 				case client.send <- message:
 				default:
-					// Client send buffer full — disconnect it.
-					h.mu.RUnlock()
-					h.mu.Lock()
-					delete(h.clients, client)
-					close(client.send)
-					h.mu.Unlock()
-					h.mu.RLock()
+					slow = append(slow, client)
 				}
 			}
 			h.mu.RUnlock()
+			if len(slow) > 0 {
+				h.mu.Lock()
+				for _, client := range slow {
+					if _, ok := h.clients[client]; ok {
+						delete(h.clients, client)
+						close(client.send)
+					}
+				}
+				h.mu.Unlock()
+			}
 		}
 	}
 }

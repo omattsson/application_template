@@ -1,11 +1,15 @@
 package websocket
 
 import (
+	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// errChanClosed is a sentinel used internally when the hub closes a client's send channel.
+var errChanClosed = errors.New("send channel closed")
 
 const (
 	// writeWait is the time allowed to write a message to the peer.
@@ -100,46 +104,61 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case message, ok := <-c.send:
-			if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				slog.Error("Failed to set write deadline", "error", err)
-				return
-			}
-			if !ok {
-				// Hub closed the channel — send a close frame.
-				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-
-			w, err := c.conn.NextWriter(websocket.TextMessage)
-			if err != nil {
-				return
-			}
-			if _, err := w.Write(message); err != nil {
-				return
-			}
-
-			// Drain queued messages into the same write frame for efficiency.
-			n := len(c.send)
-			for i := 0; i < n; i++ {
-				if _, err := w.Write([]byte("\n")); err != nil {
-					break
-				}
-				if _, err := w.Write(<-c.send); err != nil {
-					break
-				}
-			}
-
-			if err := w.Close(); err != nil {
+			if err := c.handleSend(message, ok); err != nil {
 				return
 			}
 		case <-ticker.C:
-			if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				slog.Error("Failed to set write deadline for ping", "error", err)
-				return
-			}
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if err := c.writePing(); err != nil {
 				return
 			}
 		}
 	}
+}
+
+// handleSend processes a message (or channel close) from the hub.
+func (c *Client) handleSend(message []byte, ok bool) error {
+	if !ok {
+		// Hub closed the channel — send a close frame.
+		_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+		return errChanClosed
+	}
+	if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		slog.Error("Failed to set write deadline", "error", err)
+		return err
+	}
+
+	if err := c.writeMessage(message); err != nil {
+		return err
+	}
+
+	// Drain queued messages, sending each as its own WS frame
+	// so every frame contains a single valid JSON object.
+	n := len(c.send)
+	for i := 0; i < n; i++ {
+		if err := c.writeMessage(<-c.send); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writePing sends a ping frame with the configured write deadline.
+func (c *Client) writePing() error {
+	if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		slog.Error("Failed to set write deadline for ping", "error", err)
+		return err
+	}
+	return c.conn.WriteMessage(websocket.PingMessage, nil)
+}
+
+// writeMessage sends a single text message as one WebSocket frame.
+func (c *Client) writeMessage(data []byte) error {
+	w, err := c.conn.NextWriter(websocket.TextMessage)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	return w.Close()
 }
