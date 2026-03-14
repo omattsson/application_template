@@ -157,6 +157,14 @@ func TestDatabaseChoiceIntegration(t *testing.T) {
 				t.Setenv("USE_AZURE_TABLE", tc.useAzureTable)
 				t.Setenv("DB_HOST", tc.dbHost)
 
+				// When testing Azure Table, provide required config fields
+				if tc.useAzureTable == "true" {
+					t.Setenv("AZURE_TABLE_ACCOUNT_NAME", "testaccount")
+					t.Setenv("AZURE_TABLE_ACCOUNT_KEY", "testkey")
+					t.Setenv("AZURE_TABLE_ENDPOINT", "example.com")
+					t.Setenv("AZURE_TABLE_NAME", "testitems")
+				}
+
 				// Load config
 				cfg, err := config.LoadConfig()
 				require.NoError(t, err)

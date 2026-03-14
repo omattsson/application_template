@@ -61,12 +61,17 @@ func (d *Database) AutoMigrate() error {
 		},
 	})
 
-	// Update existing items with Version=0 to Version=1 and change column default
+	// Ensure version column exists and update defaults for optimistic locking
 	migrator.AddMigration(schema.Migration{
 		Version:     "20231201000003",
 		Name:        "update_items_version_default",
-		Description: "Set Version default to 1 for optimistic locking and update existing rows",
+		Description: "Add version column if missing, set default to 1, and update existing rows",
 		Up: func(tx *gorm.DB) error {
+			// Ensure the version column exists (handles cases where migration 000001
+			// was applied before the Version field was added to the Item model)
+			if err := tx.AutoMigrate(&models.Item{}); err != nil {
+				return err
+			}
 			// Update existing rows that still have the old default of 0 to the new default of 1
 			if err := tx.Exec("UPDATE items SET version = 1 WHERE version = 0").Error; err != nil {
 				return err

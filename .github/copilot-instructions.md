@@ -4,79 +4,91 @@
 
 Full-stack app: **Go (Gin) backend** + **React (TypeScript, Vite, MUI) frontend**, with **MySQL** (GORM) or **Azure Table Storage** as swappable data stores. Docker Compose orchestrates all services.
 
-- **Backend entry point**: `backend/api/main.go` — loads config, initializes DB, sets up Gin router, runs with graceful shutdown.
-- **Frontend entry point**: `frontend/src/main.tsx` → `App.tsx` → `routes.tsx` for page routing.
-- Backend serves API at `:8081`, frontend at `:3000`. Frontend proxies to backend via axios (`frontend/src/api/config.ts`).
+**Bootstrap flow**: `backend/api/main.go` → `config.LoadConfig()` → `database.NewRepository(cfg)` (factory selects MySQL or Azure based on `USE_AZURE_TABLE`) → `routes.SetupRoutes(router, repo, healthChecker, cfg)` → `http.Server` with graceful shutdown (`SIGINT`/`SIGTERM`).
 
-## Backend Structure & Patterns
+**Ports**: Backend `:8081` on host, frontend `:3000` in dev. Inside Docker, nginx and Vite proxy `/api` to `backend:8080`. Local non-Docker dev hits `localhost:8081` directly (`frontend/src/api/config.ts`).
+
+## Backend Structure
 
 ```
 backend/
-  api/main.go              # Service bootstrap (config → DB → router → server)
+  api/main.go                    # Bootstrap: config → repo → router → server → shutdown
   internal/
-    api/routes/routes.go   # All route registration (Gin route groups)
-    api/handlers/           # HTTP handlers (items.go uses Handler struct with Repository)
-    api/middleware/          # CORS, Logger, Recovery middleware
-    config/config.go        # Env-based config with .env support (godotenv)
-    database/               # DB layer: factory.go, migrations.go, repository.go, errors.go
-    database/azure/         # Azure Table Storage alternative backend
-    models/models.go        # Domain models (Item, User) + Repository interface
-    health/                 # Liveness/readiness probes
-  pkg/dberrors/             # Shared DB error types
+    api/routes/routes.go         # All route registration + middleware ordering
+    api/handlers/items.go        # CRUD handler pattern (reference implementation)
+    api/handlers/health.go       # Health handlers (closure-injection, not Handler struct)
+    api/handlers/rate_limiter.go # Per-IP sliding window, returned from SetupRoutes for shutdown
+    api/handlers/mock_repository.go  # In-memory mock for tests (same package)
+    api/middleware/middleware.go  # CORS, Logger, Recovery, RequestID, MaxBodySize
+    config/config.go             # Env vars with godotenv .env fallback, typed config structs
+    database/factory.go          # MySQL connection with retry (5x, 2s delay)
+    database/repository.go       # NewRepository() factory: MySQL vs Azure Table
+    database/migrations.go       # Versioned migrations via schema.Migrator, auto-run on startup
+    database/errors.go           # Re-exports from pkg/dberrors (single source of truth)
+    models/models.go             # Domain models + Repository interface + Filter/Pagination
+    models/validation.go         # Validator interface implementations
+    health/health.go             # Dependency health checks (liveness/readiness)
+  pkg/dberrors/errors.go         # Canonical error types: ErrNotFound, ErrDuplicateKey, ErrValidation
 ```
 
-**Key patterns:**
-- **Repository interface** (`models.Repository`) abstracts data access. Implementations: `GenericRepository` (GORM/MySQL) and `azure.TableRepository`. Selected at startup via `database.NewRepository()` factory based on config.
-- **Handler struct** (`handlers.Handler`) receives a `Repository` via constructor injection (`NewHandler(repo)`). Use this pattern for new resource handlers.
-- **Routes**: Registered in `internal/api/routes/routes.go` using Gin route groups. Health routes at `/health/*`, API resources under `/api/v1/*`.
-- **Error handling**: Custom `DatabaseError` type in `internal/database/errors.go` with sentinel errors (`ErrNotFound`, `ErrDuplicateKey`, `ErrValidation`). Use `errors.As`/`errors.Is` for checking. See `handleDBError()` in `handlers/items.go`.
-- **Migrations**: Version-based in `internal/database/migrations.go` using `schema.Migrator`. Run automatically on startup.
-- **Swagger**: Comments on handler functions generate docs via `swag init -g api/main.go`. Run `make docs` to regenerate.
-- **Config**: All settings via env vars (see `docker-compose.yml` for the full list). Loaded by `config.LoadConfig()` with godotenv `.env` fallback.
+## Key Backend Patterns
+
+**Repository interface** (`models.Repository`): All data access uses `Create`, `FindByID`, `Update`, `Delete`, `List` — all take `context.Context` first. Two implementations: `GenericRepository` (GORM/MySQL) and `azure.TableRepository`. The repository auto-calls `Validate()` on create/update if the model implements `Validator`.
+
+**Handler struct**: `handlers.Handler` holds `models.Repository` via constructor injection (`NewHandler(repo)`). CRUD handlers are receiver methods. Health handlers use a different pattern — factory functions returning `gin.HandlerFunc` with `*health.HealthChecker` via closure. If a new resource needs dependencies beyond Repository, create a separate handler struct.
+
+**Error flow**: Repository returns `*dberrors.DatabaseError` wrapping sentinel errors → `handleDBError()` in `handlers/items.go` maps via `errors.As`/`errors.Is` to HTTP status (400 validation, 404 not found, 409 duplicate/version conflict, 500 internal). **Never expose raw error messages for 500s** — always return `"Internal server error"`.
+
+**Optimistic locking**: Models embed `Version uint` field. Repository `Update()` uses `WHERE version = ?` — returns `"version mismatch"` error (mapped to 409). Handlers read-then-update: if client sends `Version > 0`, it overrides; if 0 (omitted), uses the just-read version.
+
+**Filter whitelist**: `GenericRepository` has `allowedFilterFields` map. `NewRepository()` hardcodes Item fields ("name", "price"). New entities need `NewRepositoryWithFilterFields()` or the existing repo must be extended.
+
+**Routes registration**: `SetupRoutes()` returns `*RateLimiter` (caller must call `Stop()` on shutdown). Middleware order: RequestID → Logger → Recovery → CORS → MaxBodySize (1MB). Health at `/health/*` (no rate limit), API at `/api/v1/*` (100 req/min per IP).
 
 ## Frontend Structure
 
 ```
 frontend/src/
-  api/client.ts     # Axios instance with interceptors
-  api/config.ts     # API_BASE_URL (localhost:8081 dev, /api prod)
-  routes.tsx        # React Router route definitions
-  components/Layout # Shared layout wrapper
-  pages/            # Page components (Home, Health)
+  api/config.ts          # API_BASE_URL: localhost:8081 (dev) | /api (prod)
+  api/client.ts          # Axios instance + service objects (e.g., healthService)
+  routes.tsx             # Route definitions: / → Home, /health → Health
+  components/Layout/     # AppBar + nav + footer shell
+  pages/{Name}/index.tsx # Page components (one dir per page)
 ```
 
-Uses MUI for components, react-router-dom for routing, axios for HTTP. Add new pages in `pages/`, register in `routes.tsx`.
+**Patterns**: MUI components (no raw HTML), `sx` prop for styling, functional components only, `useState`/`useEffect` for state, service objects with async methods for API calls. New pages: create `pages/{Name}/index.tsx`, register in `routes.tsx`, add nav in `Layout/index.tsx`.
 
 ## Development Commands
 
 | Task | Command |
 |---|---|
 | Full stack (Docker) | `make dev` |
-| Backend only (Docker) | `make dev-backend` |
-| Frontend only (Docker) | `make dev-frontend` |
-| Backend tests (unit, no DB) | `make test-backend` or `cd backend && go test ./... -v -short` |
-| Backend tests (with MySQL) | `make test-backend-all` (starts MySQL container) |
-| Azure integration tests | `make test-backend-azure-integration` |
+| Backend tests (unit, no DB) | `cd backend && go test ./... -v -short` |
+| All backend tests (unit + integration) | `make test-backend-all` (starts MySQL + Azurite) |
+| Frontend tests | `cd frontend && npm test` |
+| E2E tests | `make test-e2e` (starts infra + backend + Playwright) |
+| Swagger docs | `cd backend && make docs` (runs `swag init -g api/main.go`) |
 | Coverage (80% threshold) | `cd backend && make test-coverage` |
-| Swagger docs | `make docs` or `cd backend && make docs` |
+| Lint | `make lint` (`go vet` + `npm run lint`) |
 | Install deps | `make install` |
-| Lint | `make lint` (runs `go vet` + `npm run lint`) |
-| MySQL shell | `make mysql-shell` |
 
 ## Testing Conventions
 
-- Backend tests use `testify/assert` and table-driven tests (`tests := []struct{...}`).
-- Handler tests use `MockRepository` (in-memory, defined in `handlers/mock_repository.go`) — no DB needed for unit tests.
-- Test setup: `gin.SetMode(gin.TestMode)`, `httptest.NewRecorder()`, route setup via `setupTestRouter()`.
-- JSON schema validation in tests via `gojsonschema`.
-- Tests are parallelized (`t.Parallel()`).
-- Integration tests are tagged by name pattern: `TestDatabase*` (MySQL), `TestAzureTable*`/`TestAzure*Integration` (Azure).
+**Backend**: `testify/assert`, table-driven (`tests := []struct{...}` + `t.Run`), `t.Parallel()` on parent and subtests, capture loop var `tt := tt`. Use `MockRepository` (in-memory, same package as handlers) — type-asserts to `*models.Item`, must be extended for new entity types. Test setup: `setupTestRouter()` returns `(*gin.Engine, *MockRepository)`. JSON responses validated against schemas in `test_schemas.go` via `gojsonschema`.
+
+**Frontend**: Vitest + Testing Library (unit), Playwright (e2e).
+
+**Integration test naming**: `TestDatabase*` (MySQL), `TestAzureTable*`/`TestAzure*Integration` (Azure).
 
 ## Adding a New API Resource
 
-1. Define model in `internal/models/models.go` (embed `Base` for ID/timestamps/soft-delete).
-2. Add migration in `internal/database/migrations.go`.
-3. Create handler file in `internal/api/handlers/` — use `Handler` struct with `Repository` dependency.
-4. Register routes in `internal/api/routes/routes.go` under the `/api/v1` group.
-5. Add Swagger comment annotations on handler functions, then run `make docs`.
-6. Write tests with `MockRepository` and table-driven test pattern from `items_test.go`.
+1. Model in `internal/models/models.go` (embed `Base` for ID/timestamps/soft-delete)
+2. Validation in `internal/models/validation.go` (implement `Validator` interface)
+3. Migration in `internal/database/migrations.go` (incrementing version string)
+4. Handler file in `internal/api/handlers/` (follow `items.go` CRUD pattern with `handleDBError()`)
+5. Routes in `internal/api/routes/routes.go` under `/api/v1` group
+6. Swagger annotations on handlers, then `cd backend && make docs`
+7. Tests with `MockRepository` + table-driven pattern (extend mock if new entity type)
+8. Frontend service methods in `api/client.ts`, new page in `pages/`, register in `routes.tsx`
+
+See `.github/instructions/api-extension.instructions.md` for detailed examples.
