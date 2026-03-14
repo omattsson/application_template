@@ -185,7 +185,8 @@ func TestNewMessage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			msg := NewMessage(tt.msgType, tt.payload)
+			msg, err := NewMessage(tt.msgType, tt.payload)
+			assert.NoError(t, err)
 			assert.Equal(t, tt.wantType, msg.Type)
 			assert.JSONEq(t, tt.wantPayload, string(msg.Payload))
 		})
@@ -195,11 +196,14 @@ func TestNewMessage(t *testing.T) {
 func TestMessage_Bytes(t *testing.T) {
 	t.Parallel()
 
-	msg := NewMessage("item.updated", map[string]int{"id": 1})
-	b := msg.Bytes()
+	msg, err := NewMessage("item.updated", map[string]int{"id": 1})
+	assert.NoError(t, err)
+
+	b, err := msg.Bytes()
+	assert.NoError(t, err)
 
 	var parsed Message
-	err := json.Unmarshal(b, &parsed)
+	err = json.Unmarshal(b, &parsed)
 	assert.NoError(t, err)
 	assert.Equal(t, "item.updated", parsed.Type)
 	assert.JSONEq(t, `{"id":1}`, string(parsed.Payload))

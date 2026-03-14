@@ -34,16 +34,20 @@ type Client struct {
 // NewClient creates a new Client attached to the given hub and connection,
 // registers it with the hub, and starts the read/write pumps.
 // The caller should not interact with conn after calling NewClient.
-func NewClient(hub *Hub, conn *websocket.Conn) *Client {
+// Returns an error if the hub has already been shut down.
+func NewClient(hub *Hub, conn *websocket.Conn) (*Client, error) {
 	client := &Client{
 		hub:  hub,
 		conn: conn,
 		send: make(chan []byte, sendBufferSize),
 	}
-	hub.register <- client
+	if err := hub.Register(client); err != nil {
+		conn.Close()
+		return nil, err
+	}
 	go client.writePump()
 	go client.readPump()
-	return client
+	return client, nil
 }
 
 // readPump pumps messages from the WebSocket connection to the hub.
@@ -54,7 +58,7 @@ func (c *Client) readPump() {
 		if r := recover(); r != nil {
 			slog.Error("Panic in WebSocket readPump", "recover", r)
 		}
-		c.hub.unregister <- c
+		c.hub.Unregister(c)
 		c.conn.Close()
 	}()
 

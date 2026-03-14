@@ -7,6 +7,13 @@ import (
 	"sync"
 )
 
+// ErrHubClosed is returned when attempting to register a client on a shut-down hub.
+var ErrHubClosed = errHubClosed{}
+
+type errHubClosed struct{}
+
+func (errHubClosed) Error() string { return "hub is closed" }
+
 // BroadcastSender is implemented by any type that can broadcast messages
 // to all connected WebSocket clients. Use this interface for decoupled
 // dependency injection (e.g., handlers broadcast events without importing Hub).
@@ -34,6 +41,9 @@ type Hub struct {
 
 	// done signals the Run loop to stop.
 	done chan struct{}
+
+	// shutdownOnce ensures Shutdown is idempotent and safe to call concurrently.
+	shutdownOnce sync.Once
 }
 
 // NewHub creates a new Hub ready to accept clients.
@@ -99,8 +109,31 @@ func (h *Hub) Broadcast(message []byte) {
 }
 
 // Shutdown gracefully stops the hub's Run loop and closes all client connections.
+// It is safe to call multiple times and concurrently.
 func (h *Hub) Shutdown() {
-	close(h.done)
+	h.shutdownOnce.Do(func() {
+		close(h.done)
+	})
+}
+
+// Register safely registers a client with the hub. It returns ErrHubClosed if
+// the hub has been shut down, preventing the caller from blocking forever.
+func (h *Hub) Register(c *Client) error {
+	select {
+	case h.register <- c:
+		return nil
+	case <-h.done:
+		return ErrHubClosed
+	}
+}
+
+// Unregister safely requests client removal from the hub. If the hub has
+// already been shut down the call is a no-op, preventing goroutine leaks.
+func (h *Hub) Unregister(c *Client) {
+	select {
+	case h.unregister <- c:
+	case <-h.done:
+	}
 }
 
 // ClientCount returns the current number of connected clients.
