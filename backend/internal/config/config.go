@@ -92,8 +92,10 @@ type ServerConfig struct {
 	// enforced inside the WebSocket write pump (websocket/client.go), so a
 	// server-level write timeout must be disabled to prevent premature
 	// termination of idle WebSocket connections. Standard REST handlers complete
-	// synchronously with sub-millisecond response writes and are not a concern
-	// in practice; per-handler context deadlines can be applied if required.
+	// quickly in practice, but setting WriteTimeout to 0 does mean slow or
+	// stalled clients can hold a connection indefinitely. Operators who want
+	// protection against slow clients should set SERVER_WRITE_TIMEOUT to a
+	// positive value (e.g. 30s); per-handler context deadlines can also be applied.
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration

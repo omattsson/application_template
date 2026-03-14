@@ -122,8 +122,8 @@ func TestLoadConfig(t *testing.T) {
 		assert.Empty(t, config.Server.Host)
 		assert.Equal(t, "8081", config.Server.Port)
 		assert.Equal(t, 10*time.Second, config.Server.ReadTimeout)
-		assert.Equal(t, time.Duration(0), config.Server.WriteTimeout) // disabled; per-write deadlines enforced in WebSocket write pump
-
+		assert.Equal(t, time.Duration(0), config.Server.WriteTimeout) // disabled; per-write deadlines enforced in WebSocket write pump				assert.Equal(t, 30*time.Second, config.Server.IdleTimeout)
+		assert.Equal(t, 30*time.Second, config.Server.ShutdownTimeout)
 		// Check default logging config
 		assert.Equal(t, "info", config.Logging.Level)
 		assert.Empty(t, config.Logging.File)
