@@ -3,13 +3,13 @@ name: Code Reviewer
 description: Senior engineer who reviews PRs and code changes for security, scalability, correctness, pattern consistency, and architecture quality.
 model: Claude Opus 4.6 (copilot)
 tools:
-  - codebase
+  - search/codebase
   - terminal
   - github
-  - fetch
-  - problems
+  - web/fetch
+  - read/problems
   - edit
-  - changes
+  - search/changes
   - agent
   - todo
   - execute

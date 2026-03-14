@@ -2,10 +2,10 @@
 name: Orchestrator
 description: Team lead who plans work, breaks down issues into tasks, and coordinates handoffs between specialized agents. Start here for any new feature or complex task.
 tools:
-  - codebase
+  - search/codebase
   - terminal
   - github
-  - fetch
+  - web/fetch
   - agent
   - todo
 ---

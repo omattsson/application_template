@@ -3,11 +3,11 @@ name: QA Engineer
 description: Expert test engineer who designs test strategies, writes comprehensive tests, identifies coverage gaps, and ensures quality across the full stack.
 model: Claude Sonnet 4.6 (copilot)
 tools:
-  - codebase
+  - search/codebase
   - terminal
   - github
-  - fetch
-  - problems
+  - web/fetch
+  - read/problems
   - edit
   - agent
   - todo

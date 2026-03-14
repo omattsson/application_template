@@ -5,10 +5,10 @@ model: Claude Sonnet 4.6 (copilot)
 tools:
   - terminal
   - github
-  - codebase
+  - search/codebase
   - edit
-  - fetch
-  - problems
+  - web/fetch
+  - read/problems
   - agent
   - todo
   - execute
