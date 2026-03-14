@@ -1,7 +1,7 @@
 ---
 name: Frontend Developer
 description: Expert React/TypeScript frontend developer for implementing UI features from GitHub issues. Builds accessible, performant, well-tested pages following this project's MUI-based patterns.
-model: Claude Sonnet 4.6 (copilot)
+model: Claude Opus 4.6 (copilot)
 tools:
   - search/codebase
   - terminal
