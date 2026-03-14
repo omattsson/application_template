@@ -932,3 +932,362 @@ func TestHandleDBError(t *testing.T) {
 		})
 	}
 }
+
+// setupTestRouterWithHub creates a test router wired with the given BroadcastSender.
+func setupTestRouterWithHub(hub *MockBroadcastSender) (*gin.Engine, *MockRepository) {
+	gin.SetMode(gin.TestMode)
+	router := gin.Default()
+	mockRepo := NewMockRepository()
+	handler := NewHandlerWithHub(mockRepo, hub)
+
+	rateLimiter := NewRateLimiter(30, time.Second)
+
+	items := router.Group("/api/v1/items")
+	items.Use(rateLimiter.RateLimit())
+	{
+		items.GET("", handler.GetItems)
+		items.GET("/:id", handler.GetItem)
+		items.POST("", handler.CreateItem)
+		items.PUT("/:id", handler.UpdateItem)
+		items.DELETE("/:id", handler.DeleteItem)
+	}
+
+	return router, mockRepo
+}
+
+func TestBroadcastItemEvents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		setup    func(router *gin.Engine, mockRepo *MockRepository) *http.Request
+		wantCode int
+		wantType string
+		wantMsgs int
+	}{
+		{
+			name: "CreateItem broadcasts item.created",
+			setup: func(router *gin.Engine, _ *MockRepository) *http.Request {
+				body := `{"name":"Broadcast Widget","price":9.99}`
+				req, _ := http.NewRequest("POST", "/api/v1/items", bytes.NewBufferString(body))
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			},
+			wantCode: http.StatusCreated,
+			wantType: "item.created",
+			wantMsgs: 1,
+		},
+		{
+			name: "UpdateItem broadcasts item.updated",
+			setup: func(router *gin.Engine, mockRepo *MockRepository) *http.Request {
+				// Pre-create an item
+				item := &models.Item{Name: "Original", Price: 1.00}
+				_ = mockRepo.Create(context.Background(), item)
+				id := fmt.Sprint(item.ID)
+
+				body := `{"name":"Updated","price":2.00}`
+				req, _ := http.NewRequest("PUT", "/api/v1/items/"+id, bytes.NewBufferString(body))
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			},
+			wantCode: http.StatusOK,
+			wantType: "item.updated",
+			wantMsgs: 1,
+		},
+		{
+			name: "DeleteItem broadcasts item.deleted",
+			setup: func(router *gin.Engine, mockRepo *MockRepository) *http.Request {
+				item := &models.Item{Name: "ToDelete", Price: 1.00}
+				_ = mockRepo.Create(context.Background(), item)
+				id := fmt.Sprint(item.ID)
+
+				req, _ := http.NewRequest("DELETE", "/api/v1/items/"+id, nil)
+				return req
+			},
+			wantCode: http.StatusNoContent,
+			wantType: "item.deleted",
+			wantMsgs: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			hub := &MockBroadcastSender{}
+			router, mockRepo := setupTestRouterWithHub(hub)
+
+			req := tt.setup(router, mockRepo)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.wantCode, w.Code)
+
+			msgs := hub.Messages()
+			assert.Len(t, msgs, tt.wantMsgs)
+			if len(msgs) > 0 {
+				var env struct {
+					Type string `json:"type"`
+				}
+				assert.NoError(t, json.Unmarshal(msgs[0], &env))
+				assert.Equal(t, tt.wantType, env.Type)
+			}
+		})
+	}
+}
+
+func TestBroadcastNilHub(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		setup    func(router *gin.Engine, mockRepo *MockRepository) *http.Request
+		wantCode int
+	}{
+		{
+			name: "CreateItem with nil hub does not panic",
+			setup: func(_ *gin.Engine, _ *MockRepository) *http.Request {
+				body := `{"name":"NilHubWidget","price":1.00}`
+				req, _ := http.NewRequest("POST", "/api/v1/items", bytes.NewBufferString(body))
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			},
+			wantCode: http.StatusCreated,
+		},
+		{
+			name: "UpdateItem with nil hub does not panic",
+			setup: func(_ *gin.Engine, mockRepo *MockRepository) *http.Request {
+				item := &models.Item{Name: "NilHubItem", Price: 1.00}
+				_ = mockRepo.Create(context.Background(), item)
+				id := fmt.Sprint(item.ID)
+
+				body := `{"name":"Updated","price":2.00}`
+				req, _ := http.NewRequest("PUT", "/api/v1/items/"+id, bytes.NewBufferString(body))
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			},
+			wantCode: http.StatusOK,
+		},
+		{
+			name: "DeleteItem with nil hub does not panic",
+			setup: func(_ *gin.Engine, mockRepo *MockRepository) *http.Request {
+				item := &models.Item{Name: "NilHubDelete", Price: 1.00}
+				_ = mockRepo.Create(context.Background(), item)
+				id := fmt.Sprint(item.ID)
+
+				req, _ := http.NewRequest("DELETE", "/api/v1/items/"+id, nil)
+				return req
+			},
+			wantCode: http.StatusNoContent,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Use NewHandler (no hub) — existing setupTestRouter pattern
+			gin.SetMode(gin.TestMode)
+			router := gin.Default()
+			mockRepo := NewMockRepository()
+			handler := NewHandler(mockRepo) // nil hub
+			rateLimiter := NewRateLimiter(30, time.Second)
+
+			items := router.Group("/api/v1/items")
+			items.Use(rateLimiter.RateLimit())
+			{
+				items.GET("", handler.GetItems)
+				items.GET("/:id", handler.GetItem)
+				items.POST("", handler.CreateItem)
+				items.PUT("/:id", handler.UpdateItem)
+				items.DELETE("/:id", handler.DeleteItem)
+			}
+
+			req := tt.setup(router, mockRepo)
+			w := httptest.NewRecorder()
+
+			// assert.NotPanics wraps the call
+			assert.NotPanics(t, func() {
+				router.ServeHTTP(w, req)
+			})
+			assert.Equal(t, tt.wantCode, w.Code)
+		})
+	}
+}
+
+// TestBroadcastNoEventOnError verifies that no broadcast is sent when the
+// repository returns an error for Create, Update, or Delete operations.
+func TestBroadcastNoEventOnError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		setup    func(mockRepo *MockRepository) *http.Request
+		wantCode int
+	}{
+		{
+			name: "CreateItem repo error → no broadcast",
+			setup: func(mockRepo *MockRepository) *http.Request {
+				mockRepo.SetError(errors.New("database connection failed"))
+				body := `{"name":"Widget","price":9.99}`
+				req, _ := http.NewRequest("POST", "/api/v1/items", bytes.NewBufferString(body))
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			},
+			wantCode: http.StatusInternalServerError,
+		},
+		{
+			name: "UpdateItem FindByID error → no broadcast",
+			setup: func(mockRepo *MockRepository) *http.Request {
+				mockRepo.SetError(errors.New("database connection failed"))
+				body := `{"name":"Updated","price":2.00}`
+				req, _ := http.NewRequest("PUT", "/api/v1/items/1", bytes.NewBufferString(body))
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			},
+			wantCode: http.StatusInternalServerError,
+		},
+		{
+			name: "DeleteItem repo error → no broadcast",
+			setup: func(mockRepo *MockRepository) *http.Request {
+				mockRepo.SetError(errors.New("database connection failed"))
+				req, _ := http.NewRequest("DELETE", "/api/v1/items/1", nil)
+				return req
+			},
+			wantCode: http.StatusInternalServerError,
+		},
+		{
+			name: "UpdateItem Update error → no broadcast",
+			setup: func(mockRepo *MockRepository) *http.Request {
+				item := &models.Item{Name: "Existing", Price: 1.00}
+				_ = mockRepo.Create(context.Background(), item)
+				mockRepo.SetUpdateError(errors.New("update failed"))
+				body := fmt.Sprintf(`{"name":"Updated","price":2.00,"version":%d}`, item.Version)
+				req, _ := http.NewRequest("PUT", fmt.Sprintf("/api/v1/items/%d", item.ID), bytes.NewBufferString(body))
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			},
+			wantCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			hub := &MockBroadcastSender{}
+			router, mockRepo := setupTestRouterWithHub(hub)
+			req := tt.setup(mockRepo)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			assert.Empty(t, hub.Messages(), "no broadcast expected on error")
+		})
+	}
+}
+
+// TestBroadcastPayloadContent verifies that the payload embedded in each
+// broadcast message contains the correct entity data — not just the right type.
+func TestBroadcastPayloadContent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CreateItem payload contains item fields", func(t *testing.T) {
+		t.Parallel()
+
+		hub := &MockBroadcastSender{}
+		router, _ := setupTestRouterWithHub(hub)
+
+		body := `{"name":"Payload Widget","price":12.34}`
+		req, _ := http.NewRequest("POST", "/api/v1/items", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
+		msgs := hub.Messages()
+		assert.Len(t, msgs, 1)
+
+		var env struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		assert.NoError(t, json.Unmarshal(msgs[0], &env))
+		assert.Equal(t, "item.created", env.Type)
+
+		var item models.Item
+		assert.NoError(t, json.Unmarshal(env.Payload, &item))
+		assert.Equal(t, "Payload Widget", item.Name)
+		assert.InDelta(t, 12.34, item.Price, 0.001)
+		assert.NotZero(t, item.ID)
+	})
+
+	t.Run("UpdateItem payload contains updated fields", func(t *testing.T) {
+		t.Parallel()
+
+		hub := &MockBroadcastSender{}
+		router, mockRepo := setupTestRouterWithHub(hub)
+
+		existing := &models.Item{Name: "Before", Price: 1.00}
+		_ = mockRepo.Create(context.Background(), existing)
+		id := fmt.Sprint(existing.ID)
+
+		body := `{"name":"After","price":5.55}`
+		req, _ := http.NewRequest("PUT", "/api/v1/items/"+id, bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		msgs := hub.Messages()
+		assert.Len(t, msgs, 1)
+
+		var env struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		assert.NoError(t, json.Unmarshal(msgs[0], &env))
+		assert.Equal(t, "item.updated", env.Type)
+
+		var item models.Item
+		assert.NoError(t, json.Unmarshal(env.Payload, &item))
+		assert.Equal(t, "After", item.Name)
+		assert.InDelta(t, 5.55, item.Price, 0.001)
+		assert.Equal(t, existing.ID, item.ID)
+	})
+
+	t.Run("DeleteItem payload contains item ID", func(t *testing.T) {
+		t.Parallel()
+
+		hub := &MockBroadcastSender{}
+		router, mockRepo := setupTestRouterWithHub(hub)
+
+		existing := &models.Item{Name: "ToDelete", Price: 1.00}
+		_ = mockRepo.Create(context.Background(), existing)
+		id := existing.ID
+
+		req, _ := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/items/%d", id), nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNoContent, w.Code)
+		msgs := hub.Messages()
+		assert.Len(t, msgs, 1)
+
+		var env struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		assert.NoError(t, json.Unmarshal(msgs[0], &env))
+		assert.Equal(t, "item.deleted", env.Type)
+
+		var payload struct {
+			ID uint64 `json:"id"`
+		}
+		assert.NoError(t, json.Unmarshal(env.Payload, &payload))
+		assert.Equal(t, uint64(id), payload.ID)
+	})
+}

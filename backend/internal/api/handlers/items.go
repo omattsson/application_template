@@ -2,22 +2,51 @@ package handlers
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"backend/internal/database"
 	"backend/internal/models"
+	"backend/internal/websocket"
 
 	"github.com/gin-gonic/gin"
 )
 
+// broadcastSender broadcasts serialised WebSocket messages to all connected clients.
+type broadcastSender interface {
+	Broadcast(message []byte)
+}
+
 type Handler struct {
 	repository models.Repository
+	hub        broadcastSender
 }
 
 func NewHandler(repository models.Repository) *Handler {
 	return &Handler{repository: repository}
+}
+
+func NewHandlerWithHub(repository models.Repository, hub broadcastSender) *Handler {
+	return &Handler{repository: repository, hub: hub}
+}
+
+func (h *Handler) broadcast(msgType string, payload interface{}) {
+	if h.hub == nil {
+		return
+	}
+	msg, err := websocket.NewMessage(msgType, payload)
+	if err != nil {
+		slog.Error("Failed to create WebSocket message", "type", msgType, "error", err)
+		return
+	}
+	b, err := msg.Bytes()
+	if err != nil {
+		slog.Error("Failed to serialise WebSocket message", "type", msgType, "error", err)
+		return
+	}
+	h.hub.Broadcast(b)
 }
 
 func handleDBError(err error) (int, string) {
@@ -77,6 +106,7 @@ func (h *Handler) CreateItem(c *gin.Context) {
 		return
 	}
 
+	h.broadcast("item.created", item)
 	c.JSON(http.StatusCreated, item)
 }
 
@@ -220,6 +250,7 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 		return
 	}
 
+	h.broadcast("item.updated", currentItem)
 	c.JSON(http.StatusOK, currentItem)
 }
 
@@ -248,5 +279,6 @@ func (h *Handler) DeleteItem(c *gin.Context) {
 		return
 	}
 
+	h.broadcast("item.deleted", gin.H{"id": id})
 	c.Status(http.StatusNoContent)
 }

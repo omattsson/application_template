@@ -16,6 +16,7 @@ type MockRepository struct {
 	sync.RWMutex                       // size: 8
 	items        map[uint]*models.Item // size: 8 (pointer)
 	err          error                 // size: 8 (interface)
+	updateError  error                 // size: 8 (interface)
 	nextID       uint                  // size: 8
 }
 
@@ -71,6 +72,10 @@ func (m *MockRepository) FindByID(_ context.Context, id uint, dest interface{}) 
 func (m *MockRepository) Update(_ context.Context, entity interface{}) error {
 	m.Lock()
 	defer m.Unlock()
+
+	if m.updateError != nil {
+		return m.updateError
+	}
 
 	if m.err != nil {
 		return m.err
@@ -233,4 +238,10 @@ func (m *MockRepository) SetError(err error) {
 	m.Lock()
 	defer m.Unlock()
 	m.err = err
+}
+
+func (m *MockRepository) SetUpdateError(err error) {
+	m.Lock()
+	defer m.Unlock()
+	m.updateError = err
 }
