@@ -18,12 +18,16 @@ func (m *MockBroadcastSender) Broadcast(message []byte) {
 	m.messages = append(m.messages, cp)
 }
 
-// Messages returns a copy of all recorded messages.
+// Messages returns a deep copy of all recorded messages.
 func (m *MockBroadcastSender) Messages() [][]byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	result := make([][]byte, len(m.messages))
-	copy(result, m.messages)
+	for i, msg := range m.messages {
+		cp := make([]byte, len(msg))
+		copy(cp, msg)
+		result[i] = cp
+	}
 	return result
 }
 

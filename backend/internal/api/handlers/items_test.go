@@ -934,13 +934,15 @@ func TestHandleDBError(t *testing.T) {
 }
 
 // setupTestRouterWithHub creates a test router wired with the given BroadcastSender.
-func setupTestRouterWithHub(hub *MockBroadcastSender) (*gin.Engine, *MockRepository) {
+func setupTestRouterWithHub(t *testing.T, hub *MockBroadcastSender) (*gin.Engine, *MockRepository) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	router := gin.Default()
 	mockRepo := NewMockRepository()
 	handler := NewHandlerWithHub(mockRepo, hub)
 
 	rateLimiter := NewRateLimiter(30, time.Second)
+	t.Cleanup(rateLimiter.Stop)
 
 	items := router.Group("/api/v1/items")
 	items.Use(rateLimiter.RateLimit())
@@ -1016,7 +1018,7 @@ func TestBroadcastItemEvents(t *testing.T) {
 			t.Parallel()
 
 			hub := &MockBroadcastSender{}
-			router, mockRepo := setupTestRouterWithHub(hub)
+			router, mockRepo := setupTestRouterWithHub(t, hub)
 
 			req := tt.setup(router, mockRepo)
 			w := httptest.NewRecorder()
@@ -1179,7 +1181,7 @@ func TestBroadcastNoEventOnError(t *testing.T) {
 			t.Parallel()
 
 			hub := &MockBroadcastSender{}
-			router, mockRepo := setupTestRouterWithHub(hub)
+			router, mockRepo := setupTestRouterWithHub(t, hub)
 			req := tt.setup(mockRepo)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
@@ -1199,7 +1201,7 @@ func TestBroadcastPayloadContent(t *testing.T) {
 		t.Parallel()
 
 		hub := &MockBroadcastSender{}
-		router, _ := setupTestRouterWithHub(hub)
+		router, _ := setupTestRouterWithHub(t, hub)
 
 		body := `{"name":"Payload Widget","price":12.34}`
 		req, _ := http.NewRequest("POST", "/api/v1/items", bytes.NewBufferString(body))
@@ -1229,7 +1231,7 @@ func TestBroadcastPayloadContent(t *testing.T) {
 		t.Parallel()
 
 		hub := &MockBroadcastSender{}
-		router, mockRepo := setupTestRouterWithHub(hub)
+		router, mockRepo := setupTestRouterWithHub(t, hub)
 
 		existing := &models.Item{Name: "Before", Price: 1.00}
 		_ = mockRepo.Create(context.Background(), existing)
@@ -1263,7 +1265,7 @@ func TestBroadcastPayloadContent(t *testing.T) {
 		t.Parallel()
 
 		hub := &MockBroadcastSender{}
-		router, mockRepo := setupTestRouterWithHub(hub)
+		router, mockRepo := setupTestRouterWithHub(t, hub)
 
 		existing := &models.Item{Name: "ToDelete", Price: 1.00}
 		_ = mockRepo.Create(context.Background(), existing)

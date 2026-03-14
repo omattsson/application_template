@@ -14,21 +14,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// broadcastSender broadcasts serialised WebSocket messages to all connected clients.
-type broadcastSender interface {
-	Broadcast(message []byte)
-}
-
 type Handler struct {
 	repository models.Repository
-	hub        broadcastSender
+	hub        websocket.BroadcastSender
 }
 
 func NewHandler(repository models.Repository) *Handler {
 	return &Handler{repository: repository}
 }
 
-func NewHandlerWithHub(repository models.Repository, hub broadcastSender) *Handler {
+func NewHandlerWithHub(repository models.Repository, hub websocket.BroadcastSender) *Handler {
 	return &Handler{repository: repository, hub: hub}
 }
 
