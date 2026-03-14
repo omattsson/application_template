@@ -46,7 +46,7 @@ func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker
 		v1.GET("/ping", handlers.Ping)
 
 		// Items endpoints
-		itemsHandler := handlers.NewHandler(repository)
+		itemsHandler := handlers.NewHandlerWithHub(repository, hub)
 		items := v1.Group("/items")
 		{
 			items.GET("", itemsHandler.GetItems)
