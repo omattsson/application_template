@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Typography,
   Box,
@@ -32,42 +32,61 @@ const Items = () => {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast>({ open: false, message: '', severity: 'success' });
   const { subscribe } = useWebSocketContext();
+  const fetchCounterRef = useRef(0);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchItems = useCallback(async (silent = false) => {
+    fetchCounterRef.current += 1;
+    const myCounter = fetchCounterRef.current;
+    try {
+      const data = await itemService.list();
+      if (myCounter === fetchCounterRef.current) {
+        setItems(data);
+        setError(null);
+      }
+    } catch {
+      if (!silent && myCounter === fetchCounterRef.current) {
+        setError('Failed to load items');
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    const fetchItems = async () => {
-      try {
-        const data = await itemService.list();
-        setItems(data);
-      } catch {
-        setError('Failed to load items');
-      } finally {
-        setLoading(false);
-      }
+    const load = async () => {
+      await fetchItems();
+      setLoading(false);
     };
-    fetchItems();
-  }, []);
+    void load();
+  }, [fetchItems]);
 
   useEffect(() => {
     const unsubCreated = subscribe('item.created', (msg: WebSocketMessage) => {
       const item = msg.payload as Item;
       setToast({ open: true, message: `Item '${item.name}' created`, severity: 'success' });
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => { void fetchItems(true); }, 300);
     });
 
     const unsubUpdated = subscribe('item.updated', (msg: WebSocketMessage) => {
       const item = msg.payload as Item;
       setToast({ open: true, message: `Item '${item.name}' updated`, severity: 'info' });
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => { void fetchItems(true); }, 300);
     });
 
     const unsubDeleted = subscribe('item.deleted', () => {
       setToast({ open: true, message: 'Item deleted', severity: 'warning' });
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => { void fetchItems(true); }, 300);
     });
 
     return () => {
       unsubCreated();
       unsubUpdated();
       unsubDeleted();
+      if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [subscribe]);
+  }, [subscribe, fetchItems]);
 
   const handleToastClose = () => {
     setToast((prev) => ({ ...prev, open: false }));
