@@ -1,25 +1,30 @@
 package utils
 
 import (
-	"math/rand"
-	"time"
+	"crypto/rand"
+	"fmt"
+	"math/big"
 )
 
-// Utility function to check for errors and handle them appropriately
-func CheckError(err error) {
-	if err != nil {
-		panic(err) // Handle error as needed
+// GenerateRandomString generates a cryptographically random string of the specified length.
+// Returns an error if length is negative or if the system random source fails.
+func GenerateRandomString(length int) (string, error) {
+	if length < 0 {
+		return "", fmt.Errorf("length must be non-negative, got %d", length)
 	}
-}
+	if length == 0 {
+		return "", nil
+	}
 
-// Function to generate a random string of a specified length
-func GenerateRandomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	var seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	b := make([]byte, length)
 	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))]
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			return "", fmt.Errorf("crypto/rand failure: %w", err)
+		}
+		b[i] = charset[int(n.Int64())]
 	}
-	return string(b)
+	return string(b), nil
 }

@@ -42,7 +42,8 @@ func handleDBError(err error) (int, string) {
 	if strings.Contains(err.Error(), "not found") {
 		return http.StatusNotFound, "Item not found"
 	}
-	return http.StatusInternalServerError, err.Error()
+	// Never leak raw error messages to clients
+	return http.StatusInternalServerError, "Internal server error"
 }
 
 // CreateItem godoc
@@ -67,7 +68,10 @@ func (h *Handler) CreateItem(c *gin.Context) {
 		return
 	}
 
-	if err := h.repository.Create(&item); err != nil {
+	// Version is server-managed; force initial value regardless of client input.
+	item.Version = 1
+
+	if err := h.repository.Create(c.Request.Context(), &item); err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})
 		return
@@ -126,7 +130,7 @@ func (h *Handler) GetItems(c *gin.Context) {
 		conditions = append(conditions, models.Pagination{Limit: limit, Offset: offset})
 	}
 
-	if err := h.repository.List(&items, conditions...); err != nil {
+	if err := h.repository.List(c.Request.Context(), &items, conditions...); err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})
 		return
@@ -152,7 +156,7 @@ func (h *Handler) GetItem(c *gin.Context) {
 	}
 
 	var item models.Item
-	if err := h.repository.FindByID(uint(id), &item); err != nil {
+	if err := h.repository.FindByID(c.Request.Context(), uint(id), &item); err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})
 		return
@@ -181,7 +185,7 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 
 	// Get the current version from the database
 	var currentItem models.Item
-	if err := h.repository.FindByID(uint(id), &currentItem); err != nil {
+	if err := h.repository.FindByID(c.Request.Context(), uint(id), &currentItem); err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})
 		return
@@ -193,23 +197,21 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 		return
 	}
 
-	// Keep all existing fields but update name and price from the request
+	// Update fields from request
 	currentItem.Name = updateItem.Name
 	currentItem.Price = updateItem.Price
 
-	// Version check for optimistic locking (if version was provided in request)
-	if updateItem.Version > 0 && updateItem.Version != currentItem.Version {
-		c.JSON(http.StatusConflict, gin.H{"error": "Item has been modified by another request"})
-		return
+	// Optimistic locking: if the client provided a version, use it so the
+	// repository can detect conflicts. If version=0 (not provided), the
+	// repository uses the version we just read — this still detects conflicts
+	// that occur between our FindByID and the repository's WHERE-version check,
+	// but the client must send the version to guarantee end-to-end safety.
+	if updateItem.Version > 0 {
+		currentItem.Version = updateItem.Version
 	}
 
-	// Make sure we're using the version from the request for optimistic locking
-	currentItem.Version = updateItem.Version
-
-	// We don't increment the version here, the repository will handle that
-
-	if err := h.repository.Update(&currentItem); err != nil {
-		if err.Error() == "version mismatch" {
+	if err := h.repository.Update(c.Request.Context(), &currentItem); err != nil {
+		if strings.Contains(err.Error(), "version mismatch") {
 			c.JSON(http.StatusConflict, gin.H{"error": "Item has been modified by another request"})
 			return
 		}
@@ -237,9 +239,10 @@ func (h *Handler) DeleteItem(c *gin.Context) {
 		return
 	}
 
-	item := &models.Item{}
-	item.ID = uint(id)
-	if err := h.repository.Delete(item); err != nil {
+	// Delete directly — the repository returns ErrNotFound if the item doesn't exist.
+	// This avoids a race condition between a FindByID check and the actual delete.
+	item := &models.Item{Base: models.Base{ID: uint(id)}}
+	if err := h.repository.Delete(c.Request.Context(), item); err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})
 		return

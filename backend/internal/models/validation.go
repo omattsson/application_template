@@ -5,6 +5,9 @@ import (
 	"regexp"
 )
 
+// Compile email regex once at package level for performance.
+var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+
 var (
 	ErrInvalidEmail  = errors.New("invalid email format")
 	ErrEmptyUsername = errors.New("username cannot be empty")
@@ -18,7 +21,6 @@ func (u *User) Validate() error {
 		return ErrEmptyUsername
 	}
 
-	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 	if !emailRegex.MatchString(u.Email) {
 		return ErrInvalidEmail
 	}

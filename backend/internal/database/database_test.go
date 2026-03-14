@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"testing"
 
 	"backend/internal/models"
@@ -115,11 +116,14 @@ func TestItemCRUD(t *testing.T) {
 		t.Parallel()
 		db := setupTestDB(t)
 		require.NoError(t, db.AutoMigrate())
+		repo := models.NewRepository(db.DB)
+		ctx := context.Background()
+
 		item := &models.Item{
 			Name:  "Test Item",
 			Price: 99.99,
 		}
-		err := db.Create(item)
+		err := repo.Create(ctx, item)
 		assert.NoError(t, err)
 		assert.NotZero(t, item.ID)
 	})
@@ -128,16 +132,18 @@ func TestItemCRUD(t *testing.T) {
 		t.Parallel()
 		db := setupTestDB(t)
 		require.NoError(t, db.AutoMigrate())
+		repo := models.NewRepository(db.DB)
+		ctx := context.Background()
 
 		// Create item first
 		initialItem := &models.Item{
 			Name:  "Test Item",
 			Price: 99.99,
 		}
-		require.NoError(t, db.Create(initialItem))
+		require.NoError(t, repo.Create(ctx, initialItem))
 
 		var item models.Item
-		err := db.FindByID(1, &item)
+		err := repo.FindByID(ctx, initialItem.ID, &item)
 		assert.NoError(t, err)
 		assert.Equal(t, "Test Item", item.Name)
 		assert.Equal(t, 99.99, item.Price)
@@ -147,23 +153,26 @@ func TestItemCRUD(t *testing.T) {
 		t.Parallel()
 		db := setupTestDB(t)
 		require.NoError(t, db.AutoMigrate())
+		repo := models.NewRepository(db.DB)
+		ctx := context.Background()
 
 		// Create item first
 		initialItem := &models.Item{
 			Name:  "Test Item",
 			Price: 99.99,
 		}
-		require.NoError(t, db.Create(initialItem))
+		require.NoError(t, repo.Create(ctx, initialItem))
 
 		var item models.Item
-		err := db.FindByID(1, &item)
+		err := repo.FindByID(ctx, initialItem.ID, &item)
 		require.NoError(t, err)
 		item.Price = 199.99
-		err = db.Update(&item)
+		err = repo.Update(ctx, &item)
 		assert.NoError(t, err)
 
 		var updatedItem models.Item
-		err = db.FindByID(1, &updatedItem)
+		err = repo.FindByID(ctx, initialItem.ID, &updatedItem)
+		assert.NoError(t, err)
 		assert.Equal(t, 199.99, updatedItem.Price)
 	})
 
@@ -171,20 +180,64 @@ func TestItemCRUD(t *testing.T) {
 		t.Parallel()
 		db := setupTestDB(t)
 		require.NoError(t, db.AutoMigrate())
+		repo := models.NewRepository(db.DB)
+		ctx := context.Background()
 
 		// Create item first
 		initialItem := &models.Item{
 			Name:  "Test Item",
 			Price: 99.99,
 		}
-		require.NoError(t, db.Create(initialItem))
+		require.NoError(t, repo.Create(ctx, initialItem))
 
-		item := &models.Item{Base: models.Base{ID: 1}}
-		err := db.Delete(item)
+		item := &models.Item{Base: models.Base{ID: initialItem.ID}}
+		err := repo.Delete(ctx, item)
 		assert.NoError(t, err)
 
 		var deleted models.Item
-		err = db.FindByID(1, &deleted)
+		err = repo.FindByID(ctx, initialItem.ID, &deleted)
 		assert.Error(t, err, "Should not find deleted item")
 	})
+
+	t.Run("Optimistic Locking - version mismatch", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NoError(t, db.AutoMigrate())
+		repo := models.NewRepository(db.DB)
+		ctx := context.Background()
+
+		// Create an item (version starts at 1 after create).
+		item := &models.Item{
+			Name:  "Versioned Item",
+			Price: 10.00,
+		}
+		require.NoError(t, repo.Create(ctx, item))
+		assert.Equal(t, uint(1), item.Version)
+
+		// Simulate two concurrent reads.
+		var copy1, copy2 models.Item
+		require.NoError(t, repo.FindByID(ctx, item.ID, &copy1))
+		require.NoError(t, repo.FindByID(ctx, item.ID, &copy2))
+
+		// First update succeeds: version 1 → 2.
+		copy1.Price = 20.00
+		require.NoError(t, repo.Update(ctx, &copy1))
+		assert.Equal(t, uint(2), copy1.Version)
+
+		// Second update uses stale version 1 — should fail.
+		copy2.Price = 30.00
+		err := repo.Update(ctx, &copy2)
+		assert.Error(t, err, "Update with stale version should fail")
+		assert.Contains(t, err.Error(), "version mismatch")
+
+		// The in-memory version should be rolled back.
+		assert.Equal(t, uint(1), copy2.Version, "Version should be rolled back on mismatch")
+
+		// Database should still have the first update's data.
+		var current models.Item
+		require.NoError(t, repo.FindByID(ctx, item.ID, &current))
+		assert.Equal(t, 20.00, current.Price, "Price should reflect the first successful update")
+		assert.Equal(t, uint(2), current.Version, "Version in DB should be 2")
+	})
+
 }

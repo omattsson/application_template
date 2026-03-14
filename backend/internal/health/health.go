@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -12,7 +13,9 @@ type HealthChecker struct {
 	dependencies map[string]HealthCheck
 }
 
-type HealthCheck func() error
+// HealthCheck is a function that checks a dependency's health.
+// It receives a context for cancellation and timeout support.
+type HealthCheck func(ctx context.Context) error
 
 type HealthStatus struct {
 	Status string                 `json:"status"`
@@ -46,7 +49,10 @@ func (h *HealthChecker) SetReady(ready bool) {
 	h.isReady = ready
 }
 
-func (h *HealthChecker) CheckLiveness() HealthStatus {
+// CheckLiveness returns a simple UP status. The context parameter is unused
+// because liveness is intentionally trivial — it only reports uptime and
+// does not call any external dependencies that would need cancellation.
+func (h *HealthChecker) CheckLiveness(_ context.Context) HealthStatus {
 	uptime := time.Since(h.startTime).String()
 	return HealthStatus{
 		Status: "UP",
@@ -54,11 +60,18 @@ func (h *HealthChecker) CheckLiveness() HealthStatus {
 	}
 }
 
-func (h *HealthChecker) CheckReadiness() HealthStatus {
+func (h *HealthChecker) CheckReadiness(ctx context.Context) HealthStatus {
+	// Copy state under lock, then release before running I/O-bound checks
+	// to avoid holding the mutex during potentially slow dependency calls.
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+	ready := h.isReady
+	deps := make(map[string]HealthCheck, len(h.dependencies))
+	for k, v := range h.dependencies {
+		deps[k] = v
+	}
+	h.mu.RUnlock()
 
-	if !h.isReady {
+	if !ready {
 		return HealthStatus{
 			Status: "DOWN",
 			Checks: map[string]CheckStatus{
@@ -72,8 +85,8 @@ func (h *HealthChecker) CheckReadiness() HealthStatus {
 		Checks: make(map[string]CheckStatus),
 	}
 
-	for name, check := range h.dependencies {
-		if err := check(); err != nil {
+	for name, check := range deps {
+		if err := check(ctx); err != nil {
 			status.Status = "DOWN"
 			status.Checks[name] = CheckStatus{
 				Status:  "DOWN",

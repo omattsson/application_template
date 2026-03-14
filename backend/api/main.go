@@ -10,7 +10,7 @@ import (
 	"backend/internal/health"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	gracefulShutdownTimeout = 5 * time.Second
+	defaultShutdownTimeout = 5 * time.Second
 )
 
 // @title           Backend API
@@ -38,22 +38,28 @@ func main() {
 	// Load configuration
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		slog.Error("Failed to load configuration", "error", err)
+		os.Exit(1)
 	}
 
-	// Initialize database
-	db, err := database.NewFromAppConfig(cfg)
+	// Initialize repository using the factory (selects MySQL or Azure Table based on config)
+	repo, err := database.NewRepository(cfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		slog.Error("Failed to initialize repository", "error", err)
+		os.Exit(1)
 	}
 
-	// Initialize health checker
+	// Initialize health checker with actual database dependency
 	healthChecker := health.New()
-	healthChecker.AddCheck("database", db.Ping)
+	healthChecker.AddCheck("database", func(ctx context.Context) error {
+		return repo.Ping(ctx)
+	})
+	healthChecker.SetReady(true)
 
-	// Setup router
-	router := gin.Default()
-	routes.SetupRoutes(router, db)
+	// Setup router — use gin.New() since SetupRoutes registers its own Logger and Recovery middleware.
+	router := gin.New()
+	rateLimiter := routes.SetupRoutes(router, repo, healthChecker, cfg)
+	defer rateLimiter.Stop()
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// Create server with timeouts
@@ -67,8 +73,10 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
+		slog.Info("Server starting", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+			slog.Error("Failed to start server", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -76,20 +84,27 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Shutting down server...")
+	slog.Info("Shutting down server...")
 
-	// Give outstanding requests 5 seconds to complete
-	ctx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+	// Give outstanding requests time to complete
+	shutdownTimeout := cfg.Server.ShutdownTimeout
+	if shutdownTimeout == 0 {
+		shutdownTimeout = defaultShutdownTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	err = srv.Shutdown(ctx)
-	// Always execute cleanup
-	cancel()
 
-	if err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
-		return // Return with error status from main
+	// Close repository connections (database pool, etc.)
+	if closeErr := repo.Close(); closeErr != nil {
+		slog.Error("Failed to close repository", "error", closeErr)
 	}
 
-	log.Println("Server exiting")
+	if err != nil {
+		slog.Error("Server forced to shutdown", "error", err)
+		return
+	}
+
+	slog.Info("Server exited gracefully")
 }

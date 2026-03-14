@@ -92,11 +92,12 @@ func TestTableClientOperations(t *testing.T) {
 			Name:  "test",
 			Price: 10.5,
 		}
-		err := repo.Create(item)
+		err := repo.Create(context.Background(), item)
 		assert.NoError(t, err)
+		assert.NotZero(t, item.ID, "Create should assign an ID")
 
 		var retrieved models.Item
-		err = repo.FindByID(1, &retrieved)
+		err = repo.FindByID(context.Background(), item.ID, &retrieved)
 		assert.NoError(t, err)
 		assert.Equal(t, item.Name, retrieved.Name)
 		assert.InDelta(t, item.Price, retrieved.Price, 0.001)
@@ -121,7 +122,7 @@ func TestTableClientOperations(t *testing.T) {
 		repo.SetTestClient(mockClient)
 
 		var items []models.Item
-		err := repo.List(&items)
+		err := repo.List(context.Background(), &items)
 		assert.NoError(t, err)
 		assert.Len(t, items, 3)
 		assert.Equal(t, "item1", items[0].Name)
@@ -135,10 +136,14 @@ func TestTableClientOperations(t *testing.T) {
 		mockClient := &mockClient{
 			getEntity: func(ctx context.Context, partitionKey, rowKey string, options *aztables.GetEntityOptions) (aztables.GetEntityResponse, error) {
 				return aztables.GetEntityResponse{
-					Value: []byte(`{"Name":"test","Price":10.5}`),
+					ETag:  "etag-1",
+					Value: []byte(`{"Name":"test","Price":10.5,"Version":1}`),
 				}, nil
 			},
 			updateEntity: func(ctx context.Context, entity []byte, options *aztables.UpdateEntityOptions) (aztables.UpdateEntityResponse, error) {
+				// Verify ETag is passed for conditional update
+				assert.NotNil(t, options)
+				assert.NotNil(t, options.IfMatch)
 				return aztables.UpdateEntityResponse{}, nil
 			},
 		}
@@ -147,11 +152,41 @@ func TestTableClientOperations(t *testing.T) {
 		repo.SetTestClient(mockClient)
 
 		item := &models.Item{
-			Name:  "test",
-			Price: 10.5,
+			Name:    "test",
+			Price:   10.5,
+			Version: 1,
 		}
-		err := repo.Update(item)
+		item.ID = 1
+		err := repo.Update(context.Background(), item)
 		assert.NoError(t, err)
+		assert.Equal(t, uint(2), item.Version, "Version should be incremented after update")
+	})
+
+	t.Run("update fails on version mismatch", func(t *testing.T) {
+		t.Parallel()
+
+		mockClient := &mockClient{
+			getEntity: func(ctx context.Context, partitionKey, rowKey string, options *aztables.GetEntityOptions) (aztables.GetEntityResponse, error) {
+				return aztables.GetEntityResponse{
+					ETag:  "etag-1",
+					Value: []byte(`{"Name":"test","Price":10.5,"Version":2}`),
+				}, nil
+			},
+		}
+
+		repo := azure.NewTestTableRepository("testtable")
+		repo.SetTestClient(mockClient)
+
+		item := &models.Item{
+			Name:    "test",
+			Price:   15.0,
+			Version: 1, // Stale version
+		}
+		item.ID = 1
+		err := repo.Update(context.Background(), item)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "version mismatch")
+		assert.Equal(t, uint(1), item.Version, "Version should not change on mismatch")
 	})
 
 	t.Run("can delete an entity", func(t *testing.T) {
@@ -170,7 +205,8 @@ func TestTableClientOperations(t *testing.T) {
 			Name:  "test",
 			Price: 10.5,
 		}
-		err := repo.Delete(item)
+		item.ID = 1
+		err := repo.Delete(context.Background(), item)
 		assert.NoError(t, err)
 	})
 }

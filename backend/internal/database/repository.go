@@ -2,7 +2,7 @@ package database
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 
 	"backend/internal/config"
 	"backend/internal/database/azure"
@@ -12,7 +12,7 @@ import (
 // NewRepository creates a new repository based on the configuration
 func NewRepository(cfg *config.Config) (models.Repository, error) {
 	if cfg.AzureTable.UseAzureTable {
-		log.Println("Using Azure Table Storage as repository")
+		slog.Info("Using Azure Table Storage as repository")
 		return azure.NewTableRepository(
 			cfg.AzureTable.AccountName,
 			cfg.AzureTable.AccountKey,
@@ -22,10 +22,19 @@ func NewRepository(cfg *config.Config) (models.Repository, error) {
 		)
 	}
 
-	log.Println("Using MySQL as repository")
+	slog.Info("Using MySQL as repository")
 	db, err := NewFromAppConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize MySQL database: %w", err)
+	}
+
+	// Run database migrations (migrator tracks applied versions; safe on every startup)
+	if err := db.AutoMigrate(); err != nil {
+		// Clean up the database connection to avoid resource leaks
+		if sqlDB, dbErr := db.DB.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		return nil, fmt.Errorf("failed to run database migrations: %w", err)
 	}
 
 	return models.NewRepository(db.DB), nil

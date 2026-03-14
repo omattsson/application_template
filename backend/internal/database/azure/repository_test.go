@@ -194,8 +194,10 @@ func TestTableRepository_DatabaseErrors(t *testing.T) {
 		if repo2 == nil {
 			t.Skip("Could not create test repository (Azurite not available)")
 		}
+		ctx := context.Background()
+
 		// Test Create
-		err := repo2.Create(&models.Item{})
+		err := repo2.Create(ctx, &models.Item{})
 		assert.Error(t, err)
 		var dbErr *dberrors.DatabaseError
 		assert.True(t, errors.As(err, &dbErr))
@@ -203,21 +205,21 @@ func TestTableRepository_DatabaseErrors(t *testing.T) {
 		assert.Equal(t, mockErr, errors.Unwrap(err))
 
 		// Test FindByID
-		err = repo2.FindByID(1, &models.Item{})
+		err = repo2.FindByID(ctx, 1, &models.Item{})
 		assert.Error(t, err)
 		assert.True(t, errors.As(err, &dbErr))
 		assert.Equal(t, "find", dbErr.Op)
 		assert.Equal(t, mockErr, errors.Unwrap(err))
 
 		// Test Update
-		err = repo2.Update(&models.Item{})
+		err = repo2.Update(ctx, &models.Item{})
 		assert.Error(t, err)
 		assert.True(t, errors.As(err, &dbErr))
 		assert.Equal(t, "find", dbErr.Op) // First tries to find the item
 		assert.Equal(t, mockErr, errors.Unwrap(err))
 
 		// Test Delete
-		err = repo2.Delete(&models.Item{})
+		err = repo2.Delete(ctx, &models.Item{})
 		assert.Error(t, err)
 		assert.True(t, errors.As(err, &dbErr))
 		assert.Equal(t, "delete", dbErr.Op)
@@ -225,7 +227,7 @@ func TestTableRepository_DatabaseErrors(t *testing.T) {
 
 		// Test List
 		var items []models.Item
-		err = repo2.List(&items)
+		err = repo2.List(ctx, &items)
 		assert.Error(t, err)
 		assert.True(t, errors.As(err, &dbErr))
 		assert.Equal(t, "list", dbErr.Op)

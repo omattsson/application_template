@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -68,13 +69,13 @@ func TestAzureTableIntegration(t *testing.T) {
 		healthChecker := health.New()
 
 		// For Azure Table, we add a mock health check since the repo is nil
-		healthChecker.AddCheck("database", func() error {
+		healthChecker.AddCheck("database", func(_ context.Context) error {
 			return nil // Mock check since we expect repo to be nil in this test
 		})
 
 		// The health check should return UP since we're using a mock check
 		healthChecker.SetReady(true)
-		status := healthChecker.CheckReadiness()
+		status := healthChecker.CheckReadiness(context.Background())
 		assert.Equal(t, "UP", status.Status)
 	})
 
