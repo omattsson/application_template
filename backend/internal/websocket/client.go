@@ -68,6 +68,10 @@ type Client struct {
 	// writePump reads it only after the receive on the closed channel, so
 	// the channel close orders the two accesses. Empty: no reason.
 	closeReason string
+	// subscribeCapWarned is set after the first subscribe over
+	// MaxTopicsPerClient was logged at Warn; later ones log at Debug.
+	// Guarded by hub.mu.
+	subscribeCapWarned bool
 }
 
 // NewClient creates a new Client attached to the given hub and connection,

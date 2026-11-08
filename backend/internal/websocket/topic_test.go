@@ -1,7 +1,10 @@
 package websocket
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -166,6 +169,59 @@ func TestHub_TopicSubscriptionCap(t *testing.T) {
 	hub.Unsubscribe(c, "t0")
 	hub.Subscribe(c, "fresh")
 	assert.Equal(t, 1, topicSubscriberCount(hub, "fresh"))
+}
+
+// levelCounter is a slog handler that counts the records per level and
+// message.
+type levelCounter struct {
+	mu     sync.Mutex
+	counts map[string]int // "LEVEL message"
+}
+
+func (h *levelCounter) Enabled(context.Context, slog.Level) bool { return true }
+func (h *levelCounter) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.counts[r.Level.String()+" "+r.Message]++
+	return nil
+}
+func (h *levelCounter) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *levelCounter) WithGroup(string) slog.Handler      { return h }
+
+func (h *levelCounter) count(level slog.Level, msg string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.counts[level.String()+" "+msg]
+}
+
+// /ws is unauthenticated and outside the rate limiter: a client that sends
+// subscribe frames over the cap must not flood the log at Warn. Each client
+// gets one Warn; the repeats are Debug.
+func TestHub_TopicSubscriptionCapWarnsOncePerClient(t *testing.T) {
+	// Not parallel: it replaces the default slog logger.
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	h := &levelCounter{counts: map[string]int{}}
+	slog.SetDefault(slog.New(h))
+
+	hub := NewHub()
+	go hub.Run()
+	defer hub.Shutdown()
+
+	const over = 50
+	clients := []*Client{
+		newRegistered(t, hub, ClientIdentity{}, 1),
+		newRegistered(t, hub, ClientIdentity{}, 1),
+	}
+	for _, c := range clients {
+		for i := 0; i < MaxTopicsPerClient+over; i++ {
+			hub.Subscribe(c, fmt.Sprintf("t%d", i))
+		}
+	}
+
+	const msg = "WebSocket subscription limit reached, subscription ignored"
+	assert.Equal(t, len(clients), h.count(slog.LevelWarn, msg), "one Warn per client")
+	assert.Equal(t, len(clients)*(over-1), h.count(slog.LevelDebug, msg), "the repeats are Debug")
 }
 
 func TestHub_TopicBroadcastWithoutSubscribers(t *testing.T) {

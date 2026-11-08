@@ -3,6 +3,7 @@
 package websocket
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -231,7 +232,14 @@ func (h *Hub) Subscribe(c *Client, topic string) {
 	}
 	topics := h.clientTopics[c]
 	if _, ok := topics[topic]; !ok && len(topics) >= MaxTopicsPerClient {
-		slog.Warn("WebSocket subscription limit reached, subscription ignored", "limit", MaxTopicsPerClient)
+		// /ws is outside the rate limiter: Warn once per client, so a client
+		// that keeps sending subscribe frames cannot flood the log.
+		level := slog.LevelDebug
+		if !c.subscribeCapWarned {
+			c.subscribeCapWarned = true
+			level = slog.LevelWarn
+		}
+		slog.Log(context.Background(), level, "WebSocket subscription limit reached, subscription ignored", "limit", MaxTopicsPerClient)
 		return
 	}
 	if topics == nil {
