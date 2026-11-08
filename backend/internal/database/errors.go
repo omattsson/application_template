@@ -12,5 +12,6 @@ var (
 	ErrDuplicateKey     = dberrors.ErrDuplicateKey
 	ErrValidation       = dberrors.ErrValidation
 	ErrConnectionFailed = dberrors.ErrConnectionFailed
+	ErrNotImplemented   = dberrors.ErrNotImplemented
 	NewDatabaseError    = dberrors.NewDatabaseError
 )

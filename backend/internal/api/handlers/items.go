@@ -1,13 +1,11 @@
 package handlers
 
 import (
-	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
-	"backend/internal/database"
 	"backend/internal/models"
 	"backend/internal/websocket"
 
@@ -44,30 +42,11 @@ func (h *Handler) broadcast(msgType string, payload interface{}) {
 	h.hub.Broadcast(b)
 }
 
+// handleDBError maps a repository error to the status and message of an Item
+// response. It delegates to mapError, so a cancelled request context answers
+// 499 and an unexpected error answers 500 with a generic message.
 func handleDBError(err error) (int, string) {
-	if err == nil {
-		return http.StatusOK, ""
-	}
-
-	var dbErr *database.DatabaseError
-	if errors.As(err, &dbErr) {
-		if errors.Is(dbErr.Err, database.ErrValidation) {
-			return http.StatusBadRequest, dbErr.Error()
-		}
-		if errors.Is(dbErr.Err, database.ErrNotFound) {
-			return http.StatusNotFound, "Item not found"
-		}
-		if errors.Is(dbErr.Err, database.ErrDuplicateKey) {
-			return http.StatusConflict, "Item already exists"
-		}
-		return http.StatusInternalServerError, "Internal server error"
-	}
-
-	if strings.Contains(err.Error(), "not found") {
-		return http.StatusNotFound, "Item not found"
-	}
-	// Never leak raw error messages to clients
-	return http.StatusInternalServerError, "Internal server error"
+	return mapError(err, "Item")
 }
 
 // CreateItem godoc
@@ -79,11 +58,13 @@ func handleDBError(err error) (int, string) {
 // @Param item body models.Item true "Item object"
 // @Success 201 {object} models.Item
 // @Failure 400 {object} map[string]string
+// @Failure 499 {object} map[string]string "Client closed request"
+// @Failure 500 {object} map[string]string
 // @Router /api/v1/items [post]
 func (h *Handler) CreateItem(c *gin.Context) {
 	var item models.Item
 	if err := c.ShouldBindJSON(&item); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": msgInvalidRequestFormat})
 		return
 	}
 
@@ -95,7 +76,10 @@ func (h *Handler) CreateItem(c *gin.Context) {
 	// Version is server-managed; force initial value regardless of client input.
 	item.Version = 1
 
-	if err := h.repository.Create(c.Request.Context(), &item); err != nil {
+	// The write is detached from the request: a client that leaves cannot skip it.
+	ctx, cancel := detachedCtx(c)
+	defer cancel()
+	if err := h.repository.Create(ctx, &item); err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})
 		return
@@ -111,6 +95,8 @@ func (h *Handler) CreateItem(c *gin.Context) {
 // @Tags items
 // @Produce json
 // @Success 200 {array} models.Item
+// @Failure 499 {object} map[string]string "Client closed request"
+// @Failure 500 {object} map[string]string
 // @Router /api/v1/items [get]
 func (h *Handler) GetItems(c *gin.Context) {
 	// Parse query parameters
@@ -172,6 +158,8 @@ func (h *Handler) GetItems(c *gin.Context) {
 // @Param id path int true "Item ID"
 // @Success 200 {object} models.Item
 // @Failure 404 {object} map[string]string
+// @Failure 499 {object} map[string]string "Client closed request"
+// @Failure 500 {object} map[string]string
 // @Router /api/v1/items/{id} [get]
 func (h *Handler) GetItem(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -200,6 +188,8 @@ func (h *Handler) GetItem(c *gin.Context) {
 // @Param item body models.Item true "Item object"
 // @Success 200 {object} models.Item
 // @Failure 404 {object} map[string]string
+// @Failure 499 {object} map[string]string "Client closed request"
+// @Failure 500 {object} map[string]string
 // @Router /api/v1/items/{id} [put]
 func (h *Handler) UpdateItem(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -218,7 +208,7 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 
 	var updateItem models.Item
 	if err := c.ShouldBindJSON(&updateItem); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": msgInvalidRequestFormat})
 		return
 	}
 
@@ -235,7 +225,10 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 		currentItem.Version = updateItem.Version
 	}
 
-	if err := h.repository.Update(c.Request.Context(), &currentItem); err != nil {
+	// The write is detached from the request: a client that leaves cannot skip it.
+	ctx, cancel := detachedCtx(c)
+	defer cancel()
+	if err := h.repository.Update(ctx, &currentItem); err != nil {
 		if strings.Contains(err.Error(), "version mismatch") {
 			c.JSON(http.StatusConflict, gin.H{"error": "Item has been modified by another request"})
 			return
@@ -257,6 +250,8 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 // @Param id path int true "Item ID"
 // @Success 204 "No Content"
 // @Failure 404 {object} map[string]string
+// @Failure 499 {object} map[string]string "Client closed request"
+// @Failure 500 {object} map[string]string
 // @Router /api/v1/items/{id} [delete]
 func (h *Handler) DeleteItem(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -268,7 +263,10 @@ func (h *Handler) DeleteItem(c *gin.Context) {
 	// Delete directly — the repository returns ErrNotFound if the item doesn't exist.
 	// This avoids a race condition between a FindByID check and the actual delete.
 	item := &models.Item{Base: models.Base{ID: uint(id)}}
-	if err := h.repository.Delete(c.Request.Context(), item); err != nil {
+	// The write is detached from the request: a client that leaves cannot skip it.
+	ctx, cancel := detachedCtx(c)
+	defer cancel()
+	if err := h.repository.Delete(ctx, item); err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})
 		return
