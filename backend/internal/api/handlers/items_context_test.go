@@ -77,9 +77,10 @@ func seedItem(t *testing.T, repo *MockRepository) models.Item {
 	return item
 }
 
-// TestItemsUpdateCancelledReturns499 checks that an update whose request is
-// cancelled before the read answers 499 with a safe body, not 500.
-func TestItemsUpdateCancelledReturns499(t *testing.T) {
+// TestItemsUpdateCancelledReadReturns499 checks that an update whose request is
+// cancelled before the read answers 499 with a safe body, not 500. The write is
+// detached from the request, so only reads can produce 499.
+func TestItemsUpdateCancelledReadReturns499(t *testing.T) {
 	t.Parallel()
 
 	repo := &ctxAwareRepo{MockRepository: NewMockRepository()}

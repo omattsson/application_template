@@ -16,6 +16,7 @@ import (
 const (
 	msgInternalServerError  = "Internal server error"
 	msgInvalidRequestFormat = "Invalid request format"
+	msgValidationFailed     = "validation failed"
 	// msgClientClosedRequest is the message of statusClientClosedRequest.
 	msgClientClosedRequest = "Client closed request"
 	// statusClientClosedRequest is the nginx status for a request that the
@@ -35,9 +36,9 @@ func mapError(err error, entityName string) (int, string) {
 		return status, msg
 	}
 
-	// Check for dberrors sentinel types via errors.Is (works with wrapped errors).
+	// Classify by sentinel with errors.Is (works with wrapped errors).
 	if errors.Is(err, dberrors.ErrValidation) {
-		return http.StatusBadRequest, err.Error()
+		return http.StatusBadRequest, validationMessage(err)
 	}
 	if errors.Is(err, dberrors.ErrNotFound) {
 		return http.StatusNotFound, entityName + " not found"
@@ -49,20 +50,27 @@ func mapError(err error, entityName string) (int, string) {
 		return http.StatusNotImplemented, "Feature not implemented"
 	}
 
-	// Fallback to string matching for implementations that don't wrap sentinels.
-	errStr := err.Error()
-	if strings.Contains(errStr, "not found") {
+	// Fallback for repositories that return a plain "not found" error without
+	// a sentinel. A DatabaseError with an unknown cause is classified by its
+	// cause only, never by its text.
+	var dbErr *dberrors.DatabaseError
+	if !errors.As(err, &dbErr) && strings.Contains(err.Error(), "not found") {
 		return http.StatusNotFound, entityName + " not found"
-	}
-	if strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "already exists") {
-		return http.StatusConflict, entityName + " already exists"
-	}
-	if strings.Contains(errStr, "validation") {
-		return http.StatusBadRequest, errStr
 	}
 
 	// Never leak internal error details.
 	return http.StatusInternalServerError, msgInternalServerError
+}
+
+// validationMessage returns the client message of a validation error. Only the
+// text of a DatabaseError (operation and sentinel) is shown; context added by
+// a plain wrapper is never exposed.
+func validationMessage(err error) string {
+	var dbErr *dberrors.DatabaseError
+	if errors.As(err, &dbErr) {
+		return dbErr.Error()
+	}
+	return msgValidationFailed
 }
 
 // cancelledRequestError maps an error caused by a cancelled request context

@@ -58,6 +58,7 @@ func handleDBError(err error) (int, string) {
 // @Param item body models.Item true "Item object"
 // @Success 201 {object} models.Item
 // @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/items [post]
@@ -95,6 +96,7 @@ func (h *Handler) CreateItem(c *gin.Context) {
 // @Tags items
 // @Produce json
 // @Success 200 {array} models.Item
+// @Failure 400 {object} map[string]string
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/items [get]
@@ -157,6 +159,7 @@ func (h *Handler) GetItems(c *gin.Context) {
 // @Produce json
 // @Param id path int true "Item ID"
 // @Success 200 {object} models.Item
+// @Failure 400 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
@@ -187,7 +190,9 @@ func (h *Handler) GetItem(c *gin.Context) {
 // @Param id path int true "Item ID"
 // @Param item body models.Item true "Item object"
 // @Success 200 {object} models.Item
+// @Failure 400 {object} map[string]string
 // @Failure 404 {object} map[string]string
+// @Failure 409 {object} map[string]string
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/items/{id} [put]
@@ -249,6 +254,7 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 // @Produce json
 // @Param id path int true "Item ID"
 // @Success 204 "No Content"
+// @Failure 400 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
