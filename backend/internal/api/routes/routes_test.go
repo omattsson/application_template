@@ -337,3 +337,74 @@ func TestRateLimitersStop(t *testing.T) {
 	assert.NotPanics(t, rls.Stop)
 	assert.NotPanics(t, rls.Stop, "Stop is idempotent")
 }
+
+func TestUIConfigRoute(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		title    string
+		auth     bool
+		wantBody string
+	}{
+		{name: "defaults", title: "Application Template", wantBody: `{"title":"Application Template","auth_enabled":false}`},
+		{name: "custom", title: "My App", auth: true, wantBody: `{"title":"My App","auth_enabled":true}`},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := testConfig(100, 10, nil)
+			cfg.App.Title = tt.title
+			cfg.Auth.Enabled = tt.auth
+			router, _ := newTestRouter(t, cfg)
+
+			// No credentials of any kind.
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/ui-config", nil)
+			req.RemoteAddr = testPeer
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			assert.JSONEq(t, tt.wantBody, w.Body.String())
+			assert.Equal(t, "public, max-age=300", w.Header().Get("Cache-Control"))
+		})
+	}
+}
+
+func TestUIConfigRouteFromEnv(t *testing.T) {
+	// Not parallel: t.Setenv modifies the process environment.
+	t.Setenv("ENV_FILE", "/nonexistent/.env")
+	t.Setenv("APP_TITLE", "My App")
+	t.Setenv("AUTH_ENABLED", "true")
+
+	cfg, err := config.LoadConfig()
+	require.NoError(t, err)
+	router, _ := newTestRouter(t, cfg)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui-config", nil)
+	req.RemoteAddr = testPeer
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.JSONEq(t, `{"title":"My App","auth_enabled":true}`, w.Body.String())
+}
+
+func TestUIConfigRouteIsRateLimited(t *testing.T) {
+	t.Parallel()
+
+	router, _ := newTestRouter(t, testConfig(1, 1, nil))
+
+	var last *httptest.ResponseRecorder
+	for i := 0; i < 2; i++ {
+		last = httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ui-config", nil)
+		req.RemoteAddr = testPeer
+		router.ServeHTTP(last, req)
+	}
+
+	assert.Equal(t, http.StatusTooManyRequests, last.Code)
+}

@@ -26,6 +26,22 @@ const itemListSchema = `{
 "items": ` + itemSchema + `
 }`
 
+// Schema for the GET /api/v1/ui-config response
+const uiConfigSchema = `{
+"type": "object",
+"required": ["title", "auth_enabled"],
+"additionalProperties": false,
+"properties": {
+"title": {
+"type": "string",
+"minLength": 1
+},
+"auth_enabled": {
+"type": "boolean"
+}
+}
+}`
+
 // Schema for error responses
 const errorSchema = `{
 "type": "object",

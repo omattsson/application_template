@@ -49,6 +49,7 @@ type Config struct {
 	Server   ServerConfig
 	// Then string and simple field structs
 	App     AppConfig
+	Auth    AuthConfig
 	CORS    CORSConfig
 	Logging LogConfig
 	// LogLevel is LOG_LEVEL parsed to a slog level; main applies it to the
@@ -60,7 +61,21 @@ type Config struct {
 type AppConfig struct {
 	Name        string
 	Environment string
-	Debug       bool
+	// Title is the product name shown by the web UI (APP_TITLE). LoadConfig
+	// applies DefaultAppTitle when it is unset.
+	Title string
+	Debug bool
+}
+
+// DefaultAppTitle is the Title used when APP_TITLE is unset.
+const DefaultAppTitle = "Application Template"
+
+// AuthConfig holds authentication configuration. It holds only the switch for
+// now; later tasks add the remaining fields.
+type AuthConfig struct {
+	// Enabled is AUTH_ENABLED (default false). Authentication is not
+	// implemented yet: the flag only changes GET /api/v1/ui-config.
+	Enabled bool
 }
 
 // DatabaseConfig holds database-specific configuration
@@ -324,7 +339,11 @@ func LoadConfig() (*Config, error) {
 		App: AppConfig{
 			Name:        getEnv("APP_NAME", "backend-api"),
 			Environment: getEnv("GO_ENV", "development"),
+			Title:       getEnv("APP_TITLE", DefaultAppTitle),
 			Debug:       getEnvBool("APP_DEBUG", true),
+		},
+		Auth: AuthConfig{
+			Enabled: getEnvBool("AUTH_ENABLED", false),
 		},
 		Database: DatabaseConfig{
 			Type:            strings.ToLower(strings.TrimSpace(getEnv("DB_TYPE", DBTypeMySQL))),

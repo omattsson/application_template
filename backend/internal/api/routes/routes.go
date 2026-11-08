@@ -86,6 +86,9 @@ func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker
 		// Ping endpoint
 		v1.GET("/ping", handlers.Ping)
 
+		// Public UI config (no auth, so the login page can read it)
+		v1.GET("/ui-config", handlers.NewUIConfigHandler(cfg.App.Title, cfg.Auth.Enabled))
+
 		// Items endpoints
 		itemsHandler := handlers.NewHandlerWithHub(repository, hub)
 		items := v1.Group("/items")

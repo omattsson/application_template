@@ -37,6 +37,33 @@ const docTemplate = `{
                                 "$ref": "#/definitions/models.Item"
                             }
                         }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             },
@@ -78,6 +105,33 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -108,8 +162,35 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.Item"
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -156,8 +237,44 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.Item"
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -189,8 +306,35 @@ const docTemplate = `{
                     "204": {
                         "description": "No Content"
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -214,6 +358,35 @@ const docTemplate = `{
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/ui-config": {
+            "get": {
+                "description": "Returns the display values of the web UI: the product title (APP_TITLE) and whether authentication is enabled (AUTH_ENABLED). Public: no authentication, so the login page can use it. Cached for 5 minutes.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ui"
+                ],
+                "summary": "Web UI display config",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.UIConfigResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -327,6 +500,21 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "handlers.UIConfigResponse": {
+            "type": "object",
+            "properties": {
+                "auth_enabled": {
+                    "description": "AuthEnabled tells the UI whether to show the login flow (AUTH_ENABLED).",
+                    "type": "boolean",
+                    "example": false
+                },
+                "title": {
+                    "description": "Title is the product name (APP_TITLE).",
+                    "type": "string",
+                    "example": "Application Template"
+                }
+            }
+        },
         "health.CheckStatus": {
             "type": "object",
             "properties": {

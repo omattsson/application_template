@@ -379,3 +379,33 @@ func TestDatabaseConfigValidateUnsupportedType(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported")
 }
+
+func TestLoadConfigUIConfigEnv(t *testing.T) {
+	// Not parallel: subtests use t.Setenv which modifies process env.
+	tests := []struct {
+		name      string
+		title     string
+		auth      string
+		wantTitle string
+		wantAuth  bool
+	}{
+		{name: "defaults", wantTitle: "Application Template", wantAuth: false},
+		{name: "custom", title: "My App", auth: "true", wantTitle: "My App", wantAuth: true},
+		{name: "auth false", auth: "false", wantTitle: "Application Template", wantAuth: false},
+		{name: "invalid auth falls back to false", auth: "maybe", wantTitle: "Application Template", wantAuth: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENV_FILE", "/nonexistent/.env")
+			t.Setenv("APP_TITLE", tt.title)
+			t.Setenv("AUTH_ENABLED", tt.auth)
+
+			cfg, err := config.LoadConfig()
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantTitle, cfg.App.Title)
+			assert.Equal(t, tt.wantAuth, cfg.Auth.Enabled)
+		})
+	}
+}
