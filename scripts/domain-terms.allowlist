@@ -1,0 +1,17 @@
+# Allowlist for scripts/check-domain-terms.sh
+# Format: path-glob|term|reason
+# Only generic English uses may be listed here. Real Kubernetes/Helm/Azure/etc.
+# domain concepts must be removed from the template, not allowlisted.
+# One entry per path-glob and term; every entry needs a reason.
+
+# "stack" as in "full stack" / "technology stack" / "stack trace" / "Docker stack"
+.github/agents/devops-engineer.md|stack|"full stack" = whole docker compose stack (generic Docker usage)
+.github/agents/orchestrator.md|stack|"full-stack feature" (generic English)
+.github/agents/qa-engineer.md|stack|"full stack" / "Docker stack" (generic English)
+.github/copilot-instructions.md|stack|"Full-stack app" / "Full stack (Docker)" (generic English)
+.github/instructions/security.instructions.md|stack|"stack traces" (generic debugging term)
+README.md|stack|"Full-Stack Application Template" (generic English)
+WIKI.md|stack|"full-stack application template" (generic English)
+frontend/e2e/*.spec.ts|stack|Template UI title "Full Stack Application" (generic English)
+frontend/index.html|stack|Template page title "Full Stack Application" (generic English)
+frontend/src/*|stack|Template UI title "Full Stack Application" (generic English)
