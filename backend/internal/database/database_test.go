@@ -42,7 +42,7 @@ func TestDatabaseMigrations(t *testing.T) {
 	tables, err := db.DB.Migrator().GetTables()
 	assert.NoError(t, err)
 
-	expectedTables := []string{"users", "items"}
+	expectedTables := []string{"users", "items", "refresh_tokens", "api_keys", "audit_logs"}
 	for _, table := range expectedTables {
 		assert.Contains(t, tables, table)
 	}
@@ -62,9 +62,11 @@ func TestDatabaseTransaction(t *testing.T) {
 		require.NoError(t, db.AutoMigrate())
 		err := db.Transaction(func(tx *gorm.DB) error {
 			user := &models.User{
-				Username: "test_user",
-				Email:    "test@example.com",
-				Name:     "Test User",
+				ID:          "u1",
+				Username:    "test_user",
+				Email:       "test@example.com",
+				DisplayName: "Test User",
+				Role:        models.RoleUser,
 			}
 			return tx.Create(user).Error
 		})
@@ -84,18 +86,22 @@ func TestDatabaseTransaction(t *testing.T) {
 		// Create initial user to test duplicate error
 		require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
 			user := &models.User{
-				Username: "test_user",
-				Email:    "test@example.com",
-				Name:     "Test User",
+				ID:          "u1",
+				Username:    "test_user",
+				Email:       "test@example.com",
+				DisplayName: "Test User",
+				Role:        models.RoleUser,
 			}
 			return tx.Create(user).Error
 		}))
 
 		err := db.Transaction(func(tx *gorm.DB) error {
 			user := &models.User{
-				Username: "test_user", // Duplicate username should cause error
-				Email:    "another@example.com",
-				Name:     "Another User",
+				ID:          "u2",
+				Username:    "test_user", // Duplicate username should cause error
+				Email:       "another@example.com",
+				DisplayName: "Another User",
+				Role:        models.RoleUser,
 			}
 			return tx.Create(user).Error
 		})

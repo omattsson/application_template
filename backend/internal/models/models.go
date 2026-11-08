@@ -1,3 +1,6 @@
+// Package models holds the entities, their validation and the repository
+// interfaces. The GORM implementations of the repositories are in
+// internal/database (Item: GenericRepository in this package).
 package models
 
 import (
@@ -28,13 +31,12 @@ type Item struct {
 	Version uint    `gorm:"not null;default:1" json:"version"` // For optimistic locking (1 = initial; 0 = not provided)
 }
 
-// User represents a user in the system
-type User struct {
-	Base
-	Username string `gorm:"size:255;not null;unique" json:"username"`
-	Email    string `gorm:"size:255;not null;unique" json:"email"`
-	Name     string `gorm:"size:255" json:"name"`
-}
+// Page sizes of the list endpoints: DefaultPageSize when the caller gives
+// none, never more than MaxPageSize.
+const (
+	DefaultPageSize = 25
+	MaxPageSize     = 100
+)
 
 // Validator is an interface for model validation
 type Validator interface {
