@@ -63,7 +63,7 @@ cp .env.example .env
 make dev
 ```
 
-- Swagger docs: [http://localhost:8081/swagger/index.html](http://localhost:8081/swagger/index.html)
+- Swagger docs: [http://localhost:8081/swagger/index.html](http://localhost:8081/swagger/index.html) (set `ENABLE_SWAGGER=true` in `.env`; default: false)
 - Health checks: `/health/live`, `/health/ready`
 
 ### Frontend Setup

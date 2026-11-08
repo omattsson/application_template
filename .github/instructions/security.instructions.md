@@ -51,4 +51,4 @@ items.Use(rateLimiter.RateLimit())
 The `Recovery()` middleware in `internal/api/middleware/middleware.go` catches panics and returns a generic 500. This is applied globally in `routes.go`. Never remove it — it prevents unhandled panics from crashing the server and potentially leaking stack traces.
 
 ## Graceful Shutdown
-`api/main.go` handles `SIGINT`/`SIGTERM` with a 5-second context for in-flight requests. Ensure any new background goroutines or workers respect shutdown signals.
+`api/main.go` waits for `SIGINT`/`SIGTERM`, then `shutdown` in `api/bootstrap.go` stops the services within `SERVER_SHUTDOWN_TIMEOUT` (default 30s; 5s when set to 0) in this order: HTTP servers, leader worker group, in-flight work, WebSocket hub, telemetry, rate limiters, database. A hung step waits at most until the deadline. Add new background work as a `leader.Worker` or to the in-flight wait group, and make it respect cancellation.

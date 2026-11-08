@@ -2,11 +2,11 @@
 
 # Build the application
 build:
-	go build -o bin/api ./api/main.go
+	go build -o bin/api ./api
 
 # Run the application
 run:
-	go run ./api/main.go
+	go run ./api
 
 # Run tests
 test:

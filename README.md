@@ -76,7 +76,7 @@ A modern, production-ready template for full-stack web applications using Go (Gi
 
    - Frontend: [http://localhost:3000](http://localhost:3000)
    - Backend: [http://localhost:8081](http://localhost:8081)
-   - API Documentation: [http://localhost:8081/swagger/index.html](http://localhost:8081/swagger/index.html)
+   - API Documentation: [http://localhost:8081/swagger/index.html](http://localhost:8081/swagger/index.html) (`make dev` and `make dev-backend` set `ENABLE_SWAGGER=true`)
 
 ## Project Structure
 
@@ -135,6 +135,7 @@ Backend:
 - `GO_ENV` - Environment (development/production)
 - `GIN_MODE` - Gin framework mode (debug/release)
 - `BACKEND_PORT` - Backend port (default: 8081)
+- `ENABLE_SWAGGER` - Serve the Swagger UI at `/swagger/index.html` (default: false; `make dev` and `make dev-backend` set it to true)
 
 Frontend:
 
@@ -144,10 +145,10 @@ Frontend:
 
 ## API Documentation
 
-The API documentation is automatically generated using Swagger/OpenAPI. You can access it at:
+The API documentation is automatically generated using Swagger/OpenAPI. The backend serves the Swagger UI only when `ENABLE_SWAGGER=true` (default: false). `make dev` and `make dev-backend` set it, so in development it is at:
 
 - Development: [http://localhost:8081/swagger/index.html](http://localhost:8081/swagger/index.html)
-- Production: [http://[your-domain]/swagger/index.html](http://[your-domain]/swagger/index.html)
+- Production: off by default. With `ENABLE_SWAGGER=true` it is at `http://[your-domain]/swagger/index.html`.
 
 To regenerate the API documentation:
 

@@ -53,6 +53,9 @@ services:
       - SERVER_WRITE_TIMEOUT=${SERVER_WRITE_TIMEOUT:-15s}
       - SERVER_SHUTDOWN_TIMEOUT=${SERVER_SHUTDOWN_TIMEOUT:-30s}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Swagger UI at /swagger/index.html. Off by default; make dev and
+      # make dev-backend set ENABLE_SWAGGER=true.
+      - ENABLE_SWAGGER=${ENABLE_SWAGGER:-false}
       - LOG_FILE=${LOG_FILE:-}
       - API_VERSION=${API_VERSION:-v1}
       - API_PREFIX=${API_PREFIX:-/api}

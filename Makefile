@@ -23,11 +23,11 @@ mysql-shell:
 
 # Development mode for both services
 dev:
-	NODE_ENV=development PORT=3000 BACKEND_PORT=8081 GIN_MODE=debug docker compose up --build
+	NODE_ENV=development PORT=3000 BACKEND_PORT=8081 GIN_MODE=debug ENABLE_SWAGGER=true docker compose up --build
 
 # Development mode for backend only
 dev-backend:
-	NODE_ENV=development BACKEND_PORT=8081 GIN_MODE=debug docker compose up --build backend
+	NODE_ENV=development BACKEND_PORT=8081 GIN_MODE=debug ENABLE_SWAGGER=true docker compose up --build backend
 
 # Development mode for frontend only
 dev-frontend:
@@ -92,7 +92,7 @@ test-frontend:
 # Run frontend e2e tests (requires MySQL running, starts backend natively)
 test-e2e: integration-infra-start
 	@echo "Building and starting backend..."
-	@cd backend && go build -o tmp/main ./api/main.go
+	@cd backend && go build -o tmp/main ./api
 	@cd backend && DB_HOST=localhost DB_PORT=3306 DB_NAME=$${MYSQL_DATABASE:-app} DB_USER=$${MYSQL_USER:-appuser} DB_PASSWORD=$${MYSQL_PASSWORD:-apppass} PORT=8081 ./tmp/main &
 	@echo "Waiting for backend to be healthy..."
 	@until curl -sf http://localhost:8081/health/live >/dev/null 2>&1; do \

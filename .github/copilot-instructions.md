@@ -4,7 +4,7 @@
 
 Full-stack app: **Go (Gin) backend** + **React (TypeScript, Vite, MUI) frontend**, with a **MySQL** (GORM) data store. Docker Compose orchestrates all services.
 
-**Bootstrap flow**: `backend/api/main.go` → `config.LoadConfig()` → `database.NewRepository(cfg)` (factory initializes MySQL and runs migrations) → `routes.SetupRoutes(router, repo, healthChecker, cfg)` → `http.Server` with graceful shutdown (`SIGINT`/`SIGTERM`).
+**Bootstrap flow**: `backend/api/main.go` → `config.LoadConfig()` → `initDatabase` (MySQL and migrations) → `buildServices` (health checker, WebSocket hub, `buildRouter` → `routes.SetupRoutes`, leader worker group) → `startHTTPServer` → on `SIGINT`/`SIGTERM`, `shutdown` stops the services in order (all helpers in `backend/api/bootstrap.go`).
 
 **Ports**: Backend `:8081` on host, frontend `:3000` in dev. Inside Docker, nginx and Vite proxy `/api` to `backend:8080`. Local non-Docker dev hits `localhost:8081` directly (`frontend/src/api/config.ts`).
 
@@ -12,7 +12,8 @@ Full-stack app: **Go (Gin) backend** + **React (TypeScript, Vite, MUI) frontend*
 
 ```
 backend/
-  api/main.go                    # Bootstrap: config → repo → router → server → shutdown
+  api/main.go                    # Entry point: config → services → server → signal → shutdown
+  api/bootstrap.go               # initDatabase, buildRouter, buildServices, startHTTPServer, shutdown
   internal/
     api/routes/routes.go         # All route registration + middleware ordering
     api/handlers/items.go        # CRUD handler pattern (reference implementation)

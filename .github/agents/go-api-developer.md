@@ -42,7 +42,7 @@ When given a GitHub issue:
 
 - **Module**: `backend` (Go 1.23, Gin web framework, GORM ORM)
 - **Data stores**: MySQL
-- **Bootstrap**: `api/main.go` → `config.LoadConfig()` → `database.NewRepository(cfg)` → `routes.SetupRoutes()` → `http.Server` with graceful shutdown
+- **Bootstrap**: `api/main.go` → `config.LoadConfig()` → `initDatabase` → `buildServices` (`buildRouter` → `routes.SetupRoutes()`) → `startHTTPServer` → ordered `shutdown` (helpers in `api/bootstrap.go`)
 - **Ports**: Backend `:8081` on host; inside Docker backend listens on `:8080`
 
 ### Key directories
@@ -50,6 +50,7 @@ When given a GitHub issue:
 ```
 backend/
   api/main.go                         # Entry point
+  api/bootstrap.go                    # Bootstrap helpers and ordered shutdown
   internal/
     api/handlers/items.go             # Reference CRUD implementation — COPY THIS PATTERN
     api/handlers/health.go            # Health endpoints (closure injection)

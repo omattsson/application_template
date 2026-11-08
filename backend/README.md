@@ -60,7 +60,7 @@ backend/
    Without Docker:
 
    ```bash
-   go run api/main.go
+   go run ./api
    ```
 
    The API will be available at [http://localhost:8081](http://localhost:8081)
@@ -73,7 +73,7 @@ backend/
 - `make run` - Run the application locally
 - `make test` - Run tests
 - `make test-coverage` - Run tests with coverage report
-- `make swagger` - Generate Swagger documentation
+- `make docs` - Generate Swagger documentation
 - `make fmt` - Format code
 - `make lint` - Run linters
 - `make clean` - Clean build artifacts
@@ -88,8 +88,8 @@ backend/
 
 The API documentation is automatically generated using Swagger/OpenAPI:
 
-- Local: [http://localhost:8081/swagger/index.html](http://localhost:8081/swagger/index.html)
-- Generate: `make swagger`
+- Local: [http://localhost:8081/swagger/index.html](http://localhost:8081/swagger/index.html), served only with `ENABLE_SWAGGER=true` (default: false)
+- Generate: `make docs`
 
 ## Health Checks
 
@@ -106,6 +106,7 @@ Configuration is handled through environment variables:
 - `GIN_MODE` - Gin framework mode (debug/release)
 - `PORT` - Server port (default: 8081)
 - `LOG_LEVEL` - Logging level (debug/info/warn/error)
+- `ENABLE_SWAGGER` - Serve the Swagger UI at `/swagger/index.html` (default: false)
 
 ## Testing
 
