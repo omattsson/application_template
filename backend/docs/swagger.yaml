@@ -1,5 +1,36 @@
 basePath: /
 definitions:
+  handlers.LoginRequest:
+    properties:
+      password:
+        type: string
+      username:
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  handlers.LoginResponse:
+    properties:
+      token:
+        type: string
+      user:
+        $ref: '#/definitions/models.User'
+    type: object
+  handlers.RegisterRequest:
+    properties:
+      display_name:
+        type: string
+      email:
+        type: string
+      password:
+        type: string
+      username:
+        type: string
+    required:
+    - password
+    - username
+    type: object
   handlers.UIConfigResponse:
     properties:
       auth_enabled:
@@ -51,6 +82,37 @@ definitions:
         description: For optimistic locking (1 = initial; 0 = not provided)
         type: integer
     type: object
+  models.User:
+    properties:
+      auth_provider:
+        type: string
+      created_at:
+        type: string
+      disabled:
+        type: boolean
+      display_name:
+        type: string
+      email:
+        type: string
+      external_id:
+        description: |-
+          ExternalID is the subject at the identity provider; nil for a local
+          user. (auth_provider, external_id) is unique; MySQL allows many NULLs.
+        type: string
+      id:
+        type: string
+      role:
+        type: string
+      service_account:
+        description: |-
+          ServiceAccount marks a local account that may still sign in with a
+          password when OIDC is the only interactive login (break-glass).
+        type: boolean
+      updated_at:
+        type: string
+      username:
+        type: string
+    type: object
 host: localhost:8081
 info:
   contact: {}
@@ -58,6 +120,150 @@ info:
   title: Backend API
   version: "1.0"
 paths:
+  /api/v1/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticate with username and password; returns a JWT access token
+        and the user. Every credential failure (unknown user, wrong password, disabled
+        account, SSO-only account) answers the same 401 "Invalid username or password".
+        After 5 failed attempts for one username within 15 minutes, every login for
+        that username answers 429 with Retry-After for 15 minutes.
+      parameters:
+      - description: Login credentials
+        in: body
+        name: credentials
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.LoginResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Request Entity Too Large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: User login
+      tags:
+      - auth
+  /api/v1/auth/me:
+    get:
+      description: Returns the authenticated user. A disabled account answers 401,
+        a deleted one 404.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.User'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get current user
+      tags:
+      - auth
+  /api/v1/auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Self-registration of a local account with the role user. Only available
+        when SELF_REGISTRATION is true; otherwise 404. Role, disabled, provider and
+        service account fields in the body are ignored. The username is 3 to 100 characters
+        (letters, digits and . _ - @, starting with a letter or digit); the password
+        is at least 8 characters and at most 72 bytes.
+      parameters:
+      - description: User registration data
+        in: body
+        name: user
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.User'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Request Entity Too Large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register a new user
+      tags:
+      - auth
   /api/v1/items:
     get:
       description: Get a list of all items
