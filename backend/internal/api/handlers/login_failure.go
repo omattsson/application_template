@@ -26,9 +26,9 @@ const (
 	loginReasonHashChanged          = "hash_changed"            // the password changed during the password check
 	loginReasonDisabled             = "disabled"                // the account is disabled (checked after the password)
 	loginReasonLocalLoginNotAllowed = "local_login_not_allowed" // OIDC only and the user is not a service account
-	// loginReasonAccountThrottled: the submitted name is a variant of the
-	// stored username (the collation matched it) and the account key is
-	// locked or busy; the password is not checked.
+	// loginReasonAccountThrottled: the account key of the found user is
+	// locked or busy (any spelling, also the stored name); the password is
+	// not checked.
 	loginReasonAccountThrottled = "account_throttled"
 
 	// Server-side failures (500).
@@ -197,19 +197,45 @@ func newLoginThrottle(threshold int, window time.Duration, maxEntries int) *logi
 	}
 }
 
-// loginThrottleKey returns the throttle key of a username: lower case and at
-// most models.MaxUsernameLen bytes (a longer name cannot exist, and the key
-// size stays bounded).
+// loginThrottleKey returns the folded form of a submitted username: lower
+// case and at most models.MaxUsernameLen bytes (a longer name cannot exist,
+// and the key size stays bounded). nameThrottleKey prefixes it.
 //
-// The key of the submitted name is not canonical: the users table uses the
-// MySQL 8 default collation utf8mb4_0900_ai_ci, which also ignores accents
-// and width (and folds ß/ss), so "ádmin" or "ａdmin" find the user "admin".
-// Login therefore also reserves the key of the stored username (the account
-// key) after a successful lookup; the submitted-name key alone only covers
-// unknown users.
+// The folded name is not canonical: the users table uses the MySQL 8 default
+// collation utf8mb4_0900_ai_ci, which also ignores accents and width (and
+// folds ß/ss), so "ádmin" or "ａdmin" find the user "admin". Login therefore
+// also reserves the account key (accountThrottleKey) after a successful
+// lookup.
 func loginThrottleKey(username string) string {
 	return truncateAtRune(strings.ToLower(truncateAtRune(username, 4*models.MaxUsernameLen)), models.MaxUsernameLen)
 }
+
+// The throttle has two key namespaces. They never share an entry: an account
+// key and a name key are distinct even when the submitted name equals the
+// stored one.
+//
+//   - Name keys ("n:" + folded submitted name) are reserved before the lookup,
+//     for every name, known or not. Only they produce a 429, so a 429 says
+//     nothing about whether an account exists.
+//   - Account keys ("u:" + user ID) are reserved after a successful lookup.
+//     They cap the password checks of one account over every spelling. A
+//     locked or busy account key gives the generic 401 (dummy compare, no
+//     password check) for every spelling, including the stored name.
+//
+// Each attempt counts once on each key it holds. A direct login reserves
+// n:<name> and u:<id> and counts on both, so both reach the threshold
+// together: the account still gets loginFailureThreshold guesses per window,
+// not fewer.
+const (
+	nameKeyPrefix    = "n:"
+	accountKeyPrefix = "u:"
+)
+
+// nameThrottleKey is the name key of a submitted username.
+func nameThrottleKey(username string) string { return nameKeyPrefix + loginThrottleKey(username) }
+
+// accountThrottleKey is the account key of a user ID.
+func accountThrottleKey(userID string) string { return accountKeyPrefix + userID }
 
 // loginAttempt is one login with its reserved keys. settle ends it exactly
 // once with the outcome set by the handler.

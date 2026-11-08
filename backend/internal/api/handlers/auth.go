@@ -205,12 +205,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// Reserve a slot under the submitted name before any work, so a parallel
-	// burst cannot pass the throttle before its failures are counted. The
-	// 429 here is the same for known and unknown names. The deferred settle
-	// releases every reserved key exactly once on every exit (also a cancel
-	// or a panic); the outcome stays neutral unless set below.
-	attempt, retryAfter := h.throttle.begin(loginThrottleKey(req.Username))
+	// Reserve a slot under the name key before any work, so a parallel burst
+	// cannot pass the throttle before its failures are counted. The name key
+	// never depends on whether the account exists, so this 429 (the only one
+	// Login gives) is the same for known and unknown names. The deferred
+	// settle releases every reserved key exactly once on every exit (also a
+	// cancel or a panic); the outcome stays neutral unless set below.
+	attempt, retryAfter := h.throttle.begin(nameThrottleKey(req.Username))
 	if attempt == nil {
 		h.log().Warn("Login throttled",
 			"username", truncateForLog(req.Username, maxLoggedUsernameLen),
@@ -265,13 +266,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// The collation may have matched a variant of the stored username
-	// (case, accents, width): count the attempt under the account key too.
-	// When that key is locked or busy, the password is not checked; the
-	// answer is the generic 401, which counts under the submitted name like
-	// the 401 of an unknown name, so the answer does not show that the
-	// variant belongs to an account.
-	if _, ok := attempt.add(loginThrottleKey(user.Username)); !ok {
+	// The collation may have matched a variant of the stored username (case,
+	// accents, width): count the attempt under the account key too, which
+	// caps the password checks of the account over every spelling. When that
+	// key is locked or busy, the password is not checked, for every spelling
+	// including the stored name: the answer is the generic 401, which counts
+	// under the name key like the 401 of an unknown name, so neither the
+	// status nor the Retry-After shows that the account exists.
+	if _, ok := attempt.add(accountThrottleKey(user.ID)); !ok {
 		failDummy(loginReasonAccountThrottled, user.ID)
 		return
 	}

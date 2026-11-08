@@ -78,7 +78,11 @@ type mockUserRepo struct {
 	afterFindByUsername func(r *mockUserRepo)
 	// fold, when set, makes FindByUsername match like a collation
 	// (fold(stored) == fold(submitted)); nil matches exactly.
-	fold    func(string) string
+	fold func(string) string
+	// gate, when set, runs first in FindByUsername ("by_username", name)
+	// and FindByID ("by_id", id), outside the lock: a test holds requests
+	// in flight there.
+	gate    func(op, arg string)
 	users   map[string]*models.User // by ID
 	mu      sync.Mutex
 	creates int
@@ -125,6 +129,9 @@ func (r *mockUserRepo) Create(_ context.Context, user *models.User) error {
 }
 
 func (r *mockUserRepo) FindByID(_ context.Context, id string) (*models.User, error) {
+	if r.gate != nil {
+		r.gate("by_id", id)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.findByIDErr != nil {
@@ -139,6 +146,9 @@ func (r *mockUserRepo) FindByID(_ context.Context, id string) (*models.User, err
 }
 
 func (r *mockUserRepo) FindByUsername(_ context.Context, username string) (*models.User, error) {
+	if r.gate != nil {
+		r.gate("by_username", username)
+	}
 	user, err := r.findByUsername(username)
 	if r.afterFindByUsername != nil {
 		r.afterFindByUsername(r)
@@ -739,7 +749,9 @@ func TestLoginParallelBurstGetsOnlyThresholdGuesses(t *testing.T) {
 	realHash, dummy := cc.counts()
 	assert.Equal(t, loginFailureThreshold, realHash)
 	assert.Equal(t, 0, dummy)
-	_, blocked := h.throttle.check(loginThrottleKey("alice"))
+	_, blocked := h.throttle.check(nameThrottleKey("alice"))
+	assert.True(t, blocked)
+	_, blocked = h.throttle.check(accountThrottleKey("u1"))
 	assert.True(t, blocked)
 	assert.Equal(t, 0, totalInflight(h.throttle))
 }
@@ -796,10 +808,41 @@ func TestLoginAccentVariantsShareTheAccountThrottle(t *testing.T) {
 		assert.Equal(t, 1, dummy)
 		assert.Contains(t, logs.String(), `"reason":"`+loginReasonAccountThrottled+`"`)
 
-		// The stored name itself is locked.
+		// The stored name with the correct password: also the generic 401
+		// without a password check (a 429 here would show that the account
+		// exists, see the "real name" subtests).
 		w = postJSON(t, r, "/api/v1/auth/login", loginBody(t, "aaaa", testPassword))
-		assert.Equal(t, http.StatusTooManyRequests, w.Code)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.JSONEq(t, invalidCredentialsBody, w.Body.String())
+		assert.Empty(t, w.Header().Get("Retry-After"))
+		realHash, _ = cc.counts()
+		assert.Equal(t, loginFailureThreshold, realHash)
 		assert.Equal(t, 0, totalInflight(h.throttle))
+	})
+
+	t.Run("direct and variant attempts share the account guesses", func(t *testing.T) {
+		t.Parallel()
+		repo := newMockUserRepo(localUser("u1", "aaaa"))
+		repo.fold = mysqlLikeFold
+		h, _, _ := newTestAuthHandler(repo, testAuthConfig(), nil)
+		cc := &countingCompare{}
+		h.compareHash = cc.compare
+		r := newAuthRouter(h)
+		variants := accentVariants(20)
+
+		for i := 0; i < 3; i++ {
+			require.Equal(t, http.StatusUnauthorized, postJSON(t, r, "/api/v1/auth/login", loginBody(t, "aaaa", "wrong-password")).Code)
+		}
+		for _, v := range variants {
+			require.Equal(t, http.StatusUnauthorized, postJSON(t, r, "/api/v1/auth/login", loginBody(t, v, "wrong-password")).Code)
+		}
+
+		realHash, _ := cc.counts()
+		assert.Equal(t, loginFailureThreshold, realHash, "exactly the threshold over every spelling")
+		failures, _ := entryState(h.throttle, accountThrottleKey("u1"))
+		assert.Equal(t, loginFailureThreshold, failures, "each attempt counts once on the account key")
+		failures, _ = entryState(h.throttle, nameThrottleKey("aaaa"))
+		assert.Equal(t, 3, failures, "and once on its own name key")
 	})
 
 	t.Run("parallel burst", func(t *testing.T) {
@@ -821,7 +864,7 @@ func TestLoginAccentVariantsShareTheAccountThrottle(t *testing.T) {
 		realHash, _ := cc.counts()
 		assert.Equal(t, loginFailureThreshold, realHash, "only threshold real compares; codes: %v", got)
 		assert.Equal(t, len(bodies), got[http.StatusUnauthorized], "a variant answer is the generic 401")
-		_, blocked := h.throttle.check(loginThrottleKey("aaaa"))
+		_, blocked := h.throttle.check(accountThrottleKey("u1"))
 		assert.True(t, blocked)
 		assert.Equal(t, 0, totalInflight(h.throttle))
 	})
@@ -845,6 +888,104 @@ func TestLoginAccentVariantsShareTheAccountThrottle(t *testing.T) {
 			assert.Equal(t, want, codes, name)
 		}
 	})
+
+	// After variant failures lock the account, the real name answers exactly
+	// like the real form of an unknown name after the same variant failures:
+	// the 429 (and its Retry-After) comes only from the name key.
+	t.Run("real name after variant failures answers like an unknown name", func(t *testing.T) {
+		t.Parallel()
+		probe := func(t *testing.T, base string) []loginAnswer {
+			repo := newMockUserRepo(localUser("u1", "aaaa"))
+			repo.fold = mysqlLikeFold
+			h, _, _ := newTestAuthHandler(repo, testAuthConfig(), nil)
+			r := newAuthRouter(h)
+			for _, v := range accentVariants(loginFailureThreshold) {
+				require.Equal(t, http.StatusUnauthorized, postJSON(t, r, "/api/v1/auth/login", loginBody(t, v+base[4:], "wrong-password")).Code)
+			}
+			var answers []loginAnswer
+			for i := 0; i < loginFailureThreshold+1; i++ {
+				answers = append(answers, answerOf(postJSON(t, r, "/api/v1/auth/login", loginBody(t, base, testPassword))))
+			}
+			return answers
+		}
+
+		account := probe(t, "aaaa")  // variants of the existing account
+		unknown := probe(t, "aaaaz") // variants of a name that does not exist
+
+		assert.Equal(t, unknown, account)
+		assert.Equal(t, http.StatusUnauthorized, account[0].code, "no 429 right after the variant failures")
+		assert.Empty(t, account[0].retryAfter)
+		assert.Equal(t, http.StatusTooManyRequests, account[loginFailureThreshold].code, "the name key locks after its own failures")
+	})
+
+	// The busy mirror: with loginFailureThreshold variant attempts in flight,
+	// the real name answers like the real form of an unknown name with the
+	// same attempts in flight (no 429 with Retry-After 1). The held attempts
+	// wait in the repository, not in the compare, so they hold no bcrypt slot.
+	t.Run("real name while variant attempts are in flight answers like an unknown name", func(t *testing.T) {
+		t.Parallel()
+		probe := func(t *testing.T, base string) loginAnswer {
+			repo := newMockUserRepo(localUser("u1", "aaaa"))
+			repo.fold = mysqlLikeFold
+			release := make(chan struct{})
+			arrived := make(chan struct{}, loginFailureThreshold)
+			repo.gate = func(op, arg string) {
+				// Existing account: hold at the re-read, after the account
+				// key is reserved. Unknown name: hold at the lookup (there
+				// is no account key). The probe itself is never held.
+				if (base == "aaaa" && op == "by_id") || (base != "aaaa" && op == "by_username" && arg != base) {
+					arrived <- struct{}{}
+					<-release
+				}
+			}
+			h, _, _ := newTestAuthHandler(repo, testAuthConfig(), nil)
+			r := newAuthRouter(h)
+
+			var wg sync.WaitGroup
+			for _, v := range accentVariants(loginFailureThreshold) {
+				wg.Add(1)
+				go func(name string) {
+					defer wg.Done()
+					postJSON(t, r, "/api/v1/auth/login", loginBody(t, name, testPassword))
+				}(v + base[4:])
+			}
+			for i := 0; i < loginFailureThreshold; i++ {
+				select {
+				case <-arrived:
+				case <-time.After(5 * time.Second):
+					close(release)
+					t.Fatal("held attempts did not arrive")
+				}
+			}
+			if base == "aaaa" {
+				_, inflight := entryState(h.throttle, accountThrottleKey("u1"))
+				require.Equal(t, loginFailureThreshold, inflight, "the account key is busy")
+			}
+
+			answer := answerOf(postJSON(t, r, "/api/v1/auth/login", loginBody(t, base, testPassword)))
+			close(release)
+			wg.Wait()
+			assert.Equal(t, 0, totalInflight(h.throttle))
+			return answer
+		}
+
+		account := probe(t, "aaaa")
+		unknown := probe(t, "aaaaz")
+
+		assert.Equal(t, unknown, account)
+		assert.Equal(t, loginAnswer{code: http.StatusUnauthorized, body: invalidCredentialsBody}, account)
+	})
+}
+
+// loginAnswer is what a client sees of a login answer.
+type loginAnswer struct {
+	body       string
+	retryAfter string
+	code       int
+}
+
+func answerOf(w *httptest.ResponseRecorder) loginAnswer {
+	return loginAnswer{code: w.Code, body: w.Body.String(), retryAfter: w.Header().Get("Retry-After")}
 }
 
 // Every exit of Login releases its reservations exactly once: success,
@@ -901,7 +1042,7 @@ func TestLoginReleasesReservationsOnEveryExit(t *testing.T) {
 
 			assert.Equal(t, tt.wantCode, w.Code)
 			assert.Equal(t, 0, totalInflight(h.throttle), "no reservation leaks")
-			failures, _ := entryState(h.throttle, "alice")
+			failures, _ := entryState(h.throttle, accountThrottleKey("u1"))
 			assert.Equal(t, tt.wantFailures, failures, "account key failures")
 		})
 	}
@@ -954,7 +1095,9 @@ func TestLoginConcurrentMixOfValidAndInvalid(t *testing.T) {
 	assert.LessOrEqual(t, unauthorized, invalid)
 	assert.Positive(t, okCount)
 	assert.Equal(t, 0, totalInflight(h.throttle))
-	_, blocked := h.throttle.check(loginThrottleKey("alice"))
+	_, blocked := h.throttle.check(accountThrottleKey("u1"))
+	assert.False(t, blocked)
+	_, blocked = h.throttle.check(nameThrottleKey("alice"))
 	assert.False(t, blocked)
 
 	w := postJSON(t, r, "/api/v1/auth/login", loginBody(t, "alice", testPassword))
