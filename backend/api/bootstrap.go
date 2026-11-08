@@ -177,9 +177,11 @@ func startHTTPServer(cfg *config.Config, handler http.Handler) *http.Server {
 		exit(1)
 		return srv
 	}
+	// addr is the configured address (as before); listen is the bound one
+	// (0.0.0.0 can show as [::], port 0 shows the real port).
+	slog.Info("Server starting", "addr", srv.Addr, "listen", ln.Addr().String())
 	srv.Addr = ln.Addr().String()
 
-	slog.Info("Server starting", "addr", srv.Addr)
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("Failed to start server", "error", err)
