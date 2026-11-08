@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
+.PHONY: gosec dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
 
 # MySQL service management
 mysql-start:
@@ -121,5 +121,9 @@ fmt:
 lint:
 	cd backend && go vet ./...
 	cd frontend && npm run lint
+
+# gosec security scan of the backend (pinned gosec built with the local Go).
+gosec:
+	scripts/gosec.sh
 
 

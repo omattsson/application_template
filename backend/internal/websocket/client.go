@@ -46,7 +46,7 @@ func NewClient(hub *Hub, conn *websocket.Conn) (*Client, error) {
 		send: make(chan []byte, sendBufferSize),
 	}
 	if err := hub.Register(client); err != nil {
-		conn.Close()
+		_ = conn.Close() // best-effort close; the registration error is returned
 		return nil, err
 	}
 	go client.writePump()
@@ -63,7 +63,7 @@ func (c *Client) readPump() {
 			slog.Error("Panic in WebSocket readPump", "recover", r)
 		}
 		c.hub.Unregister(c)
-		c.conn.Close()
+		_ = c.conn.Close() // best-effort close on teardown; the connection may already be closed
 	}()
 
 	c.conn.SetReadLimit(maxMessageSize)
@@ -98,7 +98,7 @@ func (c *Client) writePump() {
 			slog.Error("Panic in WebSocket writePump", "recover", r)
 		}
 		ticker.Stop()
-		c.conn.Close()
+		_ = c.conn.Close() // best-effort close on teardown; the connection may already be closed
 	}()
 
 	for {

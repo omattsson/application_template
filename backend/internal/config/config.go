@@ -232,6 +232,7 @@ func LoadConfig() (*Config, error) {
 		envFile = ".env"
 	}
 
+	// #nosec G703 -- envFile is the operator-set ENV_FILE path (process environment), not request input.
 	if _, err := os.Stat(envFile); err == nil {
 		if err := godotenv.Load(envFile); err != nil {
 			return nil, fmt.Errorf("error loading %s: %w", envFile, err)
