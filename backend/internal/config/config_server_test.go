@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"log/slog"
+	"reflect"
 	"testing"
 	"time"
 
@@ -80,6 +81,33 @@ func TestConfigGinMode(t *testing.T) {
 	}
 }
 
+// TestAppDebugSingleSource checks that APP_DEBUG has one field, App.Debug,
+// and that Config.GinMode reads it.
+func TestAppDebugSingleSource(t *testing.T) {
+	// Not parallel: t.Setenv modifies the process environment.
+	t.Setenv("GIN_MODE", "")
+
+	_, dup := reflect.TypeOf(config.ServerConfig{}).FieldByName("AppDebug")
+	assert.False(t, dup, "ServerConfig.AppDebug duplicates AppConfig.Debug")
+
+	tests := []struct {
+		name  string
+		want  string
+		debug bool
+	}{
+		{name: "App.Debug true is debug", debug: true, want: gin.DebugMode},
+		{name: "App.Debug false is release", debug: false, want: gin.ReleaseMode},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{App: config.AppConfig{Debug: tt.debug}}
+			assert.Equal(t, tt.want, cfg.GinMode())
+		})
+	}
+}
+
 func TestLoadConfigServerSettings(t *testing.T) {
 	// Not parallel: subtests use t.Setenv which modifies process env.
 	t.Run("defaults", func(t *testing.T) {
@@ -94,7 +122,7 @@ func TestLoadConfigServerSettings(t *testing.T) {
 		assert.Equal(t, int32(10), cfg.Server.LoginRateLimit)
 		assert.False(t, cfg.Server.EnableSwagger)
 		assert.Nil(t, cfg.Server.TrustedProxies)
-		assert.True(t, cfg.Server.AppDebug)
+		assert.True(t, cfg.App.Debug)
 	})
 
 	t.Run("overrides", func(t *testing.T) {
@@ -111,7 +139,6 @@ func TestLoadConfigServerSettings(t *testing.T) {
 		assert.Equal(t, int32(3), cfg.Server.LoginRateLimit)
 		assert.True(t, cfg.Server.EnableSwagger)
 		assert.Equal(t, []string{"10.0.0.0/8"}, cfg.Server.TrustedProxies)
-		assert.False(t, cfg.Server.AppDebug)
 		assert.False(t, cfg.App.Debug)
 	})
 }

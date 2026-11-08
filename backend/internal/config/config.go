@@ -64,6 +64,8 @@ type AppConfig struct {
 	// Title is the product name shown by the web UI (APP_TITLE). LoadConfig
 	// applies DefaultAppTitle when it is unset.
 	Title string
+	// Debug is APP_DEBUG (default true). It drives the Gin mode
+	// (Config.GinMode) and whether the GORM logger shows SQL values.
 	Debug bool
 }
 
@@ -132,9 +134,6 @@ type ServerConfig struct {
 	// 1-byte fields
 	// EnableSwagger is ENABLE_SWAGGER (default false).
 	EnableSwagger bool
-	// AppDebug is APP_DEBUG (default true). It mirrors App.Debug and drives
-	// the Gin mode through Config.GinMode.
-	AppDebug bool
 }
 
 // LogConfig holds logging configuration
@@ -168,7 +167,7 @@ func (c *Config) GinMode() string {
 		return m
 	}
 
-	if c.Server.AppDebug {
+	if c.App.Debug {
 		return gin.DebugMode
 	}
 
@@ -287,6 +286,9 @@ func (c *ServerConfig) Validate() error {
 //
 // Values are URL-encoded: %27 is ', %2C is , and %2B is + (a plain + would
 // decode to a space).
+//
+// The value starts with "&": append it after an existing "?query" of the DSN
+// (DSN appends it after "?charset=...").
 const MySQLSessionParams = "&sql_mode=%27ONLY_FULL_GROUP_BY%2CSTRICT_TRANS_TABLES%2CNO_ZERO_IN_DATE%2CNO_ZERO_DATE%2CERROR_FOR_DIVISION_BY_ZERO%2CNO_ENGINE_SUBSTITUTION%27" +
 	"&time_zone=%27%2B00%3A00%27" +
 	"&foreign_key_checks=1"
@@ -364,7 +366,6 @@ func LoadConfig() (*Config, error) {
 			IdleTimeout:     getEnvDuration("SERVER_IDLE_TIMEOUT", defaultIdleTimeout),
 			ShutdownTimeout: getEnvDuration("SERVER_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
 			EnableSwagger:   getEnvBool("ENABLE_SWAGGER", false),
-			AppDebug:        getEnvBool("APP_DEBUG", true),
 		},
 		CORS: CORSConfig{
 			AllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),

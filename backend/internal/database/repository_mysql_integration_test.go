@@ -35,7 +35,6 @@ func mysqlTestConfig(debug bool) *config.Config {
 			MaxIdleConns:    2,
 			ConnMaxLifetime: 5 * time.Minute,
 		},
-		Server: config.ServerConfig{AppDebug: debug},
 	}
 }
 

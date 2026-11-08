@@ -35,6 +35,10 @@ func (r *RateLimiters) Stop() {
 // SetupRoutes configures all the routes for our application.
 // healthChecker is injected from main so the readiness endpoint reflects real dependency health.
 // Returns the rate limiters so the caller can stop them during shutdown.
+//
+// Precondition: cfg.Server.RateLimit > 0 and cfg.Server.LoginRateLimit > 0.
+// config.LoadConfig guarantees both (it rejects a value <= 0); a Config built
+// by hand must set them.
 func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker *health.HealthChecker, cfg *config.Config, hub *websocket.Hub) *RateLimiters {
 	// Client IP: only the proxies of TRUSTED_PROXIES may set it with
 	// X-Forwarded-For or X-Real-IP. Gin trusts every peer by default, so a

@@ -59,6 +59,7 @@ func handleDBError(err error) (int, string) {
 // @Success 201 {object} models.Item
 // @Failure 400 {object} map[string]string
 // @Failure 409 {object} map[string]string
+// @Failure 413 {object} map[string]string "Request body too large"
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/items [post]
@@ -181,6 +182,7 @@ func (h *Handler) GetItem(c *gin.Context) {
 // @Failure 400 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Failure 409 {object} map[string]string
+// @Failure 413 {object} map[string]string "Request body too large"
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/items/{id} [put]

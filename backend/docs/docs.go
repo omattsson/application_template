@@ -115,6 +115,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "413": {
+                        "description": "Request body too large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "499": {
                         "description": "Client closed request",
                         "schema": {
@@ -257,6 +266,15 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "Request body too large",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

@@ -22,7 +22,7 @@ const (
 func NewFromAppConfig(cfg *config.Config) (*Database, error) {
 	// GORM logs through slog.Default(); with APP_DEBUG=false the SQL values
 	// and the error texts are redacted.
-	debug := cfg.Server.AppDebug
+	debug := cfg.App.Debug
 	gormLogger := newGormLogger(debug)
 
 	// Initialize database with retries

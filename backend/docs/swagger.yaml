@@ -121,6 +121,12 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "413":
+          description: Request body too large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "499":
           description: Client closed request
           schema:
@@ -256,6 +262,12 @@ paths:
             type: object
         "409":
           description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Request body too large
           schema:
             additionalProperties:
               type: string
