@@ -89,7 +89,9 @@ func (m *Migrator) MigrateDown() error {
 				if err := migration.Down(tx); err != nil {
 					return err
 				}
-				return tx.Delete(&lastVersion).Error
+				// Delete the row for good: a soft-deleted row keeps its
+				// unique version and MigrateUp could not record it again.
+				return tx.Unscoped().Delete(&lastVersion).Error
 			})
 
 			if err != nil {

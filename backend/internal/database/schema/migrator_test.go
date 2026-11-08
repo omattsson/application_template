@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -93,6 +94,31 @@ func TestMigrator(t *testing.T) {
 		err = db.Model(&SchemaVersion{}).Count(&count).Error
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), count)
+	})
+
+	t.Run("applies a rolled back migration again", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		migrator := NewMigrator(db)
+		migrator.AddMigration(Migration{
+			Version: "20250602000001",
+			Name:    "test_migration",
+			Up: func(tx *gorm.DB) error {
+				return tx.Exec("CREATE TABLE test (id INTEGER PRIMARY KEY)").Error
+			},
+			Down: func(tx *gorm.DB) error {
+				return tx.Exec("DROP TABLE test").Error
+			},
+		})
+
+		require.NoError(t, migrator.MigrateUp())
+		require.NoError(t, migrator.MigrateDown())
+		require.NoError(t, migrator.MigrateUp(), "the version row of a rolled back migration is gone")
+
+		assert.True(t, db.Migrator().HasTable("test"))
+		var count int64
+		require.NoError(t, db.Unscoped().Model(&SchemaVersion{}).Count(&count).Error)
+		assert.Equal(t, int64(1), count)
 	})
 
 	t.Run("handles duplicate migrations", func(t *testing.T) {
