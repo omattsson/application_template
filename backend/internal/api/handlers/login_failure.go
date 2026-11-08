@@ -26,6 +26,10 @@ const (
 	loginReasonHashChanged          = "hash_changed"            // the password changed during the password check
 	loginReasonDisabled             = "disabled"                // the account is disabled (checked after the password)
 	loginReasonLocalLoginNotAllowed = "local_login_not_allowed" // OIDC only and the user is not a service account
+	// loginReasonAccountThrottled: the submitted name is a variant of the
+	// stored username (the collation matched it) and the account key is
+	// locked or busy; the password is not checked.
+	loginReasonAccountThrottled = "account_throttled"
 
 	// Server-side failures (500).
 	loginReasonLookupError = "lookup_error" // the user lookup failed
@@ -100,29 +104,51 @@ func truncateAtRune(s string, n int) string {
 }
 
 // Settings of the per-username login throttle. After loginFailureThreshold
-// credential failures for one username within loginFailureWindow, every login
-// for that username gets 429 for loginFailureWindow (also with the correct
-// password). It complements the per-IP LOGIN_RATE_LIMIT: that one limits one
-// client, this one limits guesses at one account from many clients.
+// credential failures for one key within loginFailureWindow, every login for
+// that key gets 429 for loginFailureWindow (also with the correct password).
+// It complements the per-IP LOGIN_RATE_LIMIT: that one limits one client,
+// this one limits guesses at one account from many clients.
+//
+// An attempt reserves its slot before the password check, so a parallel
+// burst cannot get more than loginFailureThreshold guesses in: while
+// failures + attempts in flight reach the threshold, further attempts get 429
+// with Retry-After loginBusyRetryAfter.
 //
 // The state is in memory and per replica: with N replicas a username can get
 // up to N*loginFailureThreshold guesses per window.
 const (
 	loginFailureThreshold = 5
 	loginFailureWindow    = 15 * time.Minute
+	// loginBusyRetryAfter is the Retry-After of an attempt refused because
+	// the slots of its key are taken by attempts in flight.
+	loginBusyRetryAfter = time.Second
 	// loginThrottleMaxEntries bounds the memory of the throttle (one entry is
 	// a key of at most models.MaxUsernameLen bytes and a few words).
 	loginThrottleMaxEntries = 10000
 )
 
-// throttleEntry is the failure state of one username.
+// attemptOutcome is how a reserved login attempt ended.
+type attemptOutcome int
+
+const (
+	// outcomeNeutral releases the slot without counting (server error,
+	// cancelled request, panic). It is the default.
+	outcomeNeutral attemptOutcome = iota
+	// outcomeFailure counts a credential failure (401).
+	outcomeFailure
+	// outcomeSuccess clears the failures of the key.
+	outcomeSuccess
+)
+
+// throttleEntry is the state of one key.
 type throttleEntry struct {
 	windowStart time.Time // first failure of the current window
 	lockedUntil time.Time // zero: not locked
 	failures    int
+	inflight    int // reserved attempts that have not settled
 }
 
-// expiry is the time after which the entry has no effect.
+// expiry is the time after which the failures and the lock have no effect.
 func (e *throttleEntry) expiry(window time.Duration) time.Time {
 	end := e.windowStart.Add(window)
 	if e.lockedUntil.After(end) {
@@ -131,10 +157,25 @@ func (e *throttleEntry) expiry(window time.Duration) time.Time {
 	return end
 }
 
-// loginThrottle counts credential failures per username. It is safe for
-// concurrent use. The map holds at most maxEntries entries: when it is full,
-// expired entries are dropped first, then the counter (not locked) that
-// expires first, and a lock only when every entry is locked. A flood of new
+// roll drops failures and the lock once they expired. It keeps inflight.
+func (e *throttleEntry) roll(now time.Time, window time.Duration) {
+	if e.failures > 0 && !now.Before(e.expiry(window)) {
+		e.failures = 0
+		e.lockedUntil = time.Time{}
+	}
+}
+
+// idle reports whether the entry holds no state any more (it can be deleted).
+func (e *throttleEntry) idle() bool {
+	return e.inflight == 0 && e.failures == 0 && e.lockedUntil.IsZero()
+}
+
+// loginThrottle counts credential failures and attempts in flight per key. It
+// is safe for concurrent use. The map holds at most maxEntries entries; an
+// entry with an attempt in flight is never evicted. When the map is full,
+// expired entries go first, then the counter (not locked) that expires first,
+// and a lock only when every evictable entry is locked; when every entry has
+// an attempt in flight, a new key is refused (fail closed). A flood of new
 // usernames therefore cannot evict a lock until it has locked maxEntries
 // usernames itself. There is no background goroutine.
 type loginThrottle struct {
@@ -156,15 +197,124 @@ func newLoginThrottle(threshold int, window time.Duration, maxEntries int) *logi
 	}
 }
 
-// loginThrottleKey returns the throttle key of a submitted username: lower
-// case (the default MySQL collation matches usernames case-insensitively, so
-// "Alice" and "alice" are the same account) and at most models.MaxUsernameLen
-// bytes (a longer name cannot exist, and the key size stays bounded).
+// loginThrottleKey returns the throttle key of a username: lower case and at
+// most models.MaxUsernameLen bytes (a longer name cannot exist, and the key
+// size stays bounded).
+//
+// The key of the submitted name is not canonical: the users table uses the
+// MySQL 8 default collation utf8mb4_0900_ai_ci, which also ignores accents
+// and width (and folds ß/ss), so "ádmin" or "ａdmin" find the user "admin".
+// Login therefore also reserves the key of the stored username (the account
+// key) after a successful lookup; the submitted-name key alone only covers
+// unknown users.
 func loginThrottleKey(username string) string {
 	return truncateAtRune(strings.ToLower(truncateAtRune(username, 4*models.MaxUsernameLen)), models.MaxUsernameLen)
 }
 
-// check reports whether key is locked and for how long.
+// loginAttempt is one login with its reserved keys. settle ends it exactly
+// once with the outcome set by the handler.
+type loginAttempt struct {
+	t       *loginThrottle
+	keys    []string
+	outcome attemptOutcome
+	settled bool
+}
+
+// begin reserves a slot under key for a new attempt. It returns nil and the
+// Retry-After when the key is locked, its slots are taken, or the map is full
+// of attempts in flight.
+func (t *loginThrottle) begin(key string) (*loginAttempt, time.Duration) {
+	if retryAfter, ok := t.reserve(key); !ok {
+		return nil, retryAfter
+	}
+	return &loginAttempt{t: t, keys: []string{key}}, 0
+}
+
+// add reserves a second key (the account key) for the attempt. A key that the
+// attempt already holds is not reserved twice. It returns false and the
+// Retry-After when the key is refused; the attempt keeps its other keys.
+func (a *loginAttempt) add(key string) (time.Duration, bool) {
+	for _, k := range a.keys {
+		if k == key {
+			return 0, true
+		}
+	}
+	retryAfter, ok := a.t.reserve(key)
+	if ok {
+		a.keys = append(a.keys, key)
+	}
+	return retryAfter, ok
+}
+
+// settle releases every reserved key with the outcome. Later calls do
+// nothing.
+func (a *loginAttempt) settle() {
+	if a == nil || a.settled {
+		return
+	}
+	a.settled = true
+	for _, k := range a.keys {
+		a.t.release(k, a.outcome)
+	}
+}
+
+// reserve takes one slot of key.
+func (t *loginThrottle) reserve(key string) (time.Duration, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := t.now()
+	e, ok := t.entries[key]
+	if !ok {
+		if !t.makeRoom(now) {
+			return loginBusyRetryAfter, false
+		}
+		e = &throttleEntry{}
+		t.entries[key] = e
+	}
+	e.roll(now, t.window)
+	if now.Before(e.lockedUntil) {
+		return e.lockedUntil.Sub(now), false
+	}
+	if e.failures+e.inflight >= t.threshold {
+		return loginBusyRetryAfter, false
+	}
+	e.inflight++
+	return 0, true
+}
+
+// release returns one slot of key and applies the outcome.
+func (t *loginThrottle) release(key string, outcome attemptOutcome) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e, ok := t.entries[key]
+	if !ok {
+		return
+	}
+	if e.inflight > 0 {
+		e.inflight--
+	}
+	now := t.now()
+	e.roll(now, t.window)
+	switch outcome {
+	case outcomeFailure:
+		if e.failures == 0 {
+			e.windowStart = now
+		}
+		e.failures++
+		if e.failures >= t.threshold && !now.Before(e.lockedUntil) {
+			e.lockedUntil = now.Add(t.window)
+		}
+	case outcomeSuccess:
+		e.failures = 0
+		e.lockedUntil = time.Time{}
+	case outcomeNeutral:
+	}
+	if e.idle() {
+		delete(t.entries, key)
+	}
+}
+
+// check reports whether key is locked and for how long. It reserves nothing.
 func (t *loginThrottle) check(key string) (retryAfter time.Duration, blocked bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -173,7 +323,8 @@ func (t *loginThrottle) check(key string) (retryAfter time.Duration, blocked boo
 		return 0, false
 	}
 	now := t.now()
-	if !now.Before(e.expiry(t.window)) {
+	e.roll(now, t.window)
+	if e.idle() {
 		delete(t.entries, key)
 		return 0, false
 	}
@@ -183,45 +334,28 @@ func (t *loginThrottle) check(key string) (retryAfter time.Duration, blocked boo
 	return 0, false
 }
 
-// recordFailure counts one credential failure for key and locks it at the
-// threshold.
-func (t *loginThrottle) recordFailure(key string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	now := t.now()
-	e, ok := t.entries[key]
-	if ok && !now.Before(e.expiry(t.window)) {
-		delete(t.entries, key)
-		ok = false
-	}
-	if !ok {
-		t.makeRoom(now)
-		e = &throttleEntry{windowStart: now}
-		t.entries[key] = e
-	}
-	e.failures++
-	if e.failures >= t.threshold && !now.Before(e.lockedUntil) {
-		e.lockedUntil = now.Add(t.window)
-	}
-}
-
-// makeRoom frees one slot when the map is full. The caller holds t.mu.
-func (t *loginThrottle) makeRoom(now time.Time) {
+// makeRoom frees one slot when the map is full and reports whether there is
+// room. The caller holds t.mu.
+func (t *loginThrottle) makeRoom(now time.Time) bool {
 	if len(t.entries) < t.maxEntries {
-		return
+		return true
 	}
 	for k, e := range t.entries {
-		if !now.Before(e.expiry(t.window)) {
+		e.roll(now, t.window)
+		if e.idle() {
 			delete(t.entries, k)
 		}
 	}
 	if len(t.entries) < t.maxEntries {
-		return
+		return true
 	}
 	var victim string
 	var victimExpiry time.Time
 	victimLocked := true
 	for k, e := range t.entries {
+		if e.inflight > 0 {
+			continue
+		}
 		locked := now.Before(e.lockedUntil)
 		exp := e.expiry(t.window)
 		// An unlocked counter always goes before a lock; within the same
@@ -230,14 +364,11 @@ func (t *loginThrottle) makeRoom(now time.Time) {
 			victim, victimExpiry, victimLocked = k, exp, locked
 		}
 	}
+	if victim == "" {
+		return false
+	}
 	delete(t.entries, victim)
-}
-
-// reset clears key (successful login).
-func (t *loginThrottle) reset(key string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	delete(t.entries, key)
+	return true
 }
 
 // size returns the number of entries.
@@ -245,16 +376,6 @@ func (t *loginThrottle) size() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.entries)
-}
-
-// failures returns the failure count of key (tests).
-func (t *loginThrottle) failures(key string) int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if e, ok := t.entries[key]; ok {
-		return e.failures
-	}
-	return 0
 }
 
 // retryAfterSeconds formats d as a Retry-After value: whole seconds, rounded

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -75,9 +76,12 @@ type mockUserRepo struct {
 	// afterFindByUsername runs after each FindByUsername, outside the lock:
 	// a test changes the stored user between the lookup and the re-read.
 	afterFindByUsername func(r *mockUserRepo)
-	users               map[string]*models.User // by ID
-	mu                  sync.Mutex
-	creates             int
+	// fold, when set, makes FindByUsername match like a collation
+	// (fold(stored) == fold(submitted)); nil matches exactly.
+	fold    func(string) string
+	users   map[string]*models.User // by ID
+	mu      sync.Mutex
+	creates int
 }
 
 func newMockUserRepo(users ...models.User) *mockUserRepo {
@@ -148,14 +152,25 @@ func (r *mockUserRepo) findByUsername(username string) (*models.User, error) {
 	if r.findByUsernameErr != nil {
 		return nil, r.findByUsernameErr
 	}
+	match := func(a, b string) bool { return a == b }
+	if r.fold != nil {
+		match = func(a, b string) bool { return r.fold(a) == r.fold(b) }
+	}
 	for _, u := range r.users {
-		if u.Username == username {
+		if match(u.Username, username) {
 			cp := *u
 			return &cp, nil
 		}
 	}
 	return nil, notFoundErr()
 }
+
+// mysqlLikeFold approximates the MySQL utf8mb4_0900_ai_ci primary level for
+// the tests: case, a few accents and full-width letters fold together.
+var mysqlLikeFold = func() func(string) string {
+	r := strings.NewReplacer("á", "a", "à", "a", "ä", "a", "â", "a", "Á", "a", "À", "a", "ａ", "a", "Ａ", "a")
+	return func(s string) string { return strings.ToLower(r.Replace(s)) }
+}()
 
 // update changes the stored user with ID id.
 func (r *mockUserRepo) update(id string, fn func(u *models.User)) {
@@ -649,37 +664,301 @@ func TestLoginSuccessClearsTheThrottle(t *testing.T) {
 	assert.Equal(t, 0, h.throttle.size())
 }
 
-// Concurrent logins share the throttle without a data race (run with -race).
-func TestLoginConcurrentFailures(t *testing.T) {
-	t.Parallel()
-	h, _, _ := newTestAuthHandler(newMockUserRepo(localUser("u1", "alice")), testAuthConfig(), nil)
-	h.compareHash = func([]byte, []byte) error { return bcrypt.ErrMismatchedHashAndPassword }
-	r := newAuthRouter(h)
+// countingCompare is a slow bcrypt compare (so concurrent requests overlap)
+// that counts the compares against the real hash and against the dummy hash.
+type countingCompare struct {
+	delay    time.Duration
+	mu       sync.Mutex
+	realHash int
+	dummy    int
+}
 
-	const n = 20
-	codes := make([]int, n)
+func (cc *countingCompare) compare(hash, password []byte) error {
+	time.Sleep(cc.delay)
+	cc.mu.Lock()
+	if bytes.Equal(hash, dummyPasswordHash()) {
+		cc.dummy++
+	} else {
+		cc.realHash++
+	}
+	cc.mu.Unlock()
+	return bcrypt.CompareHashAndPassword(hash, password)
+}
+
+func (cc *countingCompare) counts() (realHash, dummy int) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	return cc.realHash, cc.dummy
+}
+
+// postConcurrently posts the bodies at the same time and returns the codes.
+func postConcurrently(t *testing.T, r http.Handler, bodies []string) []int {
+	t.Helper()
+	codes := make([]int, len(bodies))
+	start := make(chan struct{})
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range bodies {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			codes[i] = postJSON(t, r, "/api/v1/auth/login", loginBody(t, "alice", "wrong-password")).Code
+			<-start
+			codes[i] = postJSON(t, r, "/api/v1/auth/login", bodies[i]).Code
 		}(i)
 	}
+	close(start)
 	wg.Wait()
+	return codes
+}
 
-	unauthorized := 0
-	for _, code := range codes {
-		require.Contains(t, []int{http.StatusUnauthorized, http.StatusTooManyRequests}, code)
-		if code == http.StatusUnauthorized {
-			unauthorized++
-		}
+func countCodes(codes []int) map[int]int {
+	m := map[int]int{}
+	for _, c := range codes {
+		m[c]++
 	}
-	// Requests that passed the check before the lock was set still answer
-	// 401; at least the threshold did, so the username is locked now.
-	assert.GreaterOrEqual(t, unauthorized, loginFailureThreshold)
+	return m
+}
+
+// A parallel burst for one username gets exactly loginFailureThreshold
+// password checks: every attempt reserves its slot before the compare, the
+// rest get 429.
+func TestLoginParallelBurstGetsOnlyThresholdGuesses(t *testing.T) {
+	t.Parallel()
+	h, _, _ := newTestAuthHandler(newMockUserRepo(localUser("u1", "alice")), testAuthConfig(), nil)
+	cc := &countingCompare{delay: 30 * time.Millisecond}
+	h.compareHash = cc.compare
+	r := newAuthRouter(h)
+
+	bodies := make([]string, 40)
+	for i := range bodies {
+		bodies[i] = loginBody(t, "alice", fmt.Sprintf("guess-%d", i))
+	}
+	got := countCodes(postConcurrently(t, r, bodies))
+
+	assert.Equal(t, loginFailureThreshold, got[http.StatusUnauthorized], "codes: %v", got)
+	assert.Equal(t, len(bodies)-loginFailureThreshold, got[http.StatusTooManyRequests], "codes: %v", got)
+	realHash, dummy := cc.counts()
+	assert.Equal(t, loginFailureThreshold, realHash)
+	assert.Equal(t, 0, dummy)
 	_, blocked := h.throttle.check(loginThrottleKey("alice"))
 	assert.True(t, blocked)
+	assert.Equal(t, 0, totalInflight(h.throttle))
+}
+
+// accentVariants returns n distinct variants of "aaaa" that mysqlLikeFold
+// folds to "aaaa" and that have distinct submitted-name keys.
+func accentVariants(n int) []string {
+	letters := []string{"á", "à", "ä", "â", "ａ", "a"}
+	var out []string
+	for i := 0; len(out) < n; i++ {
+		v := ""
+		x := i
+		for p := 0; p < 4; p++ {
+			v += letters[x%len(letters)]
+			x /= len(letters)
+		}
+		if v != "aaaa" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// On MySQL the collation finds "admin" for "ádmin", "ａdmin" and so on. Each
+// variant has its own submitted-name key, but every attempt also takes a slot
+// of the account key: the variants share the threshold of the account,
+// sequentially and in a parallel burst, and a locked account never gets its
+// password checked through a variant.
+func TestLoginAccentVariantsShareTheAccountThrottle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sequential", func(t *testing.T) {
+		t.Parallel()
+		repo := newMockUserRepo(localUser("u1", "aaaa"))
+		repo.fold = mysqlLikeFold
+		h, logs, _ := newTestAuthHandler(repo, testAuthConfig(), nil)
+		cc := &countingCompare{}
+		h.compareHash = cc.compare
+		r := newAuthRouter(h)
+		variants := accentVariants(loginFailureThreshold + 2)
+
+		for i := 0; i < loginFailureThreshold; i++ {
+			w := postJSON(t, r, "/api/v1/auth/login", loginBody(t, variants[i], "wrong-password"))
+			require.Equal(t, http.StatusUnauthorized, w.Code, "variant %d", i)
+		}
+
+		// A fresh variant with the correct password: the generic 401, the
+		// real hash is not compared.
+		w := postJSON(t, r, "/api/v1/auth/login", loginBody(t, variants[loginFailureThreshold], testPassword))
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.JSONEq(t, invalidCredentialsBody, w.Body.String())
+		realHash, dummy := cc.counts()
+		assert.Equal(t, loginFailureThreshold, realHash)
+		assert.Equal(t, 1, dummy)
+		assert.Contains(t, logs.String(), `"reason":"`+loginReasonAccountThrottled+`"`)
+
+		// The stored name itself is locked.
+		w = postJSON(t, r, "/api/v1/auth/login", loginBody(t, "aaaa", testPassword))
+		assert.Equal(t, http.StatusTooManyRequests, w.Code)
+		assert.Equal(t, 0, totalInflight(h.throttle))
+	})
+
+	t.Run("parallel burst", func(t *testing.T) {
+		t.Parallel()
+		repo := newMockUserRepo(localUser("u1", "aaaa"))
+		repo.fold = mysqlLikeFold
+		h, _, _ := newTestAuthHandler(repo, testAuthConfig(), nil)
+		cc := &countingCompare{delay: 30 * time.Millisecond}
+		h.compareHash = cc.compare
+		r := newAuthRouter(h)
+
+		variants := accentVariants(40)
+		bodies := make([]string, len(variants))
+		for i, v := range variants {
+			bodies[i] = loginBody(t, v, fmt.Sprintf("guess-%d", i))
+		}
+		got := countCodes(postConcurrently(t, r, bodies))
+
+		realHash, _ := cc.counts()
+		assert.Equal(t, loginFailureThreshold, realHash, "only threshold real compares; codes: %v", got)
+		assert.Equal(t, len(bodies), got[http.StatusUnauthorized], "a variant answer is the generic 401")
+		_, blocked := h.throttle.check(loginThrottleKey("aaaa"))
+		assert.True(t, blocked)
+		assert.Equal(t, 0, totalInflight(h.throttle))
+	})
+
+	t.Run("an unknown variant and a variant of a locked account answer alike", func(t *testing.T) {
+		t.Parallel()
+		repo := newMockUserRepo(localUser("u1", "aaaa"))
+		repo.fold = mysqlLikeFold
+		h, _, _ := newTestAuthHandler(repo, testAuthConfig(), nil)
+		r := newAuthRouter(h)
+		for i := 0; i < loginFailureThreshold; i++ {
+			postJSON(t, r, "/api/v1/auth/login", loginBody(t, "aaaa", "wrong-password"))
+		}
+
+		for _, name := range []string{"áaaa", "ábbb"} { // variant of the locked account, unknown name
+			var codes []int
+			for i := 0; i < loginFailureThreshold+1; i++ {
+				codes = append(codes, postJSON(t, r, "/api/v1/auth/login", loginBody(t, name, "wrong-password")).Code)
+			}
+			want := []int{401, 401, 401, 401, 401, 429}
+			assert.Equal(t, want, codes, name)
+		}
+	})
+}
+
+// Every exit of Login releases its reservations exactly once: success,
+// credential failures, server errors, a cancelled request, a panic and the
+// variant path.
+func TestLoginReleasesReservationsOnEveryExit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		setup        func(h *AuthHandler, r *mockUserRepo)
+		name         string
+		username     string
+		password     string
+		wantCode     int
+		wantFailures int
+	}{
+		{name: "success", username: "alice", password: testPassword, wantCode: http.StatusOK},
+		{name: "wrong password", username: "alice", password: "nope", wantCode: http.StatusUnauthorized, wantFailures: 1},
+		{name: "unknown user", username: "nobody", password: "nope", wantCode: http.StatusUnauthorized},
+		{name: "variant, success", username: "ALÍCE", password: testPassword, wantCode: http.StatusOK,
+			setup: func(_ *AuthHandler, r *mockUserRepo) {
+				r.fold = func(s string) string { return strings.ReplaceAll(strings.ToLower(s), "í", "i") }
+			}},
+		{name: "variant, wrong password", username: "alíce", password: "nope", wantCode: http.StatusUnauthorized, wantFailures: 1,
+			setup: func(_ *AuthHandler, r *mockUserRepo) {
+				r.fold = func(s string) string { return strings.ReplaceAll(strings.ToLower(s), "í", "i") }
+			}},
+		{name: "lookup error", username: "alice", password: "nope", wantCode: http.StatusInternalServerError,
+			setup: func(_ *AuthHandler, r *mockUserRepo) { r.findByUsernameErr = errors.New("db down") }},
+		{name: "lookup cancelled", username: "alice", password: "nope", wantCode: statusClientClosedRequest,
+			setup: func(_ *AuthHandler, r *mockUserRepo) { r.findByUsernameErr = context.Canceled }},
+		{name: "re-read error", username: "alice", password: testPassword, wantCode: http.StatusInternalServerError,
+			setup: func(_ *AuthHandler, r *mockUserRepo) { r.findByIDErr = errors.New("db down") }},
+		{name: "token error", username: "alice", password: testPassword, wantCode: http.StatusInternalServerError,
+			setup: func(h *AuthHandler, _ *mockUserRepo) {
+				h.signToken = func(middleware.GenerateTokenOptions) (string, error) { return "", errors.New("boom") }
+			}},
+		{name: "panic in the compare", username: "alice", password: testPassword, wantCode: http.StatusInternalServerError,
+			setup: func(h *AuthHandler, _ *mockUserRepo) {
+				h.compareHash = func([]byte, []byte) error { panic("compare exploded") }
+			}},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			repo := newMockUserRepo(localUser("u1", "alice"))
+			h, _, _ := newTestAuthHandler(repo, testAuthConfig(), nil)
+			if tt.setup != nil {
+				tt.setup(h, repo)
+			}
+			r := newAuthRouter(h, gin.Recovery())
+
+			w := postJSON(t, r, "/api/v1/auth/login", loginBody(t, tt.username, tt.password))
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			assert.Equal(t, 0, totalInflight(h.throttle), "no reservation leaks")
+			failures, _ := entryState(h.throttle, "alice")
+			assert.Equal(t, tt.wantFailures, failures, "account key failures")
+		})
+	}
+}
+
+// A mix of concurrent valid and invalid logins (fewer invalid than the
+// threshold) never locks the account, never answers 401 to a valid login, and
+// leaves no reservation behind, so a later valid login succeeds.
+func TestLoginConcurrentMixOfValidAndInvalid(t *testing.T) {
+	t.Parallel()
+	repo := newMockUserRepo(localUser("u1", "alice"))
+	repo.fold = mysqlLikeFold
+	h, _, _ := newTestAuthHandler(repo, testAuthConfig(), nil)
+	cc := &countingCompare{delay: 10 * time.Millisecond}
+	h.compareHash = cc.compare
+	r := newAuthRouter(h)
+
+	const invalid = loginFailureThreshold - 2
+	var bodies []string
+	var valid []bool
+	for i := 0; i < 40; i++ {
+		ok := i >= invalid
+		name := "alice"
+		if i%2 == 0 {
+			name = "ALICE"
+		}
+		pw := testPassword
+		if !ok {
+			pw = "wrong-password"
+		}
+		bodies = append(bodies, loginBody(t, name, pw))
+		valid = append(valid, ok)
+	}
+	codes := postConcurrently(t, r, bodies)
+
+	unauthorized, okCount := 0, 0
+	for i, code := range codes {
+		if valid[i] {
+			require.Contains(t, []int{http.StatusOK, http.StatusTooManyRequests}, code, "valid login %d", i)
+		} else {
+			require.Contains(t, []int{http.StatusUnauthorized, http.StatusTooManyRequests}, code, "invalid login %d", i)
+		}
+		switch code {
+		case http.StatusUnauthorized:
+			unauthorized++
+		case http.StatusOK:
+			okCount++
+		}
+	}
+	assert.LessOrEqual(t, unauthorized, invalid)
+	assert.Positive(t, okCount)
+	assert.Equal(t, 0, totalInflight(h.throttle))
+	_, blocked := h.throttle.check(loginThrottleKey("alice"))
+	assert.False(t, blocked)
+
+	w := postJSON(t, r, "/api/v1/auth/login", loginBody(t, "alice", testPassword))
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestRegisterDisabledByDefault(t *testing.T) {

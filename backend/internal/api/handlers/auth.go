@@ -205,8 +205,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	key := loginThrottleKey(req.Username)
-	if retryAfter, blocked := h.throttle.check(key); blocked {
+	// Reserve a slot under the submitted name before any work, so a parallel
+	// burst cannot pass the throttle before its failures are counted. The
+	// 429 here is the same for known and unknown names. The deferred settle
+	// releases every reserved key exactly once on every exit (also a cancel
+	// or a panic); the outcome stays neutral unless set below.
+	attempt, retryAfter := h.throttle.begin(loginThrottleKey(req.Username))
+	if attempt == nil {
 		h.log().Warn("Login throttled",
 			"username", truncateForLog(req.Username, maxLoggedUsernameLen),
 			"client_ip", c.ClientIP(),
@@ -215,6 +220,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": msgTooManyLoginAttempts})
 		return
 	}
+	defer attempt.settle()
 
 	// fail logs the failure and writes the response. A credential failure
 	// (401) counts towards the throttle; a server-side failure does not.
@@ -224,7 +230,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		f.requestID = c.GetString(requestIDKey)
 		h.logLoginFailure(f)
 		if f.httpCode == http.StatusUnauthorized {
-			h.throttle.recordFailure(key)
+			attempt.outcome = outcomeFailure
 			c.JSON(http.StatusUnauthorized, gin.H{"error": msgInvalidCredentials})
 			return
 		}
@@ -256,6 +262,17 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			return
 		}
 		failDummy(loginReasonUserNotFound, "")
+		return
+	}
+
+	// The collation may have matched a variant of the stored username
+	// (case, accents, width): count the attempt under the account key too.
+	// When that key is locked or busy, the password is not checked; the
+	// answer is the generic 401, which counts under the submitted name like
+	// the 401 of an unknown name, so the answer does not show that the
+	// variant belongs to an account.
+	if _, ok := attempt.add(loginThrottleKey(user.Username)); !ok {
+		failDummy(loginReasonAccountThrottled, user.ID)
 		return
 	}
 
@@ -316,7 +333,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	h.throttle.reset(key)
+	attempt.outcome = outcomeSuccess
 	h.log().Info("Login succeeded",
 		"user_id", fresh.ID,
 		"username", truncateForLog(fresh.Username, maxLoggedUsernameLen),

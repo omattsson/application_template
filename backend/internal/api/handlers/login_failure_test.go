@@ -39,10 +39,44 @@ func newTestThrottle(threshold int, window time.Duration, maxEntries int) (*logi
 	return th, clock
 }
 
+// attemptOnce runs one complete attempt for key with outcome and reports
+// whether the throttle granted it.
+func attemptOnce(th *loginThrottle, key string, outcome attemptOutcome) bool {
+	a, _ := th.begin(key)
+	if a == nil {
+		return false
+	}
+	a.outcome = outcome
+	a.settle()
+	return true
+}
+
+// entryState returns the failures and attempts in flight of key.
+func entryState(th *loginThrottle, key string) (failures, inflight int) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if e, ok := th.entries[key]; ok {
+		return e.failures, e.inflight
+	}
+	return 0, 0
+}
+
+// totalInflight returns the attempts in flight over all keys.
+func totalInflight(th *loginThrottle) int {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	n := 0
+	for _, e := range th.entries {
+		n += e.inflight
+	}
+	return n
+}
+
 func TestLoginThrottleDefaults(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, 5, loginFailureThreshold)
 	assert.Equal(t, 15*time.Minute, loginFailureWindow)
+	assert.Equal(t, time.Second, loginBusyRetryAfter)
 	assert.Equal(t, 10000, loginThrottleMaxEntries)
 }
 
@@ -51,14 +85,17 @@ func TestLoginThrottleLocksAfterThreshold(t *testing.T) {
 	th, clock := newTestThrottle(3, time.Minute, 100)
 
 	for i := 0; i < 2; i++ {
-		th.recordFailure("alice")
+		require.True(t, attemptOnce(th, "alice", outcomeFailure))
 		_, blocked := th.check("alice")
 		require.False(t, blocked, "failure %d", i+1)
 	}
-	th.recordFailure("alice")
+	require.True(t, attemptOnce(th, "alice", outcomeFailure))
 
 	retry, blocked := th.check("alice")
 	require.True(t, blocked)
+	assert.Equal(t, time.Minute, retry)
+	a, retry := th.begin("alice")
+	assert.Nil(t, a, "a locked key grants no attempt")
 	assert.Equal(t, time.Minute, retry)
 	_, other := th.check("bob")
 	assert.False(t, other, "other usernames are not affected")
@@ -72,6 +109,7 @@ func TestLoginThrottleLocksAfterThreshold(t *testing.T) {
 	_, blocked = th.check("alice")
 	assert.False(t, blocked, "the lock ends after the window")
 	assert.Equal(t, 0, th.size(), "an expired entry is dropped on check")
+	assert.True(t, attemptOnce(th, "alice", outcomeSuccess))
 }
 
 // Failures further apart than the window never add up to a lock.
@@ -79,38 +117,113 @@ func TestLoginThrottleWindowResets(t *testing.T) {
 	t.Parallel()
 	th, clock := newTestThrottle(3, time.Minute, 100)
 
-	th.recordFailure("alice")
-	th.recordFailure("alice")
+	attemptOnce(th, "alice", outcomeFailure)
+	attemptOnce(th, "alice", outcomeFailure)
 	clock.Advance(time.Minute)
-	th.recordFailure("alice")
-	th.recordFailure("alice")
+	attemptOnce(th, "alice", outcomeFailure)
+	attemptOnce(th, "alice", outcomeFailure)
 
 	_, blocked := th.check("alice")
 	assert.False(t, blocked)
-	th.recordFailure("alice")
+	attemptOnce(th, "alice", outcomeFailure)
 	_, blocked = th.check("alice")
 	assert.True(t, blocked)
 }
 
-func TestLoginThrottleReset(t *testing.T) {
+// A success clears the failures; a neutral outcome (server error) changes
+// nothing but the slot.
+func TestLoginThrottleOutcomes(t *testing.T) {
+	t.Parallel()
+	th, _ := newTestThrottle(3, time.Minute, 100)
+	attemptOnce(th, "alice", outcomeFailure)
+	attemptOnce(th, "alice", outcomeFailure)
+
+	require.True(t, attemptOnce(th, "alice", outcomeNeutral))
+	failures, inflight := entryState(th, "alice")
+	assert.Equal(t, 2, failures)
+	assert.Equal(t, 0, inflight)
+
+	require.True(t, attemptOnce(th, "alice", outcomeSuccess))
+	assert.Equal(t, 0, th.size(), "a success leaves no entry")
+
+	require.True(t, attemptOnce(th, "bob", outcomeNeutral))
+	assert.Equal(t, 0, th.size(), "a neutral attempt on a new key leaves no entry")
+}
+
+// Attempts in flight take the slots: with failures + in flight at the
+// threshold, a further attempt is refused with loginBusyRetryAfter until one
+// settles.
+func TestLoginThrottleReservesSlots(t *testing.T) {
+	t.Parallel()
+	th, _ := newTestThrottle(3, time.Minute, 100)
+	attemptOnce(th, "alice", outcomeFailure)
+
+	first, _ := th.begin("alice")
+	second, _ := th.begin("alice")
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	refused, retry := th.begin("alice")
+	assert.Nil(t, refused)
+	assert.Equal(t, loginBusyRetryAfter, retry)
+
+	first.settle() // neutral
+	again, _ := th.begin("alice")
+	require.NotNil(t, again, "a released slot is free again")
+
+	second.outcome = outcomeFailure
+	second.settle()
+	again.outcome = outcomeFailure
+	again.settle()
+	_, blocked := th.check("alice")
+	assert.True(t, blocked, "three failures reached the threshold")
+	_, inflight := entryState(th, "alice")
+	assert.Equal(t, 0, inflight)
+}
+
+// settle releases every reserved key exactly once; add never reserves a key
+// twice, and a refused add keeps the other keys.
+func TestLoginAttemptKeys(t *testing.T) {
 	t.Parallel()
 	th, _ := newTestThrottle(2, time.Minute, 100)
-	th.recordFailure("alice")
-	th.recordFailure("alice")
-	_, blocked := th.check("alice")
-	require.True(t, blocked)
 
-	th.reset("alice")
+	a, _ := th.begin("ádmin")
+	require.NotNil(t, a)
+	_, ok := a.add("ádmin")
+	require.True(t, ok)
+	_, ok = a.add("admin")
+	require.True(t, ok)
+	assert.Equal(t, []string{"ádmin", "admin"}, a.keys)
+	_, inflight := entryState(th, "admin")
+	assert.Equal(t, 1, inflight)
 
-	_, blocked = th.check("alice")
-	assert.False(t, blocked)
-	assert.Equal(t, 0, th.size())
-	th.reset("unknown") // no-op
+	a.outcome = outcomeFailure
+	a.settle()
+	a.settle() // no second release
+	for _, k := range []string{"ádmin", "admin"} {
+		failures, inflight := entryState(th, k)
+		assert.Equal(t, 1, failures, k)
+		assert.Equal(t, 0, inflight, k)
+	}
+
+	// Lock the account key; a further variant cannot add it.
+	attemptOnce(th, "admin", outcomeFailure)
+	b, _ := th.begin("àdmin")
+	require.NotNil(t, b)
+	retry, ok := b.add("admin")
+	assert.False(t, ok)
+	assert.Equal(t, time.Minute, retry)
+	assert.Equal(t, []string{"àdmin"}, b.keys)
+	b.settle()
+	assert.Equal(t, 0, totalInflight(th))
+
+	var nilAttempt *loginAttempt
+	nilAttempt.settle() // nil-safe
 }
 
 // The map never grows past maxEntries: expired entries go first, then the
 // oldest counters that are not locked, and a lock is evicted only when every
-// entry is locked.
+// entry is locked. An entry with an attempt in flight is never evicted; a map
+// full of them refuses a new key.
 func TestLoginThrottleIsBounded(t *testing.T) {
 	t.Parallel()
 
@@ -118,7 +231,7 @@ func TestLoginThrottleIsBounded(t *testing.T) {
 		t.Parallel()
 		th, _ := newTestThrottle(3, time.Minute, 50)
 		for i := 0; i < 1000; i++ {
-			th.recordFailure(fmt.Sprintf("user-%d", i))
+			require.True(t, attemptOnce(th, fmt.Sprintf("user-%d", i), outcomeFailure))
 			require.LessOrEqual(t, th.size(), 50)
 		}
 		assert.Equal(t, 50, th.size())
@@ -127,27 +240,29 @@ func TestLoginThrottleIsBounded(t *testing.T) {
 	t.Run("expired entries are evicted first", func(t *testing.T) {
 		t.Parallel()
 		th, clock := newTestThrottle(3, time.Minute, 3)
-		th.recordFailure("old-1")
-		th.recordFailure("old-2")
+		attemptOnce(th, "old-1", outcomeFailure)
+		attemptOnce(th, "old-2", outcomeFailure)
 		clock.Advance(30 * time.Second)
-		th.recordFailure("fresh")
+		attemptOnce(th, "fresh", outcomeFailure)
 		clock.Advance(31 * time.Second) // old-1 and old-2 expired
 
-		th.recordFailure("new")
+		attemptOnce(th, "new", outcomeFailure)
 
 		assert.Equal(t, 2, th.size())
-		assert.Equal(t, 1, th.failures("fresh"))
-		assert.Equal(t, 1, th.failures("new"))
+		failures, _ := entryState(th, "fresh")
+		assert.Equal(t, 1, failures)
+		failures, _ = entryState(th, "new")
+		assert.Equal(t, 1, failures)
 	})
 
 	t.Run("a lock survives a flood of unlocked counters", func(t *testing.T) {
 		t.Parallel()
 		th, clock := newTestThrottle(2, time.Minute, 10)
-		th.recordFailure("victim")
-		th.recordFailure("victim")
+		attemptOnce(th, "victim", outcomeFailure)
+		attemptOnce(th, "victim", outcomeFailure)
 		for i := 0; i < 500; i++ {
 			clock.Advance(time.Millisecond)
-			th.recordFailure(fmt.Sprintf("flood-%d", i))
+			attemptOnce(th, fmt.Sprintf("flood-%d", i), outcomeFailure)
 		}
 		_, blocked := th.check("victim")
 		assert.True(t, blocked)
@@ -157,11 +272,11 @@ func TestLoginThrottleIsBounded(t *testing.T) {
 	t.Run("only locks: the oldest lock goes", func(t *testing.T) {
 		t.Parallel()
 		th, clock := newTestThrottle(1, time.Minute, 2)
-		th.recordFailure("first")
+		attemptOnce(th, "first", outcomeFailure)
 		clock.Advance(time.Second)
-		th.recordFailure("second")
+		attemptOnce(th, "second", outcomeFailure)
 		clock.Advance(time.Second)
-		th.recordFailure("third")
+		attemptOnce(th, "third", outcomeFailure)
 
 		assert.Equal(t, 2, th.size())
 		_, first := th.check("first")
@@ -170,6 +285,27 @@ func TestLoginThrottleIsBounded(t *testing.T) {
 		assert.False(t, first)
 		assert.True(t, second)
 		assert.True(t, third)
+	})
+
+	t.Run("entries in flight are kept; a full map fails closed", func(t *testing.T) {
+		t.Parallel()
+		th, _ := newTestThrottle(3, time.Minute, 2)
+		a, _ := th.begin("one")
+		b, _ := th.begin("two")
+		require.NotNil(t, a)
+		require.NotNil(t, b)
+
+		refused, retry := th.begin("three")
+		assert.Nil(t, refused)
+		assert.Equal(t, loginBusyRetryAfter, retry)
+		_, ok := a.add("three")
+		assert.False(t, ok)
+		assert.Equal(t, 2, th.size())
+
+		a.settle()
+		require.True(t, attemptOnce(th, "three", outcomeFailure), "a settled entry frees its slot")
+		b.settle()
+		assert.Equal(t, 0, totalInflight(th))
 	})
 }
 
@@ -183,16 +319,22 @@ func TestLoginThrottleConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 200; i++ {
 				key := fmt.Sprintf("user-%d", (g*7+i)%100)
-				th.recordFailure(key)
+				a, _ := th.begin(key)
 				th.check(key)
-				if i%10 == 0 {
-					th.reset(key)
+				if a == nil {
+					continue
 				}
+				if i%3 == 0 {
+					_, _ = a.add(fmt.Sprintf("account-%d", i%10))
+				}
+				a.outcome = attemptOutcome(i % 3)
+				a.settle()
 			}
 		}(g)
 	}
 	wg.Wait()
 	assert.LessOrEqual(t, th.size(), 64)
+	assert.Equal(t, 0, totalInflight(th), "no reservation leaks")
 }
 
 func TestLoginThrottleKey(t *testing.T) {
@@ -204,7 +346,11 @@ func TestLoginThrottleKey(t *testing.T) {
 	}{
 		{name: "lower case", in: "alice", want: "alice"},
 		{name: "case folded", in: "AlIcE", want: "alice"},
-		{name: "unicode case folded", in: "ÅSA", want: "åsa"},
+		{name: "unicode lower-cased", in: "ÅSA", want: "åsa"},
+		// Accents and width are not folded: the collation of the users
+		// table folds them, so Login also reserves the key of the stored
+		// username (see TestLoginAccentVariantsShareTheAccountThrottle).
+		{name: "accents kept", in: "ádmin", want: "ádmin"},
 		{name: "surrounding space kept", in: " alice ", want: " alice "},
 		{name: "empty", in: "", want: ""},
 	}
