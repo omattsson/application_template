@@ -65,13 +65,18 @@ func Logger() gin.HandlerFunc {
 	}
 }
 
+// msgInternalServerError is the body of a 500. It is the same text as the
+// handlers package uses (handlers.msgInternalServerError); middleware does not
+// import handlers.
+const msgInternalServerError = "Internal server error"
+
 // Recovery is a middleware that recovers from any panics and writes a 500 if there was one.
 func Recovery() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
 			if err := recover(); err != nil {
 				slog.Error("recovered from panic", "error", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
 				c.Abort()
 			}
 		}()

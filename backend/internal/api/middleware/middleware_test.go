@@ -79,7 +79,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 	var response map[string]string
 	err := json.NewDecoder(w.Body).Decode(&response)
 	assert.Nil(t, err)
-	assert.Equal(t, "Internal Server Error", response["error"])
+	assert.Equal(t, "Internal server error", response["error"])
 }
 
 func TestRequestIDMiddleware(t *testing.T) {
