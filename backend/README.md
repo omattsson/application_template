@@ -51,11 +51,15 @@ backend/
 
 2. **Start the server**:
 
-   With Docker (recommended):
+   With Docker (recommended), from the repository root:
 
    ```bash
-   docker compose up backend
+   make dev-backend
    ```
+
+   It builds the development image (`GO_ENV=development`, hot reload with
+   air) and sets `APP_DEBUG=true` and `ENABLE_SWAGGER=true`. A plain
+   `docker compose up backend` builds the production image.
 
    Without Docker:
 
@@ -64,6 +68,8 @@ backend/
    ```
 
    The API will be available at [http://localhost:8081](http://localhost:8081)
+   (in Compose, host port `BACKEND_PORT`, default 8081; the container always
+   listens on 8081).
 
 ## Available Commands
 
@@ -80,8 +86,8 @@ backend/
 
 ### Docker Commands
 
-- Development: `docker compose up backend`
-- Production: `docker compose -f docker-compose.prod.yml up backend`
+- Development: `make dev-backend` (repository root)
+- Production: `make prod-backend` (repository root; API on host port 8080)
 - Build: `docker build -t backend .`
 
 ## API Documentation
@@ -103,8 +109,9 @@ The service provides health check endpoints:
 Configuration is handled through environment variables:
 
 - `GO_ENV` - Environment (development/production)
-- `GIN_MODE` - Gin framework mode (debug/release)
-- `PORT` - Server port (default: 8081)
+- `APP_DEBUG` - Gin debug mode when true, release mode when false
+- `GIN_MODE` - Optional; when set it wins over `APP_DEBUG`
+- `PORT` - Server port inside the process or container (default: 8081)
 - `LOG_LEVEL` - Logging level (debug/info/warn/error)
 - `ENABLE_SWAGGER` - Serve the Swagger UI at `/swagger/index.html` (default: false)
 

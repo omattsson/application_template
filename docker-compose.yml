@@ -1,7 +1,6 @@
 services:
   db:
     image: mysql:8.0
-    container_name: app-mysql-${GO_ENV:-prod}
     restart: unless-stopped
     command: --default-authentication-plugin=mysql_native_password
     environment:
@@ -32,9 +31,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       target: ${GO_ENV:-production}
-    container_name: app-backend-${GO_ENV:-prod}
+    # Host port of the API (the browser in development calls
+    # http://localhost:8081). The container always listens on 8081.
     ports:
-      - "${PORT:-8081}:8081"
+      - "${BACKEND_PORT:-8081}:8081"
     # The ordered shutdown runs up to four steps of SERVER_SHUTDOWN_TIMEOUT
     # each (HTTP drain, leader workers, in-flight work, telemetry): 4 x 30s
     # with the default, plus a margin. Raise it with SERVER_SHUTDOWN_TIMEOUT.
@@ -42,7 +42,10 @@ services:
     environment:
       - APP_NAME=${APP_NAME:-application}
       - APP_ENV=${GO_ENV:-production}
+      # APP_DEBUG drives the Gin mode (true: debug, false: release).
+      # GIN_MODE, when set, wins; empty leaves the choice to APP_DEBUG.
       - APP_DEBUG=${APP_DEBUG:-false}
+      - GIN_MODE=${GIN_MODE:-}
       - DB_HOST=db
       - DB_PORT=3306
       - DB_NAME=${MYSQL_DATABASE:-app}
@@ -52,7 +55,7 @@ services:
       - DB_MAX_IDLE_CONNS=${DB_MAX_IDLE_CONNS:-25}
       - DB_CONN_MAX_LIFETIME=${DB_CONN_MAX_LIFETIME:-5m}
       - SERVER_HOST=0.0.0.0
-      - PORT=${PORT:-8081}
+      - PORT=8081
       - SERVER_READ_TIMEOUT=${SERVER_READ_TIMEOUT:-15s}
       - SERVER_WRITE_TIMEOUT=${SERVER_WRITE_TIMEOUT:-15s}
       - SERVER_SHUTDOWN_TIMEOUT=${SERVER_SHUTDOWN_TIMEOUT:-30s}
@@ -89,9 +92,11 @@ services:
       target: ${NODE_ENV:-production}
       args:
         - NODE_ENV=${NODE_ENV:-production}
-    container_name: app-frontend-${NODE_ENV:-prod}
+    # Host port of the web UI. The container listens on 3000 (Vite dev
+    # server) or 80 (nginx, production): make prod sets
+    # FRONTEND_CONTAINER_PORT=80.
     ports:
-      - "${PORT:-3000}:${PORT:-3000}"
+      - "${FRONTEND_PORT:-3000}:${FRONTEND_CONTAINER_PORT:-3000}"
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - VITE_API_URL=http://backend:8081
@@ -103,7 +108,6 @@ services:
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
-    command: npm run dev -- --host 0.0.0.0
 
 volumes:
   mysql_data:
@@ -113,8 +117,8 @@ volumes:
   backend_go_mod:
   frontend_node_modules:
 
+# Container and network names are scoped by the Compose project, so two
+# checkouts (or another project with the same service names) do not collide.
 networks:
   backend-net:
-    name: backend-network-${NODE_ENV:-prod}
   frontend-net:
-    name: frontend-network-${NODE_ENV:-prod}

@@ -72,11 +72,16 @@ A modern, production-ready template for full-stack web applications using Go (Gi
    make dev-frontend
    ```
 
-   The services will be available at:
+   The `make dev*` targets build the development images (`GO_ENV=development`:
+   hot reload with air; Vite dev server), set `APP_DEBUG=true` (Gin debug mode)
+   and `ENABLE_SWAGGER=true`. The services will be available at:
 
-   - Frontend: [http://localhost:3000](http://localhost:3000)
-   - Backend: [http://localhost:8081](http://localhost:8081)
-   - API Documentation: [http://localhost:8081/swagger/index.html](http://localhost:8081/swagger/index.html) (`make dev` and `make dev-backend` set `ENABLE_SWAGGER=true`)
+   - Frontend: [http://localhost:3000](http://localhost:3000) (host port `FRONTEND_PORT`, default 3000)
+   - Backend: [http://localhost:8081](http://localhost:8081) (host port `BACKEND_PORT`, default 8081; the development frontend calls this address)
+   - API Documentation: [http://localhost:8081/swagger/index.html](http://localhost:8081/swagger/index.html)
+
+   `make prod*` builds the production images (nginx on host port 80, the API on
+   host port 8080, `APP_DEBUG=false`, Swagger off).
 
 ## Project Structure
 
@@ -132,15 +137,18 @@ A modern, production-ready template for full-stack web applications using Go (Gi
 
 Backend:
 
-- `GO_ENV` - Environment (development/production)
-- `GIN_MODE` - Gin framework mode (debug/release)
-- `BACKEND_PORT` - Backend port (default: 8081)
-- `ENABLE_SWAGGER` - Serve the Swagger UI at `/swagger/index.html` (default: false; `make dev` and `make dev-backend` set it to true)
+- `GO_ENV` - Image target and `APP_ENV` (development/production; `make dev*` sets development, `make prod*` production)
+- `APP_DEBUG` - Gin debug mode and SQL values in the log (`make dev*`: true, `make prod*`: false)
+- `GIN_MODE` - Optional; when set it wins over `APP_DEBUG` for the Gin mode
+- `BACKEND_PORT` - Host port of the API (default: 8081; `make prod*`: 8080). The container listens on 8081.
+- `ENABLE_SWAGGER` - Serve the Swagger UI at `/swagger/index.html` (default: false; `make dev*` set it to true)
+- `SERVER_SHUTDOWN_TIMEOUT` - Budget of each shutdown step (default: 30s). Compose gives the backend `stop_grace_period: 130s` (4 steps x 30s plus a margin); raise both together.
 
 Frontend:
 
-- `NODE_ENV` - Environment (development/production)
-- `PORT` - Frontend port (default: 3000 in dev, 80 in prod)
+- `NODE_ENV` - Image target (development: Vite dev server on container port 3000; production: nginx on container port 80)
+- `FRONTEND_PORT` - Host port of the web UI (default: 3000; `make prod*`: 80)
+- `FRONTEND_CONTAINER_PORT` - Container port of the web UI (default: 3000; `make prod*` sets 80 for nginx)
 - `VITE_API_URL` - Backend API URL
 
 ## API Documentation

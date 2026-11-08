@@ -21,29 +21,40 @@ mysql-logs:
 mysql-shell:
 	docker compose exec db mysql -u$${MYSQL_USER:-appuser} -p$${MYSQL_PASSWORD:-apppass} $${MYSQL_DATABASE:-app}
 
+# Host ports: the web UI on FRONTEND_PORT and the API on BACKEND_PORT. The
+# development frontend calls the API at http://localhost:8081, so keep
+# BACKEND_PORT=8081 in development. APP_DEBUG drives the Gin mode (debug in
+# development, release in production); GIN_MODE, when set, wins.
+FRONTEND_PORT_DEV ?= 3000
+BACKEND_PORT_DEV ?= 8081
+FRONTEND_PORT_PROD ?= 80
+BACKEND_PORT_PROD ?= 8080
+DEV_ENV = GO_ENV=development NODE_ENV=development FRONTEND_PORT=$(FRONTEND_PORT_DEV) BACKEND_PORT=$(BACKEND_PORT_DEV) APP_DEBUG=true ENABLE_SWAGGER=true
+PROD_ENV = GO_ENV=production NODE_ENV=production FRONTEND_PORT=$(FRONTEND_PORT_PROD) FRONTEND_CONTAINER_PORT=80 BACKEND_PORT=$(BACKEND_PORT_PROD) APP_DEBUG=false ENABLE_SWAGGER=false
+
 # Development mode for both services
 dev:
-	NODE_ENV=development PORT=3000 BACKEND_PORT=8081 GIN_MODE=debug ENABLE_SWAGGER=true docker compose up --build
+	$(DEV_ENV) docker compose up --build
 
 # Development mode for backend only
 dev-backend:
-	NODE_ENV=development BACKEND_PORT=8081 GIN_MODE=debug ENABLE_SWAGGER=true docker compose up --build backend
+	$(DEV_ENV) docker compose up --build backend
 
-# Development mode for frontend only
+# Development mode for frontend only (also starts the backend it depends on)
 dev-frontend:
-	NODE_ENV=development PORT=3000 docker compose up --build frontend
+	$(DEV_ENV) docker compose up --build frontend
 
 # Production mode for both services
 prod:
-	NODE_ENV=production PORT=80 BACKEND_PORT=8080 GIN_MODE=release docker compose up --build
+	$(PROD_ENV) docker compose up --build
 
 # Production mode for backend only
 prod-backend:
-	NODE_ENV=production BACKEND_PORT=8080 GIN_MODE=release docker compose up --build backend
+	$(PROD_ENV) docker compose up --build backend
 
-# Production mode for frontend only
+# Production mode for frontend only (also starts the backend it depends on)
 prod-frontend:
-	NODE_ENV=production PORT=80 docker compose up --build frontend
+	$(PROD_ENV) docker compose up --build frontend
 
 # Stop and remove all containers, networks, and volumes
 clean:
