@@ -24,6 +24,7 @@ type janitor struct {
 // startJanitor starts the goroutine. It calls run every interval until stop.
 // A failed run is logged and the goroutine goes on.
 func startJanitor(interval time.Duration, run func(ctx context.Context) error) *janitor {
+	// #nosec G118 -- cancel is kept in j.cancel and called by stop().
 	ctx, cancel := context.WithCancel(context.Background())
 	j := &janitor{cancel: cancel, exited: make(chan struct{})}
 	go func() {

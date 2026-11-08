@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -72,12 +73,91 @@ type AppConfig struct {
 // DefaultAppTitle is the Title used when APP_TITLE is unset.
 const DefaultAppTitle = "Application Template"
 
-// AuthConfig holds authentication configuration. It holds only the switch for
-// now; later tasks add the remaining fields.
+// MinJWTSecretLength is the minimum length of JWT_SECRET in characters.
+const MinJWTSecretLength = 16
+
+// Defaults of the auth durations. There is no default for JWT_SECRET or
+// ADMIN_PASSWORD.
+const (
+	defaultJWTExpiration         = 24 * time.Hour
+	defaultAccessTokenExpiration = 15 * time.Minute
+	defaultSessionIdleTimeout    = 30 * time.Minute
+	defaultSessionMaxLifetime    = 12 * time.Hour
+	defaultAdminUsername         = "admin"
+)
+
+// AuthConfig holds authentication configuration.
+//
+//nolint:govet // Struct field alignment has been optimized for time.Duration and string fields
 type AuthConfig struct {
-	// Enabled is AUTH_ENABLED (default false). Authentication is not
-	// implemented yet: the flag only changes GET /api/v1/ui-config.
+	// JWTExpiration is JWT_EXPIRATION (default 24h): the lifetime of a token
+	// issued outside a refresh session.
+	JWTExpiration time.Duration
+	// AccessTokenExpiration is ACCESS_TOKEN_EXPIRATION (default 15m): the
+	// lifetime of the access token of a login session.
+	AccessTokenExpiration time.Duration
+	// SessionIdleTimeout is SESSION_IDLE_TIMEOUT (default 30m): a session with
+	// no activity for this long ends.
+	SessionIdleTimeout time.Duration
+	// SessionMaxLifetime is SESSION_MAX_LIFETIME (default 12h): the absolute
+	// lifetime of a session. Refreshing never extends a session beyond it.
+	SessionMaxLifetime time.Duration
+	// JWTSecret is JWT_SECRET: the HMAC key of the access tokens. It has no
+	// default. Generate it (for example `openssl rand -base64 48`); it is
+	// required, at least MinJWTSecretLength characters, when Enabled is true.
+	// It is never logged or put in an error.
+	JWTSecret string
+	// AdminUsername is ADMIN_USERNAME (default "admin").
+	AdminUsername string
+	// AdminPassword is ADMIN_PASSWORD. It has no default: when it is empty no
+	// admin user is created at start.
+	AdminPassword string
+	// Enabled is AUTH_ENABLED (default false). With false the API is open and
+	// the other fields are not validated.
 	Enabled bool
+	// SelfRegistration is SELF_REGISTRATION (default false): anyone can create
+	// a local account.
+	SelfRegistration bool
+}
+
+// Validate checks the auth settings. LoadConfig calls it only when Enabled is
+// true. Error messages never contain the secret.
+func (c *AuthConfig) Validate() error {
+	if c.JWTSecret == "" {
+		return errors.New("jwt_secret is required when AUTH_ENABLED is true")
+	}
+
+	// Count characters, not bytes: a multi-byte character is one character,
+	// so the check is never weaker than the documented minimum.
+	if utf8.RuneCountInString(c.JWTSecret) < MinJWTSecretLength {
+		return fmt.Errorf("jwt_secret must be at least %d characters", MinJWTSecretLength)
+	}
+
+	if c.JWTExpiration <= 0 {
+		return errors.New("jwt_expiration must be positive")
+	}
+
+	if c.AccessTokenExpiration <= 0 {
+		return errors.New("access_token_expiration must be positive")
+	}
+
+	if c.SessionIdleTimeout <= 0 {
+		return errors.New("session_idle_timeout must be positive")
+	}
+
+	if c.SessionMaxLifetime <= 0 {
+		return errors.New("session_max_lifetime must be positive")
+	}
+
+	if c.SessionIdleTimeout > c.SessionMaxLifetime {
+		return errors.New("session_idle_timeout must not exceed session_max_lifetime")
+	}
+
+	if c.AccessTokenExpiration > c.SessionIdleTimeout {
+		return errors.New("access_token_expiration must not exceed session_idle_timeout")
+	}
+
+	return nil
 }
 
 // DatabaseConfig holds database-specific configuration
@@ -190,6 +270,13 @@ func (c *Config) Validate() error {
 
 	if err := c.Server.Validate(); err != nil {
 		return fmt.Errorf("server config: %w", err)
+	}
+
+	// With auth off the auth settings are not used, so a missing secret is fine.
+	if c.Auth.Enabled {
+		if err := c.Auth.Validate(); err != nil {
+			return fmt.Errorf("auth config: %w", err)
+		}
 	}
 
 	return nil
@@ -344,9 +431,6 @@ func LoadConfig() (*Config, error) {
 			Title:       getEnv("APP_TITLE", DefaultAppTitle),
 			Debug:       getEnvBool("APP_DEBUG", true),
 		},
-		Auth: AuthConfig{
-			Enabled: getEnvBool("AUTH_ENABLED", false),
-		},
 		Database: DatabaseConfig{
 			Type:            strings.ToLower(strings.TrimSpace(getEnv("DB_TYPE", DBTypeMySQL))),
 			Host:            getEnv("DB_HOST", "localhost"),
@@ -376,6 +460,12 @@ func LoadConfig() (*Config, error) {
 		},
 	}
 
+	var err error
+
+	if cfg.Auth, err = loadAuthConfig(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	trustedProxies, err := ParseTrustedProxies(getEnv("TRUSTED_PROXIES", ""))
 	if err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
@@ -401,6 +491,65 @@ func LoadConfig() (*Config, error) {
 	cfg.LogLevel, _ = cfg.Logging.SlogLevel() // Validate checked the value
 
 	return cfg, nil
+}
+
+// loadAuthConfig reads the auth variables. With AUTH_ENABLED=true a duration
+// that is set but does not parse is an error (a silent fallback would hide a
+// typo in a security setting); with auth off the durations are read leniently
+// because nothing uses them.
+func loadAuthConfig() (AuthConfig, error) {
+	enabled := getEnvBool("AUTH_ENABLED", false)
+
+	cfg := AuthConfig{
+		Enabled:          enabled,
+		JWTSecret:        getEnv("JWT_SECRET", ""),
+		AdminUsername:    getEnv("ADMIN_USERNAME", defaultAdminUsername),
+		AdminPassword:    getEnv("ADMIN_PASSWORD", ""),
+		SelfRegistration: getEnvBool("SELF_REGISTRATION", false),
+	}
+
+	durations := []struct {
+		dst      *time.Duration
+		key      string
+		fallback time.Duration
+	}{
+		{&cfg.JWTExpiration, "JWT_EXPIRATION", defaultJWTExpiration},
+		{&cfg.AccessTokenExpiration, "ACCESS_TOKEN_EXPIRATION", defaultAccessTokenExpiration},
+		{&cfg.SessionIdleTimeout, "SESSION_IDLE_TIMEOUT", defaultSessionIdleTimeout},
+		{&cfg.SessionMaxLifetime, "SESSION_MAX_LIFETIME", defaultSessionMaxLifetime},
+	}
+
+	for _, d := range durations {
+		if !enabled {
+			*d.dst = getEnvDuration(d.key, d.fallback)
+			continue
+		}
+
+		v, err := parseEnvDurationStrict(d.key, d.fallback)
+		if err != nil {
+			return AuthConfig{}, err
+		}
+
+		*d.dst = v
+	}
+
+	return cfg, nil
+}
+
+// parseEnvDurationStrict reads a duration from the environment. An unset or
+// empty variable gives the fallback; a value that does not parse is an error.
+func parseEnvDurationStrict(key string, fallback time.Duration) (time.Duration, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+
+	v, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a duration such as 15m or 12h", key)
+	}
+
+	return v, nil
 }
 
 // Helper functions for environment variables

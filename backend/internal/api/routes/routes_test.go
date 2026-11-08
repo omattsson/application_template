@@ -379,6 +379,8 @@ func TestUIConfigRouteFromEnv(t *testing.T) {
 	t.Setenv("ENV_FILE", "/nonexistent/.env")
 	t.Setenv("APP_TITLE", "My App")
 	t.Setenv("AUTH_ENABLED", "true")
+	// AUTH_ENABLED=true needs a JWT secret (16+ characters) to start.
+	t.Setenv("JWT_SECRET", "routes-test-secret-value")
 
 	cfg, err := config.LoadConfig()
 	require.NoError(t, err)

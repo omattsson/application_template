@@ -401,6 +401,9 @@ func TestLoadConfigUIConfigEnv(t *testing.T) {
 			t.Setenv("ENV_FILE", "/nonexistent/.env")
 			t.Setenv("APP_TITLE", tt.title)
 			t.Setenv("AUTH_ENABLED", tt.auth)
+			// AUTH_ENABLED=true needs a secret to start; this test is about the
+			// ui-config values, not the secret rules (see config_auth_test.go).
+			t.Setenv("JWT_SECRET", "ui-config-test-secret-value")
 
 			cfg, err := config.LoadConfig()
 			require.NoError(t, err)
