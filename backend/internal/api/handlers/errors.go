@@ -95,3 +95,19 @@ func respondCancelled(c *gin.Context, err error) bool {
 	}
 	return ok
 }
+
+// msgRequestBodyTooLarge is the message of a 413 answer; it matches the one of
+// middleware.MaxBodySize.
+const msgRequestBodyTooLarge = "request body too large"
+
+// respondBindError writes the answer for a request body that could not be
+// bound: 413 when the body is over the MaxBodySize limit, 400 otherwise.
+func respondBindError(c *gin.Context, err error) {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": msgRequestBodyTooLarge})
+		return
+	}
+
+	c.JSON(http.StatusBadRequest, gin.H{"error": msgInvalidRequestFormat})
+}

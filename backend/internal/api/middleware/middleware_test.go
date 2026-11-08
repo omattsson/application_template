@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -144,6 +145,112 @@ func TestRequestIDMiddleware(t *testing.T) {
 			ids[id] = true
 		}
 	})
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		forwardedProto string
+		directTLS      bool
+		expectHSTS     bool
+	}{
+		{name: "plain HTTP has no HSTS"},
+		{name: "behind TLS proxy has HSTS", forwardedProto: "https", expectHSTS: true},
+		{name: "explicit HTTP forwarded proto has no HSTS", forwardedProto: "http"},
+		{name: "direct TLS has HSTS", directTLS: true, expectHSTS: true},
+		{name: "HTTPS uppercase", forwardedProto: "HTTPS", expectHSTS: true},
+		{name: "multi-value forwarded proto", forwardedProto: "https, http", expectHSTS: true},
+		{name: "multi-value with spaces", forwardedProto: "HTTPS , http", expectHSTS: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := gin.New()
+			r.Use(SecurityHeaders())
+			r.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/test", nil)
+			if tt.forwardedProto != "" {
+				req.Header.Set("X-Forwarded-Proto", tt.forwardedProto)
+			}
+			if tt.directTLS {
+				req.TLS = &tls.ConnectionState{}
+			}
+			r.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
+			assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
+			assert.Equal(t, "strict-origin-when-cross-origin", w.Header().Get("Referrer-Policy"))
+			assert.Equal(t, "camera=(), microphone=(), geolocation=()", w.Header().Get("Permissions-Policy"))
+
+			if tt.expectHSTS {
+				assert.Equal(t, "max-age=63072000; includeSubDomains", w.Header().Get("Strict-Transport-Security"))
+			} else {
+				assert.Empty(t, w.Header().Get("Strict-Transport-Security"))
+			}
+		})
+	}
+}
+
+func TestSecurityHeadersOnAbortedAndErrorResponses(t *testing.T) {
+	t.Parallel()
+
+	r := gin.New()
+	r.Use(SecurityHeaders())
+	r.GET("/abort", func(c *gin.Context) { c.AbortWithStatus(http.StatusForbidden) })
+
+	for _, path := range []string{"/abort", "/missing"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"), path)
+		assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"), path)
+	}
+}
+
+func TestMaxBodySizeRejectsDeclaredLengthUpFront(t *testing.T) {
+	t.Parallel()
+
+	handlerRan := false
+	r := gin.New()
+	r.Use(MaxBodySize(64))
+	r.POST("/test", func(c *gin.Context) {
+		handlerRan = true
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(strings.Repeat("a", 65)))
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	assert.JSONEq(t, `{"error":"request body too large"}`, w.Body.String())
+	assert.False(t, handlerRan, "the handler must not run for a body that declares an oversized length")
+}
+
+func TestMaxBodySizeUnknownLengthIs413WhenHandlerWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	r := gin.New()
+	r.Use(MaxBodySize(64))
+	r.POST("/test", func(c *gin.Context) {
+		_, _ = io.ReadAll(c.Request.Body) // read error ignored, nothing written
+		_ = c.Request.Body.Close()
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(strings.Repeat("a", 200)))
+	req.ContentLength = -1
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	assert.JSONEq(t, `{"error":"request body too large"}`, w.Body.String())
 }
 
 func TestMaxBodySizeMiddleware(t *testing.T) {

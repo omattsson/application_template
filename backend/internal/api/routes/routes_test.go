@@ -1,9 +1,14 @@
 package routes
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"backend/internal/api/handlers"
@@ -13,35 +18,50 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestSetupRoutes(t *testing.T) {
-	// Set Gin to Test Mode
+const testPeer = "192.0.2.10:4321"
+
+// TestMain sets the Gin mode once: gin.SetMode writes a global, so it cannot
+// run inside parallel tests.
+func TestMain(m *testing.M) {
 	gin.SetMode(gin.TestMode)
+	os.Exit(m.Run())
+}
 
-	// Create a new router and mock repository
-	router := gin.Default() // Use gin.Default() to include default middleware
-	mockRepo := handlers.NewMockRepository()
+// newTestRouter builds a router with SetupRoutes and stops the limiters and
+// the hub when the test ends.
+func newTestRouter(t *testing.T, cfg *config.Config) (*gin.Engine, *RateLimiters) {
+	t.Helper()
 
-	// Initialize health checker and set it as ready
+	router := gin.New()
 	healthChecker := health.New()
 	healthChecker.SetReady(true)
 
-	// Create a minimal config for testing
-	cfg := &config.Config{
-		CORS: config.CORSConfig{
-			AllowedOrigins: "*",
-		},
-	}
-
-	// Create a test WebSocket hub
 	hub := websocket.NewHub()
 	go hub.Run()
-	defer hub.Shutdown()
+	t.Cleanup(hub.Shutdown)
 
-	// Setup routes
-	rl := SetupRoutes(router, mockRepo, healthChecker, cfg, hub)
-	defer rl.Stop()
+	rls := SetupRoutes(router, handlers.NewMockRepository(), healthChecker, cfg, hub)
+	t.Cleanup(rls.Stop)
+
+	return router, rls
+}
+
+func testConfig(rateLimit, loginRateLimit int32, trusted []string) *config.Config {
+	return &config.Config{
+		CORS: config.CORSConfig{AllowedOrigins: "*"},
+		Server: config.ServerConfig{
+			RateLimit:      rateLimit,
+			LoginRateLimit: loginRateLimit,
+			TrustedProxies: trusted,
+		},
+	}
+}
+
+func TestSetupRoutes(t *testing.T) {
+	router, _ := newTestRouter(t, testConfig(100, 10, nil))
 
 	// Test cases
 	tests := []struct {
@@ -83,4 +103,237 @@ func TestSetupRoutes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSecurityHeadersOnEveryResponse(t *testing.T) {
+	t.Parallel()
+
+	router, _ := newTestRouter(t, testConfig(100, 10, nil))
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		status int
+	}{
+		{name: "ok", method: http.MethodGet, path: "/api/v1/ping", status: http.StatusOK},
+		{name: "health", method: http.MethodGet, path: "/health", status: http.StatusOK},
+		{name: "not found", method: http.MethodGet, path: "/nope", status: http.StatusNotFound},
+		{name: "bad request", method: http.MethodPost, path: "/api/v1/items", status: http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader("{"))
+			req.RemoteAddr = testPeer
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.status, w.Code)
+			assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
+			assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
+			assert.Equal(t, "strict-origin-when-cross-origin", w.Header().Get("Referrer-Policy"))
+		})
+	}
+}
+
+func TestSecurityHeadersOnRateLimitedResponse(t *testing.T) {
+	t.Parallel()
+
+	router, _ := newTestRouter(t, testConfig(1, 1, nil))
+
+	var last *httptest.ResponseRecorder
+	for i := 0; i < 2; i++ {
+		last = httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ping", nil)
+		req.RemoteAddr = testPeer
+		router.ServeHTTP(last, req)
+	}
+
+	require.Equal(t, http.StatusTooManyRequests, last.Code)
+	assert.Equal(t, "nosniff", last.Header().Get("X-Content-Type-Options"))
+}
+
+func TestRedactWSTokenNeverLogged(t *testing.T) {
+	// Not parallel: replaces the global slog default logger.
+	var buf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(orig)
+
+	router, _ := newTestRouter(t, testConfig(100, 10, nil))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/ws?token=abc-secret-jwt&keep=1", nil)
+	req.RequestURI = req.URL.RequestURI()
+	req.RemoteAddr = testPeer
+	router.ServeHTTP(w, req)
+
+	logged := buf.String()
+	assert.Contains(t, logged, "/ws", "the request must have been logged")
+	assert.NotContains(t, logged, "abc-secret-jwt")
+	assert.NotContains(t, logged, "token=")
+}
+
+func TestRequestBodyTooLarge(t *testing.T) {
+	t.Parallel()
+
+	router, _ := newTestRouter(t, testConfig(100, 10, nil))
+	oversized := `{"name":"` + strings.Repeat("a", 1<<20) + `"}`
+
+	tests := []struct {
+		name          string
+		contentLength int64 // -1 = unknown (chunked)
+	}{
+		{name: "known content length", contentLength: int64(len(oversized))},
+		{name: "unknown content length", contentLength: -1},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/items", strings.NewReader(oversized))
+			req.ContentLength = tt.contentLength
+			req.Header.Set("Content-Type", "application/json")
+			req.RemoteAddr = testPeer
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+			assert.JSONEq(t, `{"error":"request body too large"}`, w.Body.String())
+		})
+	}
+}
+
+func TestMalformedJSONIsBadRequest(t *testing.T) {
+	t.Parallel()
+
+	router, _ := newTestRouter(t, testConfig(100, 10, nil))
+
+	for _, body := range []string{`{`, `{"name":`, `not json`, `[1,2`, `{"name": 12}`} {
+		body := body
+		t.Run(body, func(t *testing.T) {
+			t.Parallel()
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/items", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.RemoteAddr = testPeer
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
+}
+
+// pingFrom sends a GET /api/v1/ping from the test peer with the given
+// X-Forwarded-For value and returns the status code.
+func pingFrom(router *gin.Engine, forwardedFor string) int {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ping", nil)
+	req.RemoteAddr = testPeer
+	if forwardedFor != "" {
+		req.Header.Set("X-Forwarded-For", forwardedFor)
+	}
+	router.ServeHTTP(w, req)
+
+	return w.Code
+}
+
+// TestTrustedProxyNoneTrusted: without trusted proxies the client IP is the
+// TCP peer, so forging X-Forwarded-For does not give a new rate-limit bucket.
+func TestTrustedProxyNoneTrusted(t *testing.T) {
+	t.Parallel()
+
+	const limit = 5
+
+	tests := []struct {
+		name    string
+		trusted []string
+	}{
+		{name: "nil list", trusted: nil},
+		{name: "empty list", trusted: []string{}},
+		{name: "peer not in list", trusted: []string{"10.0.0.0/8"}},
+		{name: "invalid list fails closed", trusted: []string{"not-an-ip"}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			router, _ := newTestRouter(t, testConfig(limit, 10, tt.trusted))
+
+			for i := 0; i < limit; i++ {
+				require.Equal(t, http.StatusOK, pingFrom(router, fmt.Sprintf("1.2.3.%d", i+1)), "request %d", i+1)
+			}
+			assert.Equal(t, http.StatusTooManyRequests, pingFrom(router, "1.2.3.99"))
+		})
+	}
+}
+
+func TestTrustedProxyPeerListed(t *testing.T) {
+	t.Parallel()
+
+	const limit = 3
+
+	router, _ := newTestRouter(t, testConfig(limit, 10, []string{"192.0.2.10"}))
+
+	// Different forwarded addresses are limited separately.
+	for i := 0; i < limit+2; i++ {
+		require.Equal(t, http.StatusOK, pingFrom(router, fmt.Sprintf("1.2.3.%d", i+1)), "request %d", i+1)
+	}
+
+	// The same forwarded address is limited.
+	for i := 0; i < limit; i++ {
+		require.Equal(t, http.StatusOK, pingFrom(router, "8.8.8.8"), "request %d", i+1)
+	}
+	assert.Equal(t, http.StatusTooManyRequests, pingFrom(router, "8.8.8.8"))
+	// Another forwarded address is unaffected.
+	assert.Equal(t, http.StatusOK, pingFrom(router, "8.8.4.4"))
+}
+
+func TestLoginRateLimiterEnforcesLimit(t *testing.T) {
+	t.Parallel()
+
+	const loginLimit = 2
+
+	_, rls := newTestRouter(t, testConfig(100, loginLimit, nil))
+	require.NotNil(t, rls.Login)
+	require.NotNil(t, rls.API)
+
+	// The login route does not exist yet; this route stands in for it.
+	login := gin.New()
+	login.POST("/login", rls.Login.RateLimit(), func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	post := func() int {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/login", nil)
+		req.RemoteAddr = testPeer
+		login.ServeHTTP(w, req)
+
+		return w.Code
+	}
+
+	for i := 0; i < loginLimit; i++ {
+		require.Equal(t, http.StatusOK, post())
+	}
+	assert.Equal(t, http.StatusTooManyRequests, post())
+}
+
+func TestRateLimitersStop(t *testing.T) {
+	t.Parallel()
+
+	var nilLimiters *RateLimiters
+	assert.NotPanics(t, nilLimiters.Stop)
+	assert.NotPanics(t, (&RateLimiters{}).Stop)
+
+	_, rls := newTestRouter(t, testConfig(100, 10, nil))
+	assert.NotPanics(t, rls.Stop)
+	assert.NotPanics(t, rls.Stop, "Stop is idempotent")
 }

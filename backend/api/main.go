@@ -79,8 +79,8 @@ func main() {
 
 	// Setup router — use gin.New() since SetupRoutes registers its own Logger and Recovery middleware.
 	router := gin.New()
-	rateLimiter := routes.SetupRoutes(router, repo, healthChecker, cfg, hub)
-	defer rateLimiter.Stop()
+	rateLimiters := routes.SetupRoutes(router, repo, healthChecker, cfg, hub)
+	defer rateLimiters.Stop()
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// Create server with timeouts

@@ -65,7 +65,7 @@ func handleDBError(err error) (int, string) {
 func (h *Handler) CreateItem(c *gin.Context) {
 	var item models.Item
 	if err := c.ShouldBindJSON(&item); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": msgInvalidRequestFormat})
+		respondBindError(c, err)
 		return
 	}
 
@@ -213,7 +213,7 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 
 	var updateItem models.Item
 	if err := c.ShouldBindJSON(&updateItem); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": msgInvalidRequestFormat})
+		respondBindError(c, err)
 		return
 	}
 

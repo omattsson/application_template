@@ -118,6 +118,15 @@ func (m *maxBytesBodyCapture) Close() error {
 // Oversized payloads are translated to a 413 Request Entity Too Large response.
 func MaxBodySize(maxBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// A body that declares a length over the limit is refused before the
+		// handler runs. For a body of unknown length (chunked), the handler
+		// sees a read error; see handlers.respondBindError.
+		if c.Request.ContentLength > maxBytes {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge,
+				gin.H{"error": "request body too large"})
+			return
+		}
+
 		var exceeded bool
 		limitedReader := http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
 		c.Request.Body = &maxBytesBodyCapture{rc: limitedReader, exceeded: &exceeded}
@@ -130,6 +139,31 @@ func MaxBodySize(maxBytes int64) gin.HandlerFunc {
 				gin.H{"error": "request body too large"})
 			return
 		}
+	}
+}
+
+// SecurityHeaders adds standard security headers to all responses.
+func SecurityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+
+		// Add HSTS when behind TLS (direct or via reverse proxy).
+		isTLS := c.Request.TLS != nil
+		if forwardedProto := c.GetHeader("X-Forwarded-Proto"); !isTLS && forwardedProto != "" {
+			// X-Forwarded-Proto can be comma-separated (multiple proxies);
+			// check the first value. Scheme values are case-insensitive
+			// per RFC 3986.
+			first := strings.TrimSpace(strings.SplitN(forwardedProto, ",", 2)[0])
+			isTLS = strings.EqualFold(first, "https")
+		}
+		if isTLS {
+			c.Header("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
+
+		c.Next()
 	}
 }
 
