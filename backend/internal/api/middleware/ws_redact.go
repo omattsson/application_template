@@ -19,7 +19,7 @@ const wsContextKey = "ws.token"
 // Middleware that records the request URL (access logs, tracing such as
 // otelgin's `http.target`, metrics) would otherwise persist the token. This
 // middleware moves the value into the gin.Context and rewrites the URL, so
-// the rest of the stack only sees the path and the other query parameters.
+// the rest of the chain only sees the path and the other query parameters.
 //
 // Register it before any middleware that reads `c.Request.URL.RawQuery` or
 // `c.Request.RequestURI`. It does nothing for paths other than `/ws` and
