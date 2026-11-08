@@ -11,6 +11,7 @@ import (
 	"backend/internal/websocket"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -27,6 +28,15 @@ const (
 	defaultShutdownTimeout = 5 * time.Second
 )
 
+// setupLoggingTo makes a slog text handler on w, filtered at level, the
+// default logger. It is a new text handler, not a wrapper of the previous
+// default handler: that handler writes through the log package, and after
+// slog.SetDefault the log package writes through the default logger again,
+// which deadlocks.
+func setupLoggingTo(w io.Writer, level slog.Level) {
+	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})))
+}
+
 // @title           Backend API
 // @version         1.0
 // @description     This is the API documentation for the backend service
@@ -42,6 +52,12 @@ func main() {
 		slog.Error("Failed to load configuration", "error", err)
 		os.Exit(1)
 	}
+
+	// Apply LOG_LEVEL to the default slog logger (an invalid value already
+	// stopped startup in LoadConfig) and set the Gin mode from APP_DEBUG /
+	// GIN_MODE.
+	setupLoggingTo(os.Stderr, cfg.LogLevel)
+	gin.SetMode(cfg.GinMode())
 
 	// Initialize repository using the factory (MySQL)
 	repo, err := database.NewRepository(cfg)

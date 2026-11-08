@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 
+	appconfig "backend/internal/config"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -59,6 +61,7 @@ func TestConfigDSN(t *testing.T) {
 		DBName:   "testdb",
 	}
 
-	expected := "testuser:testpass@tcp(testhost:3306)/testdb?charset=utf8mb4&parseTime=True&loc=UTC"
+	expected := "testuser:testpass@tcp(testhost:3306)/testdb?charset=utf8mb4&parseTime=True&loc=UTC" + appconfig.MySQLSessionParams
 	assert.Equal(t, expected, config.DSN())
+	assert.Contains(t, config.DSN(), appconfig.MySQLSessionParams)
 }

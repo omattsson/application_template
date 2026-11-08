@@ -172,22 +172,10 @@ func (d *Database) configure() error {
 	// Get the dialect
 	dialect := d.Dialector.Name()
 
-	if dialect == "mysql" {
-		// Enable foreign key checks
-		if err := d.Exec("SET FOREIGN_KEY_CHECKS = 1").Error; err != nil {
-			return NewDatabaseError("configure", err)
-		}
-
-		// Set explicit default timezone to UTC
-		if err := d.Exec("SET time_zone = '+00:00'").Error; err != nil {
-			return NewDatabaseError("configure", err)
-		}
-
-		// Set SQL mode to strict
-		if err := d.Exec("SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO,NO_ENGINE_SUBSTITUTION'").Error; err != nil {
-			return NewDatabaseError("configure", err)
-		}
-	} else if dialect == "sqlite" {
+	// MySQL session variables (sql_mode, time_zone, foreign_key_checks) are
+	// DSN parameters (config.MySQLSessionParams): the driver applies them to
+	// every pooled connection. A SET statement here reached only one.
+	if dialect == "sqlite" {
 		// Enable foreign key checks for SQLite
 		if err := d.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
 			return NewDatabaseError("configure", err)

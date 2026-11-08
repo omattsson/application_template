@@ -1,6 +1,10 @@
 package database
 
-import "os"
+import (
+	"os"
+
+	appconfig "backend/internal/config"
+)
 
 // Config holds database connection configuration
 type Config struct {
@@ -24,7 +28,7 @@ func NewConfig() *Config {
 
 // DSN returns the database connection string
 func (c *Config) DSN() string {
-	return c.User + ":" + c.Password + "@tcp(" + c.Host + ":" + c.Port + ")/" + c.DBName + "?charset=utf8mb4&parseTime=True&loc=UTC"
+	return c.User + ":" + c.Password + "@tcp(" + c.Host + ":" + c.Port + ")/" + c.DBName + "?charset=utf8mb4&parseTime=True&loc=UTC" + appconfig.MySQLSessionParams
 }
 
 // Helper function to get environment variables with default values

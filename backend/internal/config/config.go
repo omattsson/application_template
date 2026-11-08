@@ -5,11 +5,13 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
@@ -49,6 +51,9 @@ type Config struct {
 	App     AppConfig
 	CORS    CORSConfig
 	Logging LogConfig
+	// LogLevel is LOG_LEVEL parsed to a slog level; main applies it to the
+	// default slog logger. An invalid value makes LoadConfig fail.
+	LogLevel slog.Level
 }
 
 // AppConfig holds application-wide configuration
@@ -99,18 +104,70 @@ type ServerConfig struct {
 	// String fields (8-byte on 64-bit systems)
 	Host string
 	Port string
+	// TrustedProxies are the IPs and CIDR ranges that may set the client IP
+	// with X-Forwarded-For or X-Real-IP (TRUSTED_PROXIES, see
+	// ParseTrustedProxies); nil = no proxy is trusted.
+	TrustedProxies []string
+	// 4-byte fields
+	// RateLimit is RATE_LIMIT: requests per minute per client IP (default 100).
+	RateLimit int32
+	// LoginRateLimit is LOGIN_RATE_LIMIT: login attempts per minute per client
+	// IP (default 10).
+	LoginRateLimit int32
+	// 1-byte fields
+	// EnableSwagger is ENABLE_SWAGGER (default false).
+	EnableSwagger bool
+	// AppDebug is APP_DEBUG (default true). It mirrors App.Debug and drives
+	// the Gin mode through Config.GinMode.
+	AppDebug bool
 }
 
 // LogConfig holds logging configuration
 type LogConfig struct {
+	// Level is LOG_LEVEL: debug, info, warn (or warning) or error.
 	Level string
 	File  string
+}
+
+// SlogLevel parses Level (case-insensitive). An empty Level is info.
+func (c LogConfig) SlogLevel() (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(c.Level)) {
+	case "", "info":
+		return slog.LevelInfo, nil
+	case "debug":
+		return slog.LevelDebug, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return slog.LevelInfo, fmt.Errorf("invalid LOG_LEVEL %q: use debug, info, warn or error", c.Level)
+	}
+}
+
+// GinMode returns the Gin mode: GIN_MODE when it is set, else release mode
+// unless APP_DEBUG is true. Debug mode prints every route at startup and
+// warnings that are not wanted in production.
+func (c *Config) GinMode() string {
+	if m := os.Getenv("GIN_MODE"); m != "" {
+		return m
+	}
+
+	if c.Server.AppDebug {
+		return gin.DebugMode
+	}
+
+	return gin.ReleaseMode
 }
 
 // Validate checks if the configuration is valid
 func (c *Config) Validate() error {
 	if err := c.App.Validate(); err != nil {
 		return fmt.Errorf("app config: %w", err)
+	}
+
+	if _, err := c.Logging.SlogLevel(); err != nil {
+		return err
 	}
 
 	if err := c.Database.Validate(); err != nil {
@@ -196,6 +253,21 @@ func (c *ServerConfig) Validate() error {
 	return nil
 }
 
+// MySQLSessionParams sets the session variables of every MySQL connection.
+// The driver (go-sql-driver/mysql) runs `SET <name>=<value>` for each DSN
+// parameter it does not know, on every new connection of the pool. A `SET`
+// statement after connecting reached only one pooled connection.
+//   - sql_mode: the MySQL 8.0/8.4 default, explicitly, so the mode does not
+//     depend on the server configuration (a managed database can differ).
+//   - time_zone: UTC, the same as loc=UTC on the client side.
+//   - foreign_key_checks: on.
+//
+// Values are URL-encoded: %27 is ', %2C is , and %2B is + (a plain + would
+// decode to a space).
+const MySQLSessionParams = "&sql_mode=%27ONLY_FULL_GROUP_BY%2CSTRICT_TRANS_TABLES%2CNO_ZERO_IN_DATE%2CNO_ZERO_DATE%2CERROR_FOR_DIVISION_BY_ZERO%2CNO_ENGINE_SUBSTITUTION%27" +
+	"&time_zone=%27%2B00%3A00%27" +
+	"&foreign_key_checks=1"
+
 // DSN returns the database connection string
 func (c *DatabaseConfig) DSN() string {
 	// Use a builder for better performance and readability
@@ -216,6 +288,7 @@ func (c *DatabaseConfig) DSN() string {
 	b.WriteByte('/')
 	b.WriteString(c.DBName)
 	b.WriteString("?charset=utf8mb4&parseTime=True&loc=UTC")
+	b.WriteString(MySQLSessionParams)
 
 	if c.MaxOpenConns > 0 {
 		b.WriteString("&maxAllowedPacket=0") // Let server control packet size
@@ -263,6 +336,10 @@ func LoadConfig() (*Config, error) {
 			WriteTimeout:    getEnvDuration("SERVER_WRITE_TIMEOUT", defaultWriteTimeout),
 			IdleTimeout:     getEnvDuration("SERVER_IDLE_TIMEOUT", defaultIdleTimeout),
 			ShutdownTimeout: getEnvDuration("SERVER_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
+			RateLimit:       getEnvInt32("RATE_LIMIT", 100),
+			LoginRateLimit:  getEnvInt32("LOGIN_RATE_LIMIT", 10),
+			EnableSwagger:   getEnvBool("ENABLE_SWAGGER", false),
+			AppDebug:        getEnvBool("APP_DEBUG", true),
 		},
 		CORS: CORSConfig{
 			AllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
@@ -273,10 +350,19 @@ func LoadConfig() (*Config, error) {
 		},
 	}
 
-	// Validate the configuration
+	trustedProxies, err := ParseTrustedProxies(getEnv("TRUSTED_PROXIES", ""))
+	if err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	cfg.Server.TrustedProxies = trustedProxies
+
+	// Validate the configuration (this also rejects an invalid LOG_LEVEL)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
+
+	cfg.LogLevel, _ = cfg.Logging.SlogLevel() // Validate checked the value
 
 	return cfg, nil
 }
