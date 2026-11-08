@@ -112,6 +112,7 @@ Configuration is handled through environment variables:
 - `APP_DEBUG` - Gin debug mode when true, release mode when false
 - `GIN_MODE` - Optional; when set it wins over `APP_DEBUG`
 - `PORT` - Server port inside the process or container (default: 8081)
+- `TRUSTED_PROXIES`, `RATE_LIMIT`, `LOGIN_RATE_LIMIT` - Client IP behind a proxy and the per-IP limits; see "Behind a proxy" in the root README and `.env.example`
 - `LOG_LEVEL` - Logging level (debug/info/warn/error)
 - `ENABLE_SWAGGER` - Serve the Swagger UI at `/swagger/index.html` (default: false)
 

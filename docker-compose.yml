@@ -60,6 +60,17 @@ services:
       - SERVER_WRITE_TIMEOUT=${SERVER_WRITE_TIMEOUT:-15s}
       - SERVER_SHUTDOWN_TIMEOUT=${SERVER_SHUTDOWN_TIMEOUT:-30s}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Client IP behind the bundled proxy: only the frontend container
+      # (nginx in production, the Vite dev server in development), at its
+      # fixed address on frontend-net, may set X-Forwarded-For / X-Real-IP.
+      # Do not trust the whole subnet: on some Docker setups its gateway is
+      # the source of traffic from the host, and a trusted gateway lets a
+      # client pick its IP. See README "Behind a proxy".
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-${FRONTEND_PROXY_IP:-172.30.80.10}}
+      # Requests per minute per client IP (API) and login attempts per
+      # minute per client IP.
+      - RATE_LIMIT=${RATE_LIMIT:-100}
+      - LOGIN_RATE_LIMIT=${LOGIN_RATE_LIMIT:-10}
       # Swagger UI at /swagger/index.html. Off by default; make dev and
       # make dev-backend set ENABLE_SWAGGER=true.
       - ENABLE_SWAGGER=${ENABLE_SWAGGER:-false}
@@ -104,7 +115,10 @@ services:
       backend:
         condition: service_healthy
     networks:
-      - frontend-net
+      frontend-net:
+        # Fixed address: the backend trusts exactly this proxy
+        # (TRUSTED_PROXIES).
+        ipv4_address: ${FRONTEND_PROXY_IP:-172.30.80.10}
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
@@ -122,3 +136,9 @@ volumes:
 networks:
   backend-net:
   frontend-net:
+    ipam:
+      config:
+        # Explicit subnet so that the frontend proxy has a fixed address.
+        # Change FRONTEND_NET_SUBNET and FRONTEND_PROXY_IP together when the
+        # range is in use on the host.
+        - subnet: ${FRONTEND_NET_SUBNET:-172.30.80.0/24}

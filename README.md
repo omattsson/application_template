@@ -142,6 +142,9 @@ Backend:
 - `GIN_MODE` - Optional; when set it wins over `APP_DEBUG` for the Gin mode
 - `BACKEND_PORT` - Host port of the API (default: 8081; `make prod*`: 8080). The container listens on 8081.
 - `ENABLE_SWAGGER` - Serve the Swagger UI at `/swagger/index.html` (default: false; `make dev*` set it to true)
+- `TRUSTED_PROXIES` - Proxies allowed to set the client IP (default in Compose: the frontend container, see [Behind a proxy](#behind-a-proxy))
+- `RATE_LIMIT` - API requests per minute per client IP (default: 100)
+- `LOGIN_RATE_LIMIT` - Login attempts per minute per client IP (default: 10)
 - `SERVER_SHUTDOWN_TIMEOUT` - Budget of each shutdown step (default: 30s). Compose gives the backend `stop_grace_period: 130s` (4 steps x 30s plus a margin); raise both together.
 
 Frontend:
@@ -150,6 +153,32 @@ Frontend:
 - `FRONTEND_PORT` - Host port of the web UI (default: 3000; `make prod*`: 80)
 - `FRONTEND_CONTAINER_PORT` - Container port of the web UI (default: 3000; `make prod*` sets 80 for nginx)
 - `VITE_API_URL` - Backend API URL
+
+### Behind a proxy
+
+The backend rate limits per client IP. It reads the client IP from
+`X-Forwarded-For` / `X-Real-IP` only when the request comes from an address in
+`TRUSTED_PROXIES`; otherwise the client IP is the TCP peer. With an empty list
+(the default outside Compose) every request through a proxy has the proxy's
+address, so all users share one rate-limit bucket (`RATE_LIMIT` requests and
+`LOGIN_RATE_LIMIT` logins per minute in total).
+
+In Compose, the frontend container (nginx in production, the Vite dev server
+in development) is the proxy. It has the fixed address `FRONTEND_PROXY_IP`
+(default `172.30.80.10`) on the `frontend-net` network (subnet
+`FRONTEND_NET_SUBNET`, default `172.30.80.0/24`), adds the client address to
+`X-Forwarded-For`, and the backend trusts exactly that address. Change the
+three together if the subnet is in use on your host.
+
+Pitfalls:
+
+- Trust only the proxy addresses, not a whole network: a network gateway is
+  the source of traffic from the host on some Docker setups, and a trusted
+  gateway lets a client pick its IP. `0.0.0.0/0` and `::/0` are refused at
+  startup.
+- Behind another load balancer, add its addresses to `TRUSTED_PROXIES` and
+  make sure it appends to `X-Forwarded-For` rather than passing a client
+  value through unchanged.
 
 ## API Documentation
 
