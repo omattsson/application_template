@@ -114,7 +114,7 @@ Use `depends_on` with `condition: service_healthy` for startup ordering.
 |---|---|---|---|
 | db | 3306 | 3306 | MySQL |
 | backend | 8080 | 8081 | API |
-| frontend | 80 (nginx) / 3000 (dev) | 3000 | Web UI |
+| frontend | 8080 (nginx) / 3000 (dev) | 3000 | Web UI |
 
 Changing a port requires updating: docker-compose.yml, nginx.conf, frontend API config, and any health check URLs.
 

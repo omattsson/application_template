@@ -34,7 +34,7 @@ A modern, production-ready template for full-stack web applications using Go (Gi
 
 - Docker and Docker Compose
 - Go 1.24 or later (for local development)
-- Node.js 20 or later (for local development)
+- Node.js 22.12 or later (for local development)
 - Make (optional, for using Makefile commands)
 
 ### Development Setup
@@ -149,9 +149,9 @@ Backend:
 
 Frontend:
 
-- `NODE_ENV` - Image target (development: Vite dev server on container port 3000; production: nginx on container port 80)
+- `NODE_ENV` - Image target (development: Vite dev server on container port 3000; production: unprivileged nginx on container port 8080)
 - `FRONTEND_PORT` - Host port of the web UI (default: 3000; `make prod*`: 80)
-- `FRONTEND_CONTAINER_PORT` - Container port of the web UI (default: 3000; `make prod*` sets 80 for nginx)
+- `FRONTEND_CONTAINER_PORT` - Container port of the web UI (default: 3000; `make prod*` sets 8080 for nginx)
 - `VITE_API_URL` - Backend API URL
 
 ### Behind a proxy

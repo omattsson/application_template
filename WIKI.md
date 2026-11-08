@@ -51,7 +51,7 @@ This project is a full-stack application template featuring a Go (Gin) backend a
 
 ### Prerequisites
 - Go 1.20+
-- Node.js 18+
+- Node.js 22.12+
 - Docker & Docker Compose
 
 ### Backend Setup

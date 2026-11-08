@@ -104,8 +104,8 @@ services:
       args:
         - NODE_ENV=${NODE_ENV:-production}
     # Host port of the web UI. The container listens on 3000 (Vite dev
-    # server) or 80 (nginx, production): make prod sets
-    # FRONTEND_CONTAINER_PORT=80.
+    # server) or 8080 (unprivileged nginx, production): make prod sets
+    # FRONTEND_CONTAINER_PORT=8080.
     ports:
       - "${FRONTEND_PORT:-3000}:${FRONTEND_CONTAINER_PORT:-3000}"
     environment:

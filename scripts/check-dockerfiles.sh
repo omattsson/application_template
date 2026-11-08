@@ -8,7 +8,8 @@
 #   4. golang images use the version that backend/go.mod declares.
 #
 # Usage:
-#   scripts/check-dockerfiles.sh                  check backend/Dockerfile
+#   scripts/check-dockerfiles.sh                  check backend/Dockerfile and
+#                                                 frontend/Dockerfile
 #   scripts/check-dockerfiles.sh PATH...          check the given Dockerfiles
 #   scripts/check-dockerfiles.sh --self-test      run the built-in fixture tests
 #
@@ -162,6 +163,22 @@ FROM build AS production
 USER nobody
 ENTRYPOINT ["/x"]
 EOF
+  mkfix node-nginx <<'EOF'
+FROM --platform=$BUILDPLATFORM node:26-alpine AS build
+RUN true
+FROM build AS development
+CMD ["npm", "run", "dev"]
+FROM nginxinc/nginx-unprivileged:alpine AS production
+COPY --from=build /app/dist /usr/share/nginx/html
+USER 101
+CMD ["nginx", "-g", "daemon off;"]
+EOF
+  mkfix nginx-root <<'EOF'
+FROM node:26-alpine AS build
+FROM nginx:alpine AS production
+COPY --from=build /app/dist /usr/share/nginx/html
+CMD ["nginx", "-g", "daemon off;"]
+EOF
 
   expect good pass
   expect root-user fail
@@ -171,6 +188,8 @@ EOF
   expect untagged fail
   expect wrong-go fail
   expect stage-ref pass
+  expect node-nginx pass
+  expect nginx-root fail
 
   if [ $failed -ne 0 ]; then
     echo "$failed self-test(s) failed"
@@ -184,7 +203,7 @@ case "${1:-}" in
     self_test
     ;;
   "")
-    run_checks "$REPO_ROOT/backend/Dockerfile" && echo "check-dockerfiles: OK"
+    run_checks "$REPO_ROOT/backend/Dockerfile" "$REPO_ROOT/frontend/Dockerfile" && echo "check-dockerfiles: OK"
     ;;
   *)
     run_checks "$@" && echo "check-dockerfiles: OK"

@@ -40,7 +40,7 @@ frontend/
 
 ## Prerequisites
 
-- Node.js 20.x or later
+- Node.js 22.12 or later
 - npm 9.x or later
 - Docker (for containerized development)
 
