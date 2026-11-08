@@ -24,7 +24,7 @@ const Health = () => {
           live: liveness?.status === 'UP',
           ready: readiness?.status === 'UP'
         });
-      } catch (error) {
+      } catch {
         setStatus({
           live: false,
           ready: false,
@@ -42,7 +42,7 @@ const Health = () => {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '200px' }}>
         <CircularProgress />
       </Box>
     );

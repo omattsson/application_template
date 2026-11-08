@@ -19,6 +19,8 @@ const { MockRWS, getInstance } = vi.hoisted(() => {
     sent: string[] = [];
     constructor(url: string) {
       super();
+      // Test mock: expose the constructed instance to the test.
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
       _instance = this;
       this.url = url;
     }

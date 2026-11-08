@@ -15,6 +15,8 @@ const { MockRWS, getInstance } = vi.hoisted(() => {
   class MockRWS extends EventTarget implements MockWSInstance {
     constructor() {
       super();
+      // Test mock: expose the constructed instance to the test.
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
       _instance = this;
     }
     close() { this.dispatchEvent(new CloseEvent('close')); }

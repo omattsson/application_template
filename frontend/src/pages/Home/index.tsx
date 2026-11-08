@@ -7,7 +7,7 @@ const Home = () => {
         Welcome to the Full Stack Application
       </Typography>
       <Paper sx={{ p: 3, mt: 3 }}>
-        <Typography variant="body1" paragraph>
+        <Typography variant="body1" sx={{ mb: 2 }}>
           This is a modern full-stack application built with:
         </Typography>
         <Typography component="ul" sx={{ pl: 2 }}>
