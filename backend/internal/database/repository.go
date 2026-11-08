@@ -8,7 +8,9 @@ import (
 	"backend/internal/models"
 )
 
-// NewRepository creates a new repository based on the configuration
+// NewRepository creates a new repository based on the configuration.
+// DB_TYPE=sqlite is accepted by config validation for unit-test configs only;
+// this production factory always builds MySQL.
 func NewRepository(cfg *config.Config) (models.Repository, error) {
 	slog.Info("Using MySQL as repository")
 	db, err := NewFromAppConfig(cfg)

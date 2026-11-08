@@ -40,7 +40,7 @@ When given a task:
 
 ### Docker Compose (`docker-compose.yml`)
 
-Four services:
+Three services:
 
 | Service | Image | Networks | Health Check |
 |---|---|---|---|

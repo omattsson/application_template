@@ -313,31 +313,57 @@ func TestConfigValidate(t *testing.T) {
 		assert.Contains(t, err.Error(), "write timeout")
 	})
 }
-func TestLoadConfigIgnoresDBTypeAzure(t *testing.T) {
+
+func TestLoadConfigRejectsUnsupportedDBType(t *testing.T) {
 	// Not parallel: subtests use t.Setenv which modifies process env.
-	t.Run("removed table-storage type is unsupported", func(t *testing.T) {
-		// Built by concatenation so the domain-term check does not flag the literal.
-		t.Setenv("DB_TYPE", "az"+"ure")
+	tests := []struct {
+		name     string
+		dbType   string
+		wantType string
+		wantErr  bool
+	}{
+		{name: "unsupported type is rejected", dbType: "postgres", wantErr: true},
+		{name: "mysql is supported", dbType: "mysql", wantType: "mysql"},
+		{name: "sqlite is supported", dbType: "sqlite", wantType: "sqlite"},
+		{name: "value is trimmed and lowercased", dbType: " MySQL ", wantType: "mysql"},
+		{name: "unset defaults to mysql", dbType: "", wantType: "mysql"},
+	}
 
-		cfg, err := config.LoadConfig()
-		require.Error(t, err)
-		assert.Nil(t, cfg)
-		assert.Contains(t, err.Error(), "unsupported")
-	})
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DB_TYPE", tt.dbType)
 
-	t.Run("mysql is supported", func(t *testing.T) {
-		t.Setenv("DB_TYPE", "mysql")
+			cfg, err := config.LoadConfig()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, cfg)
+				assert.Contains(t, err.Error(), "unsupported")
 
-		cfg, err := config.LoadConfig()
-		require.NoError(t, err)
-		assert.Equal(t, "mysql", cfg.Database.Type)
-	})
+				return
+			}
 
-	t.Run("unset defaults to mysql", func(t *testing.T) {
-		t.Setenv("DB_TYPE", "")
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantType, cfg.Database.Type)
+		})
+	}
+}
 
-		cfg, err := config.LoadConfig()
-		require.NoError(t, err)
-		assert.Equal(t, "mysql", cfg.Database.Type)
-	})
+func TestDatabaseConfigValidateUnsupportedType(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DatabaseConfig{
+		Type:            "postgres",
+		Host:            "localhost",
+		Port:            "3306",
+		User:            "user",
+		DBName:          "db",
+		MaxOpenConns:    10,
+		MaxIdleConns:    5,
+		ConnMaxLifetime: time.Minute,
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported")
 }
