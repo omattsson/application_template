@@ -166,7 +166,8 @@ func TestTrackerPanicLogNamesThePanicSite(t *testing.T) {
 	assert.Contains(t, out, "panic_site=")
 	assert.Regexp(t, `inflight\.panicSiteForTest:\d+`, out, "the top frame is the function that panicked")
 	assert.NotContains(t, out, "runtime.gopanic", "runtime frames are skipped")
-	assert.NotContains(t, strings.ToLower(out), "stack")
+	assert.NotContains(t, out, "goroutine ", "only the top frames, not a full goroutine dump")
+	assert.Equal(t, 1, strings.Count(out, "\n"), "one log line")
 }
 
 func TestPanicSiteFrames(t *testing.T) {
