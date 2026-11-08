@@ -228,3 +228,22 @@ func TestGroup_RepeatedLossesNeverRunTwoCopies(t *testing.T) {
 	assert.True(t, g.Stop())
 	assert.Equal(t, int32(0), running.Load())
 }
+
+// TestGroup_CloseFinishedGroupWithTinyTimeout checks that Close reports
+// success for a term whose workers already returned, even when the timeout
+// has already passed: the done check comes before the timer.
+func TestGroup_CloseFinishedGroupWithTinyTimeout(t *testing.T) {
+	t.Parallel()
+
+	for i := 0; i < 100; i++ {
+		g := NewGroup(time.Hour) // no workers: the term ends at once
+		g.Start(context.Background())
+		g.mu.Lock()
+		done := g.done
+		g.mu.Unlock()
+		require.NotNil(t, done)
+		<-done // the term's workers returned
+
+		require.True(t, g.Close(time.Nanosecond), "iteration %d: a finished term is not a timeout", i)
+	}
+}

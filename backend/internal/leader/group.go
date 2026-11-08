@@ -140,6 +140,14 @@ func (g *Group) stop(timeout time.Duration) bool {
 	}
 	cancel()
 
+	// Check done before the timer: with both ready, select picks at random,
+	// and a term that already ended would be reported as a timeout.
+	select {
+	case <-done:
+		return true
+	default:
+	}
+
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {

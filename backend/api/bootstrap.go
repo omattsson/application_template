@@ -9,14 +9,15 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	_ "backend/docs" // registers the Swagger spec served by /swagger/*any
 	"backend/internal/api/routes"
 	"backend/internal/config"
+	"backend/internal/ctxutil"
 	"backend/internal/database"
 	"backend/internal/health"
+	"backend/internal/inflight"
 	"backend/internal/leader"
 	"backend/internal/models"
 	"backend/internal/websocket"
@@ -25,6 +26,9 @@ import (
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
+
+// minStepBudget is the smallest budget of a shutdown step.
+const minStepBudget = 100 * time.Millisecond
 
 // defaultShutdownTimeout is the shutdown budget when SERVER_SHUTDOWN_TIMEOUT
 // is 0.
@@ -39,9 +43,10 @@ var exit = os.Exit
 // The interfaces below are the parts of each service that shutdown uses.
 // Tests pass fakes to check the order.
 
-// serverShutdowner is an HTTP server (*http.Server).
-type serverShutdowner interface {
+// httpServer is an HTTP server (*http.Server).
+type httpServer interface {
 	Shutdown(ctx context.Context) error
+	Close() error
 }
 
 // groupCloser is the leader worker group (*leader.Group).
@@ -49,9 +54,9 @@ type groupCloser interface {
 	Close(timeout time.Duration) bool
 }
 
-// waiter is the in-flight work (*sync.WaitGroup).
+// waiter is the in-flight work (*inflight.Tracker).
 type waiter interface {
-	Wait()
+	Wait(ctx context.Context) error
 }
 
 // hubShutdowner is the WebSocket hub (*websocket.Hub).
@@ -73,8 +78,8 @@ type closer interface {
 type services struct {
 	// leader runs the leader-only background workers.
 	leader groupCloser
-	// inFlight is the work that outlives its request (later tasks add to it:
-	// Add before the work starts, Done when it ends).
+	// inFlight is the work that outlives its request or worker run
+	// (*inflight.Tracker; see routerDeps.InFlight).
 	inFlight waiter
 	hub      hubShutdowner
 	// telemetryShutdown flushes the telemetry. A no-op until telemetry
@@ -82,7 +87,7 @@ type services struct {
 	telemetryShutdown func(ctx context.Context) error
 	rateLimiters      stopper
 	db                closer
-	servers           []serverShutdowner
+	servers           []httpServer
 }
 
 // setupLoggingTo makes a slog text handler on w, filtered at level, the
@@ -99,6 +104,13 @@ type routerDeps struct {
 	Repository    models.Repository
 	HealthChecker *health.HealthChecker
 	Hub           *websocket.Hub
+	// InFlight tracks work that a handler starts and that outlives the
+	// request (for example a detached write or a notification). buildRouter
+	// passes it to the handlers that need it (none yet): such a handler
+	// starts the work with InFlight.Go and does it inline when Go returns
+	// false (shutdown began). Shutdown waits for it before the database
+	// closes.
+	InFlight *inflight.Tracker
 }
 
 // initDatabase opens the database, runs the migrations and returns the
@@ -136,21 +148,28 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 	hub := websocket.NewHub()
 	go hub.Run()
 
+	// In-flight work: shared by the handlers (routerDeps.InFlight) and the
+	// leader workers, which receive it when they are built below.
+	tracker := inflight.New()
+
 	router, rateLimiters := buildRouter(cfg, routerDeps{
 		Repository:    repo,
 		HealthChecker: healthChecker,
 		Hub:           hub,
+		InFlight:      tracker,
 	})
 
 	// Leader-only background workers. There is no leader election yet, so
-	// this process is the leader until shutdown. The group has no workers
-	// yet; later tasks add them before Start.
+	// this process is the leader until shutdown. Pass every worker to
+	// NewGroup here (give it tracker when it starts work that outlives its
+	// Run), BEFORE workers.Start: Group.Add only takes effect at the next
+	// term, and without an election there is no next term.
 	workers := leader.NewGroup(leader.DefaultStopTimeout)
 	workers.Start(context.Background())
 
 	return &services{
 		leader:            workers,
-		inFlight:          &sync.WaitGroup{},
+		inFlight:          tracker,
 		hub:               hub,
 		telemetryShutdown: func(context.Context) error { return nil },
 		rateLimiters:      rateLimiters,
@@ -200,34 +219,66 @@ func shutdownTimeout(cfg *config.Config) time.Duration {
 	return defaultShutdownTimeout
 }
 
+// stepBudget is the budget of each shutdown step after the HTTP step: the
+// time left on ctx when shutdown starts (SERVER_SHUTDOWN_TIMEOUT from main),
+// at least minStepBudget. Without a deadline it is defaultShutdownTimeout.
+func stepBudget(ctx context.Context) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return defaultShutdownTimeout
+	}
+	if d := time.Until(deadline); d > minStepBudget {
+		return d
+	}
+	return minStepBudget
+}
+
 // shutdown stops the services in this order:
 //
-//  1. HTTP servers: no new requests; wait for the open requests.
+//  1. HTTP servers: no new requests; wait for the open requests. A server
+//     whose Shutdown fails (deadline) is closed, so its handlers do not run
+//     on while the database closes.
 //  2. Leader worker group: no new background work.
-//  3. In-flight work that outlives its request.
+//  3. In-flight work that outlives its request (inflight.Tracker).
 //  4. WebSocket hub: close the client connections.
 //  5. Telemetry: flush after the services stopped, so it covers the shutdown.
 //  6. Rate limiters: stop their cleanup goroutines.
 //  7. Database: close the connection pool last.
 //
-// Every step runs even when an earlier step failed or ctx expired: a hung
-// step waits at most until the deadline of ctx. shutdown returns the errors
-// of all steps; an expired deadline wraps context.DeadlineExceeded.
+// Budgets: the HTTP step uses ctx. The leader step, the in-flight step and
+// the telemetry step each get their own budget (stepBudget: the time left on
+// ctx when shutdown starts, at least minStepBudget), detached from ctx with
+// ctxutil.Detach. A hung request that uses up ctx therefore does not starve
+// them: the leader workers still get time to stop and the telemetry flush
+// still gets a live context. The worst case is about four budgets (each of
+// the four steps hangs); keep the grace period of the orchestrator above
+// that, or SERVER_SHUTDOWN_TIMEOUT below a quarter of it.
+//
+// Every step runs even when an earlier step failed. shutdown returns the
+// errors of all steps; a step that ran out of time wraps
+// context.DeadlineExceeded.
 func shutdown(ctx context.Context, s *services) error {
+	budget := stepBudget(ctx) // measured before the HTTP step uses ctx up
 	var errs []error
 
 	for _, srv := range s.servers {
 		if err := srv.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("http server: %w", err))
+			if cerr := srv.Close(); cerr != nil {
+				errs = append(errs, fmt.Errorf("close http server: %w", cerr))
+			}
 		}
 	}
 
-	if s.leader != nil && !s.leader.Close(remaining(ctx)) {
+	if s.leader != nil && !s.leader.Close(budget) {
 		errs = append(errs, fmt.Errorf("leader workers did not stop: %w", context.DeadlineExceeded))
 	}
 
 	if s.inFlight != nil {
-		if err := waitContext(ctx, s.inFlight); err != nil {
+		waitCtx, cancel := ctxutil.Detach(ctx, budget)
+		err := s.inFlight.Wait(waitCtx)
+		cancel()
+		if err != nil {
 			errs = append(errs, fmt.Errorf("in-flight work did not finish: %w", err))
 		}
 	}
@@ -237,7 +288,10 @@ func shutdown(ctx context.Context, s *services) error {
 	}
 
 	if s.telemetryShutdown != nil {
-		if err := s.telemetryShutdown(ctx); err != nil {
+		telCtx, cancel := ctxutil.Detach(ctx, budget)
+		err := s.telemetryShutdown(telCtx)
+		cancel()
+		if err != nil {
 			errs = append(errs, fmt.Errorf("telemetry: %w", err))
 		}
 	}
@@ -253,40 +307,4 @@ func shutdown(ctx context.Context, s *services) error {
 	}
 
 	return errors.Join(errs...)
-}
-
-// remaining returns the time until the deadline of ctx: the stop timeout of
-// the leader group. Without a deadline it is leader.DefaultStopTimeout. It is
-// never <= 0, because Group.Close treats that as "use the default".
-func remaining(ctx context.Context) time.Duration {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return leader.DefaultStopTimeout
-	}
-	if d := time.Until(deadline); d > 0 {
-		return d
-	}
-	return time.Nanosecond
-}
-
-// waitContext waits for w until ctx ends. On timeout the waiting goroutine
-// stays until w is done; the process is exiting anyway.
-func waitContext(ctx context.Context, w waiter) error {
-	done := make(chan struct{})
-	go func() {
-		w.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		// Work that finished at the deadline is not a timeout.
-		select {
-		case <-done:
-			return nil
-		default:
-			return ctx.Err()
-		}
-	}
 }

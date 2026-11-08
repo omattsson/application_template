@@ -15,6 +15,7 @@ import (
 
 	"backend/internal/config"
 	"backend/internal/health"
+	"backend/internal/inflight"
 	"backend/internal/leader"
 	"backend/internal/models"
 	"backend/internal/websocket"
@@ -63,17 +64,58 @@ type fakeServer struct {
 	rec  *callRecorder
 	err  error
 	name string
+	// hang makes Shutdown block until ctx ends, like a hung request.
+	hang bool
 }
 
-func (f *fakeServer) Shutdown(context.Context) error { f.rec.add(f.name); return f.err }
+func (f *fakeServer) Shutdown(ctx context.Context) error {
+	f.rec.add(f.name)
+	if f.hang {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return f.err
+}
 
-type fakeLeader struct{ rec *callRecorder }
+func (f *fakeServer) Close() error { f.rec.add(f.name + " close"); return nil }
 
-func (f *fakeLeader) Close(time.Duration) bool { f.rec.add("leader group"); return true }
+// fakeLeader records the stop timeout it got.
+type fakeLeader struct {
+	rec     *callRecorder
+	timeout time.Duration
+}
 
-type fakeWaiter struct{ rec *callRecorder }
+func (f *fakeLeader) Close(timeout time.Duration) bool {
+	f.timeout = timeout
+	f.rec.add("leader group")
+	return true
+}
 
-func (f *fakeWaiter) Wait() { f.rec.add("in-flight") }
+// ctxState is the state of a step context when the step started.
+type ctxState struct {
+	err  error
+	left time.Duration // time until the deadline; 0 without one
+}
+
+func stateOf(ctx context.Context) ctxState {
+	st := ctxState{err: ctx.Err()}
+	if dl, ok := ctx.Deadline(); ok {
+		st.left = time.Until(dl)
+	}
+	return st
+}
+
+// fakeWaiter records the context the in-flight step got.
+type fakeWaiter struct {
+	rec *callRecorder
+	got ctxState
+}
+
+func (f *fakeWaiter) Wait(ctx context.Context) error {
+	f.got = stateOf(ctx)
+	f.rec.add("in-flight")
+	return nil
+}
 
 type fakeHub struct{ rec *callRecorder }
 
@@ -93,7 +135,7 @@ func (f *fakeCloser) Close() error { f.rec.add("database"); return f.err }
 // fakeServices returns services whose every part records its call.
 func fakeServices(rec *callRecorder) *services {
 	return &services{
-		servers:  []serverShutdowner{&fakeServer{rec: rec, name: "server"}},
+		servers:  []httpServer{&fakeServer{rec: rec, name: "server"}},
 		leader:   &fakeLeader{rec: rec},
 		inFlight: &fakeWaiter{rec: rec},
 		hub:      &fakeHub{rec: rec},
@@ -121,6 +163,8 @@ func TestShutdownOrder(t *testing.T) {
 		}, rec.list())
 	})
 
+	// A server whose Shutdown failed is closed, so its handlers do not run
+	// on while the database closes.
 	t.Run("errors are reported and later steps still run", func(t *testing.T) {
 		t.Parallel()
 		rec := &callRecorder{}
@@ -128,7 +172,7 @@ func TestShutdownOrder(t *testing.T) {
 		serverErr := errors.New("server boom")
 		dbErr := errors.New("db boom")
 		telErr := errors.New("telemetry boom")
-		s.servers = []serverShutdowner{
+		s.servers = []httpServer{
 			&fakeServer{rec: rec, name: "server", err: serverErr},
 			&fakeServer{rec: rec, name: "second server"},
 		}
@@ -145,7 +189,7 @@ func TestShutdownOrder(t *testing.T) {
 		assert.ErrorIs(t, err, telErr)
 		assert.ErrorIs(t, err, dbErr)
 		assert.Equal(t, []string{
-			"server", "second server", "leader group", "in-flight", "hub", "telemetry", "rate limiters", "database",
+			"server", "server close", "second server", "leader group", "in-flight", "hub", "telemetry", "rate limiters", "database",
 		}, rec.list())
 	})
 
@@ -168,7 +212,7 @@ func TestShutdownCompletesWithinTimeout(t *testing.T) {
 	}{
 		{name: "hung leader worker", hangGroup: true, wantInErr: "leader workers"},
 		{name: "hung in-flight work", hangWork: true, wantInErr: "in-flight work"},
-		{name: "both hung", hangGroup: true, hangWork: true, wantInErr: "leader workers"},
+		{name: "both hung", hangGroup: true, hangWork: true, wantInErr: "in-flight work"},
 	}
 
 	for _, tt := range tests {
@@ -193,13 +237,9 @@ func TestShutdownCompletesWithinTimeout(t *testing.T) {
 				s.leader = g
 			}
 			if tt.hangWork {
-				var wg sync.WaitGroup
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					<-release
-				}()
-				s.inFlight = &wg
+				tracker := inflight.New()
+				require.True(t, tracker.Go(func() { <-release }))
+				s.inFlight = tracker
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -220,7 +260,9 @@ func TestShutdownCompletesWithinTimeout(t *testing.T) {
 			require.Error(t, err)
 			assert.ErrorIs(t, err, context.DeadlineExceeded)
 			assert.Contains(t, err.Error(), tt.wantInErr)
-			assert.Less(t, elapsed, 2*time.Second, "shutdown must not wait past the timeout")
+			// Each hung step waits its own budget (see shutdown): at most
+			// two budgets here.
+			assert.Less(t, elapsed, 2*time.Second, "shutdown must not wait past the step budgets")
 			assert.GreaterOrEqual(t, elapsed, timeout-20*time.Millisecond)
 			// The steps after the hung one still ran.
 			calls := rec.list()
@@ -230,6 +272,78 @@ func TestShutdownCompletesWithinTimeout(t *testing.T) {
 			assert.Contains(t, calls, "database")
 		})
 	}
+}
+
+// TestShutdownBudgetsAreIndependent checks that a hung HTTP shutdown, which
+// uses up the whole ctx, does not starve the later steps: the leader group,
+// the in-flight work and the telemetry hook each get their own budget.
+func TestShutdownBudgetsAreIndependent(t *testing.T) {
+	t.Parallel()
+
+	const budget = 300 * time.Millisecond
+	rec := &callRecorder{}
+	s := fakeServices(rec)
+	s.servers = []httpServer{&fakeServer{rec: rec, name: "server", hang: true}}
+	lead := &fakeLeader{rec: rec}
+	s.leader = lead
+	wait := &fakeWaiter{rec: rec}
+	s.inFlight = wait
+	var tel ctxState
+	s.telemetryShutdown = func(ctx context.Context) error {
+		tel = stateOf(ctx)
+		rec.add("telemetry")
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	err := shutdown(ctx, s)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded, "the hung HTTP shutdown is reported")
+	assert.Equal(t, []string{
+		"server", "server close", "leader group", "in-flight", "hub", "telemetry", "rate limiters", "database",
+	}, rec.list())
+	assert.Error(t, ctx.Err(), "the HTTP step used up the shared ctx")
+
+	assert.GreaterOrEqual(t, lead.timeout, budget-50*time.Millisecond, "leader step got its own budget")
+	assert.NoError(t, wait.got.err, "in-flight step got a live ctx")
+	assert.Greater(t, wait.got.left, budget/2)
+	assert.NoError(t, tel.err, "telemetry hook got a live ctx")
+	assert.Greater(t, tel.left, budget/2)
+}
+
+func TestShutdownStepBudget(t *testing.T) {
+	t.Parallel()
+
+	t.Run("expired ctx gets the floor", func(t *testing.T) {
+		t.Parallel()
+		rec := &callRecorder{}
+		s := fakeServices(rec)
+		lead := &fakeLeader{rec: rec}
+		s.leader = lead
+		var tel ctxState
+		s.telemetryShutdown = func(ctx context.Context) error { tel = stateOf(ctx); return nil }
+
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		_ = shutdown(ctx, s)
+
+		assert.Equal(t, minStepBudget, lead.timeout)
+		assert.NoError(t, tel.err)
+		assert.Greater(t, tel.left, time.Duration(0))
+	})
+
+	t.Run("ctx without deadline gets the default", func(t *testing.T) {
+		t.Parallel()
+		rec := &callRecorder{}
+		s := fakeServices(rec)
+		lead := &fakeLeader{rec: rec}
+		s.leader = lead
+
+		require.NoError(t, shutdown(context.Background(), s))
+
+		assert.Equal(t, defaultShutdownTimeout, lead.timeout)
+	})
 }
 
 func TestSwaggerRouteOnlyWhenEnabled(t *testing.T) {
@@ -408,7 +522,8 @@ func TestBootstrapPipeline(t *testing.T) {
 	require.NotNil(t, s)
 	require.NotNil(t, router)
 	assert.NotNil(t, s.leader)
-	assert.NotNil(t, s.inFlight)
+	tracker, ok := s.inFlight.(*inflight.Tracker)
+	require.True(t, ok, "in-flight work is an *inflight.Tracker")
 	assert.NotNil(t, s.hub)
 	assert.NotNil(t, s.telemetryShutdown)
 	assert.NotNil(t, s.rateLimiters)
@@ -433,6 +548,7 @@ func TestBootstrapPipeline(t *testing.T) {
 	defer cancel()
 	require.NoError(t, shutdown(ctx, s))
 	assert.True(t, repo.isClosed())
+	assert.False(t, tracker.Go(func() {}), "no new in-flight work after shutdown began")
 
 	// The server no longer accepts connections.
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, base+"/health/live", nil)

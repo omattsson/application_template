@@ -51,4 +51,15 @@ items.Use(rateLimiter.RateLimit())
 The `Recovery()` middleware in `internal/api/middleware/middleware.go` catches panics and returns a generic 500. This is applied globally in `routes.go`. Never remove it — it prevents unhandled panics from crashing the server and potentially leaking stack traces.
 
 ## Graceful Shutdown
-`api/main.go` waits for `SIGINT`/`SIGTERM`, then `shutdown` in `api/bootstrap.go` stops the services within `SERVER_SHUTDOWN_TIMEOUT` (default 30s; 5s when set to 0) in this order: HTTP servers, leader worker group, in-flight work, WebSocket hub, telemetry, rate limiters, database. A hung step waits at most until the deadline. Add new background work as a `leader.Worker` or to the in-flight wait group, and make it respect cancellation.
+`api/main.go` waits for `SIGINT`/`SIGTERM`. Then `shutdown` in `api/bootstrap.go` stops the services in this order: HTTP servers, leader worker group, in-flight work, WebSocket hub, telemetry, rate limiters, database.
+
+Shutdown timeouts:
+- The HTTP step gets `SERVER_SHUTDOWN_TIMEOUT` (default 30s; 5s when set to 0).
+- The leader, in-flight and telemetry steps each get their own budget of the same length. These budgets are detached, so a hung request does not starve the later steps.
+- A server that does not finish in time is closed.
+
+Background work:
+- Periodic work is a `leader.Worker`. Pass it to `leader.NewGroup` in `buildServices` before `workers.Start`, because `Group.Add` takes effect only at the next term.
+- Work that outlives its request or worker run starts with `inflight.Tracker.Go(fn)`. Handlers get the tracker as `routerDeps.InFlight`, and workers get it in `buildServices`. `Go` returns `false` once shutdown has begun; the caller then does the work inline or drops it. Never add work to the tracker after `Wait`.
+- Shutdown waits for tracked work before the database closes. A panic in tracked work is recovered and logged.
+- All background work must respect cancellation.
