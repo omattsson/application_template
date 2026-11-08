@@ -493,12 +493,17 @@ func LoadConfig() (*Config, error) {
 	return cfg, nil
 }
 
-// loadAuthConfig reads the auth variables. With AUTH_ENABLED=true a duration
+// loadAuthConfig reads the auth variables. AUTH_ENABLED is parsed strictly: a
+// value that is set but not a boolean is an error, because a silent fallback
+// to false would turn authentication off on a typo. With AUTH_ENABLED=true a duration
 // that is set but does not parse is an error (a silent fallback would hide a
 // typo in a security setting); with auth off the durations are read leniently
 // because nothing uses them.
 func loadAuthConfig() (AuthConfig, error) {
-	enabled := getEnvBool("AUTH_ENABLED", false)
+	enabled, err := parseEnvBoolStrict("AUTH_ENABLED", false)
+	if err != nil {
+		return AuthConfig{}, err
+	}
 
 	cfg := AuthConfig{
 		Enabled:          enabled,
@@ -534,6 +539,24 @@ func loadAuthConfig() (AuthConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// parseEnvBoolStrict reads a boolean from the environment. Surrounding
+// whitespace is ignored. An unset or empty variable gives the fallback; a
+// value that strconv.ParseBool does not accept is an error that names the
+// variable and does not repeat the value.
+func parseEnvBoolStrict(key string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+
+	v, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean (true or false)", key)
+	}
+
+	return v, nil
 }
 
 // parseEnvDurationStrict reads a duration from the environment. An unset or

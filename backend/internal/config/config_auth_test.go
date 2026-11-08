@@ -185,3 +185,50 @@ func TestAuthConfigValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadConfigAuthEnabledParsing(t *testing.T) {
+	// Not parallel: subtests use t.Setenv.
+	tests := []struct {
+		name    string
+		value   string
+		want    bool
+		wantErr bool
+	}{
+		{name: "true", value: "true", want: true},
+		{name: "TRUE", value: "TRUE", want: true},
+		{name: "1", value: "1", want: true},
+		{name: "false", value: "false"},
+		{name: "0", value: "0"},
+		{name: "empty means false", value: ""},
+		{name: "surrounding spaces are trimmed", value: " true ", want: true},
+		{name: "ture", value: "ture", wantErr: true},
+		{name: "yes", value: "yes", wantErr: true},
+		{name: "on", value: "on", wantErr: true},
+		{name: "enabled", value: "enabled", wantErr: true},
+		// This row replaces "invalid auth falls back to false" of
+		// TestLoadConfigUIConfigEnv, which pre-dates auth.
+		{name: "maybe", value: "maybe", wantErr: true},
+		{name: "unique garbage is not echoed", value: "zz9plural-alpha", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			clearAuthEnv(t)
+			t.Setenv("AUTH_ENABLED", tt.value)
+			t.Setenv("JWT_SECRET", "a-secret-of-sufficient-length")
+
+			cfg, err := config.LoadConfig()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "AUTH_ENABLED")
+				assert.NotContains(t, err.Error(), "zz9plural", "the error must not echo the value")
+				assert.NotContains(t, err.Error(), "maybe")
+				assert.NotContains(t, err.Error(), "ture")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.Auth.Enabled)
+		})
+	}
+}

@@ -425,6 +425,28 @@ func TestAuthRequiredStoreError(t *testing.T) {
 		})
 	}
 
+	t.Run("strict mode never runs the handler after a failed lookup", func(t *testing.T) {
+		t.Parallel()
+		for _, storeErr := range []error{dbDown, context.DeadlineExceeded} {
+			ran := false
+			r := gin.New()
+			r.GET("/protected", AuthRequiredWithOptions(JWTAuthOptions{
+				JWTSecret: testSecret, SessionStore: failingStore{memory, storeErr}, FailClosedOnStoreError: true,
+			}), func(c *gin.Context) { ran = true })
+			w := doGet(r, "/protected", bearer(t, validClaims()))
+			assert.Equal(t, http.StatusInternalServerError, w.Code)
+			assert.False(t, ran, "the request must not be admitted")
+		}
+		// A cancelled lookup is not admitted either.
+		ran := false
+		r := gin.New()
+		r.GET("/protected", AuthRequiredWithOptions(JWTAuthOptions{
+			JWTSecret: testSecret, SessionStore: failingStore{memory, context.Canceled}, FailClosedOnStoreError: true,
+		}), func(c *gin.Context) { ran = true })
+		assert.Equal(t, 499, doGet(r, "/protected", bearer(t, validClaims())).Code)
+		assert.False(t, ran)
+	})
+
 	t.Run("a revocation wins over a failing lookup", func(t *testing.T) {
 		t.Parallel()
 		store := sessionstore.NewMemory()
@@ -484,18 +506,24 @@ func (m mixedStore) IsSessionBlocked(ctx context.Context, sid string) (bool, err
 	return m.SessionStore.IsSessionBlocked(ctx, sid)
 }
 
-func TestCheckRevocation(t *testing.T) {
+func TestRevocationStatus(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	claims := &Claims{UserID: "u1", SessionID: "s1", RegisteredClaims: jwt.RegisteredClaims{ID: "j1"}}
 
-	assert.NoError(t, CheckRevocation(ctx, nil, claims), "nil store passes")
+	revoked, lookupErr := RevocationStatus(ctx, nil, claims)
+	assert.NoError(t, revoked, "nil store passes")
+	assert.NoError(t, lookupErr)
 	store := sessionstore.NewMemory()
 	defer store.Stop()
-	assert.NoError(t, CheckRevocation(ctx, store, nil), "nil claims pass")
-	assert.NoError(t, CheckRevocation(ctx, store, claims))
+	revoked, lookupErr = RevocationStatus(ctx, store, nil)
+	assert.NoError(t, revoked, "nil claims pass")
+	assert.NoError(t, lookupErr)
+	revoked, lookupErr = RevocationStatus(ctx, store, claims)
+	assert.NoError(t, revoked)
+	assert.NoError(t, lookupErr)
 
-	revoked, lookupErr := RevocationStatus(ctx, failingStore{store, errors.New("boom")}, claims)
+	revoked, lookupErr = RevocationStatus(ctx, failingStore{store, errors.New("boom")}, claims)
 	assert.NoError(t, revoked)
 	require.Error(t, lookupErr)
 	for _, part := range []string{"token blocklist", "session blocklist", "user blocklist"} {

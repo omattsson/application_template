@@ -392,7 +392,6 @@ func TestLoadConfigUIConfigEnv(t *testing.T) {
 		{name: "defaults", wantTitle: "Application Template", wantAuth: false},
 		{name: "custom", title: "My App", auth: "true", wantTitle: "My App", wantAuth: true},
 		{name: "auth false", auth: "false", wantTitle: "Application Template", wantAuth: false},
-		{name: "invalid auth falls back to false", auth: "maybe", wantTitle: "Application Template", wantAuth: false},
 	}
 
 	for _, tt := range tests {

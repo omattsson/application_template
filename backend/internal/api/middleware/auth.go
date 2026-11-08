@@ -139,24 +139,13 @@ type JWTAuthOptions struct {
 	JWTSecret    string
 	SessionStore sessionstore.SessionStore // nil: no revocation checks
 	// FailClosedOnStoreError makes a failing session store lookup end the
-	// request with 500 instead of letting it through. The default (false)
-	// fails open like CheckRevocation: access tokens are short-lived and a
-	// database blip should not lock out every user. A revocation that a
+	// request with 500 instead of letting it through. Production wiring
+	// should set it. The default (false) fails open: access tokens are
+	// short-lived and a database blip would otherwise lock out every user,
+	// but a revoked token is then accepted while the lookup fails. A revocation that a
 	// working lookup finds always wins, in both modes. A cancelled request
 	// context gives 499 in both modes.
 	FailClosedOnStoreError bool
-}
-
-// AuthRequired returns middleware that validates JWT tokens from the
-// Authorization header, with no revocation checks.
-func AuthRequired(jwtSecret string) gin.HandlerFunc {
-	return AuthRequiredWithSessionStore(jwtSecret, nil)
-}
-
-// AuthRequiredWithSessionStore returns middleware that validates JWT tokens and checks
-// the provided session store for revoked tokens. If store is nil, no revocation check is performed.
-func AuthRequiredWithSessionStore(jwtSecret string, store sessionstore.SessionStore) gin.HandlerFunc {
-	return AuthRequiredWithOptions(JWTAuthOptions{JWTSecret: jwtSecret, SessionStore: store})
 }
 
 // bearerToken returns the token of an "Authorization: Bearer <token>" header
@@ -255,7 +244,7 @@ func setJWTContext(c *gin.Context, claims *Claims) {
 	}
 }
 
-// Revocation errors returned by RevocationStatus and CheckRevocation.
+// Revocation errors returned by RevocationStatus.
 var (
 	// ErrTokenRevoked means the jti of the token is on the token blocklist
 	// (logout).
@@ -267,8 +256,8 @@ var (
 	ErrSessionRevoked = errors.New("session revoked")
 )
 
-// CheckRevocation checks validated claims against the session store. The JWT
-// middleware and the WebSocket upgrade both use it. It checks:
+// RevocationStatus checks validated claims against the session store, in
+// this order:
 //  1. The token blocklist (jti). A match returns ErrTokenRevoked.
 //  2. The session blocklist (the sid claim), for a token with a session. A
 //     match (logout of the session) returns ErrSessionRevoked.
@@ -278,27 +267,17 @@ var (
 //     without iat gets a zero time and counts as blocked. A match returns
 //     ErrSessionRevoked.
 //
-// A nil store or nil claims pass. On a store error the function logs the
-// error and continues (fail open): access tokens are short-lived, and a
-// database blip must not lock out every user. Use RevocationStatus to treat
-// a failed lookup differently.
-func CheckRevocation(ctx context.Context, store sessionstore.SessionStore, claims *Claims) error {
-	revoked, lookupErr := RevocationStatus(ctx, store, claims)
-	if lookupErr != nil && claims != nil {
-		slog.ErrorContext(ctx, "Failed to check token, session or user blocklist",
-			"jti", claims.ID, "user_id", claims.UserID, "error", lookupErr)
-	}
-
-	return revoked
-}
-
-// RevocationStatus runs the checks of CheckRevocation without logging. It
-// returns the revocation (ErrTokenRevoked, ErrSessionRevoked or nil) and the
+// A nil store or nil claims pass. It does not log and has no policy for a
+// failed lookup. It returns the revocation (ErrTokenRevoked, ErrSessionRevoked or nil) and the
 // store errors (nil when all checks ran). A failed check counts as not
 // revoked; the other checks still run, and a revocation that one of them
-// finds is returned together with the errors of the earlier ones. Callers
-// decide how to treat lookupErr (the HTTP middleware fails open by default;
-// the WebSocket revalidation uses it to stop early).
+// finds is returned together with the errors of the earlier ones.
+//
+// The caller must decide what a non-nil lookupErr means and must not ignore
+// it: AuthRequiredWithOptions fails open or closed by
+// JWTAuthOptions.FailClosedOnStoreError. The WebSocket upgrade, which does not
+// exist yet, must apply the same policy (production wiring fails closed: a
+// non-nil lookupErr with no revocation must refuse the connection).
 func RevocationStatus(ctx context.Context, store sessionstore.SessionStore, claims *Claims) (revoked error, lookupErr error) {
 	if store == nil || claims == nil {
 		return nil, nil
@@ -336,8 +315,8 @@ func RevocationStatus(ctx context.Context, store sessionstore.SessionStore, clai
 	return nil, errors.Join(errs...)
 }
 
-// RevocationMessage returns the client message for an error from
-// CheckRevocation.
+// RevocationMessage returns the client message for the revocation error of
+// RevocationStatus.
 func RevocationMessage(err error) string {
 	if errors.Is(err, ErrTokenRevoked) {
 		return "Token has been revoked"
