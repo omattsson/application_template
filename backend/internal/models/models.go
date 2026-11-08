@@ -60,6 +60,10 @@ type Repository interface {
 	Update(ctx context.Context, entity interface{}) error
 	Delete(ctx context.Context, entity interface{}) error
 	List(ctx context.Context, dest interface{}, conditions ...interface{}) error
+	// ListPaged fills dest (a *[]Item) with one page of the items that match
+	// filter and returns the number of items that match, not the page size.
+	// limit <= 0 returns all matches; offset applies only with a limit.
+	ListPaged(ctx context.Context, dest interface{}, limit, offset int, filter ItemFilter) (total int64, err error)
 	Ping(ctx context.Context) error
 	Close() error
 }
@@ -117,10 +121,12 @@ func (r *GenericRepository) Create(ctx context.Context, entity interface{}) erro
 		}
 	}
 
-	if err := r.db.WithContext(ctx).Create(entity).Error; err != nil {
-		return r.handleError("create", err)
-	}
-	return nil
+	return retryOnLock(ctx, func() error {
+		if err := r.db.WithContext(ctx).Create(entity).Error; err != nil {
+			return r.handleError("create", err)
+		}
+		return nil
+	})
 }
 
 func (r *GenericRepository) FindByID(ctx context.Context, id uint, dest interface{}) error {
@@ -149,35 +155,51 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 	// Select("*") ensures all columns are written, matching Save() semantics.
 	if ver, ok := entity.(Versionable); ok {
 		currentVersion := ver.GetVersion()
-		ver.SetVersion(currentVersion + 1)
-		result := r.db.WithContext(ctx).
-			Model(entity).
-			Where("version = ?", currentVersion).
-			Select("*").
-			Updates(entity)
-		if result.Error != nil {
-			ver.SetVersion(currentVersion) // Roll back version on error
-			return r.handleError("update", result.Error)
-		}
-		if result.RowsAffected == 0 {
-			ver.SetVersion(currentVersion) // Roll back version on mismatch
-			return dberrors.NewDatabaseError("update", errors.New("version mismatch"))
-		}
-		return nil
+		// Each attempt is one UPDATE statement that InnoDB rolls back as a whole
+		// on a deadlock, and it resets the in-memory version on every failure,
+		// so a retry increments the version once. A version mismatch is not a
+		// lock error: it is returned at once.
+		return retryOnLock(ctx, func() error {
+			ver.SetVersion(currentVersion + 1)
+			result := r.db.WithContext(ctx).
+				Model(entity).
+				Where("version = ?", currentVersion).
+				Select("*").
+				Updates(entity)
+			if result.Error != nil {
+				ver.SetVersion(currentVersion) // Roll back version on error
+				return r.handleError("update", result.Error)
+			}
+			if result.RowsAffected == 0 {
+				ver.SetVersion(currentVersion) // Roll back version on mismatch
+				return dberrors.NewDatabaseError("update", errors.New("version mismatch"))
+			}
+			return nil
+		})
 	}
 
-	if err := r.db.WithContext(ctx).Save(entity).Error; err != nil {
-		return r.handleError("update", err)
-	}
-	return nil
+	return retryOnLock(ctx, func() error {
+		if err := r.db.WithContext(ctx).Save(entity).Error; err != nil {
+			return r.handleError("update", err)
+		}
+		return nil
+	})
 }
 
 func (r *GenericRepository) Delete(ctx context.Context, entity interface{}) error {
-	result := r.db.WithContext(ctx).Delete(entity)
-	if result.Error != nil {
-		return r.handleError("delete", result.Error)
+	var rowsAffected int64
+	err := retryOnLock(ctx, func() error {
+		result := r.db.WithContext(ctx).Delete(entity)
+		if result.Error != nil {
+			return r.handleError("delete", result.Error)
+		}
+		rowsAffected = result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	if result.RowsAffected == 0 {
+	if rowsAffected == 0 {
 		return dberrors.NewDatabaseError("delete", dberrors.ErrNotFound)
 	}
 	return nil
@@ -221,6 +243,70 @@ func (r *GenericRepository) List(ctx context.Context, dest interface{}, conditio
 		return r.handleError("list", err)
 	}
 	return nil
+}
+
+// ItemFilter selects items for ListPaged. A zero field does not filter.
+type ItemFilter struct {
+	// Name matches items whose name contains it (case-insensitive on the
+	// default MySQL collation). % and _ are literals.
+	Name string
+	// NameExact matches the whole name and takes precedence over Name.
+	NameExact string
+	// MinPrice and MaxPrice bound the price (inclusive) when greater than 0.
+	MinPrice float64
+	MaxPrice float64
+}
+
+// itemListColumns are the columns of an item list row, in place of SELECT *.
+var itemListColumns = []string{"id", "name", "price", "version", "created_at", "updated_at", "deleted_at"}
+
+// likeEscaper escapes the LIKE wildcards. "!" is the escape character, which
+// works the same on MySQL and SQLite (a backslash needs different quoting).
+var likeEscaper = strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
+
+// where applies the filter to a query on the items table. The count query and
+// the page query both use it, so the total counts the matching rows.
+func (f ItemFilter) where(q *gorm.DB) *gorm.DB {
+	switch {
+	case f.NameExact != "":
+		q = q.Where("name = ?", f.NameExact)
+	case f.Name != "":
+		q = q.Where("name LIKE ? ESCAPE '!'", "%"+likeEscaper.Replace(f.Name)+"%")
+	}
+	if f.MinPrice > 0 {
+		q = q.Where("price >= ?", f.MinPrice)
+	}
+	if f.MaxPrice > 0 {
+		q = q.Where("price <= ?", f.MaxPrice)
+	}
+	return q
+}
+
+// ListPaged returns one page of items that match filter, ordered by id, and
+// the number of all items that match. dest must be a *[]Item.
+func (r *GenericRepository) ListPaged(ctx context.Context, dest interface{}, limit, offset int, filter ItemFilter) (int64, error) {
+	if _, ok := dest.(*[]Item); !ok {
+		return 0, dberrors.NewDatabaseError("list_paged", errors.New("destination must be *[]Item"))
+	}
+
+	var total int64
+	if err := filter.where(r.db.WithContext(ctx).Model(&Item{})).Count(&total).Error; err != nil {
+		return 0, r.handleError("list_paged", err)
+	}
+
+	query := filter.where(r.db.WithContext(ctx).Model(&Item{})).
+		Select(itemListColumns).
+		Order("id ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+		if offset > 0 {
+			query = query.Offset(offset)
+		}
+	}
+	if err := query.Find(dest).Error; err != nil {
+		return 0, r.handleError("list_paged", err)
+	}
+	return total, nil
 }
 
 // handleError translates database errors into our custom error types

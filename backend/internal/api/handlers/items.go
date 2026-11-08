@@ -117,33 +117,21 @@ func (h *Handler) GetItems(c *gin.Context) {
 		return
 	}
 
+	filter := models.ItemFilter{
+		Name:      c.Query("name"),
+		NameExact: c.Query("name_exact"),
+		MinPrice:  minPrice,
+		MaxPrice:  maxPrice,
+	}
+	if limit <= 0 {
+		// Without a limit the whole list is returned and offset is ignored.
+		offset = 0
+	}
+
 	var items []models.Item
-	conditions := make([]interface{}, 0)
-
-	// Handle name filtering
-	if c.Query("name_exact") != "" {
-		conditions = append(conditions, models.Filter{
-			Field: "name",
-			Op:    "exact",
-			Value: c.Query("name_exact"),
-		})
-	} else if name := c.Query("name"); name != "" {
-		conditions = append(conditions, models.Filter{
-			Field: "name",
-			Value: name,
-		})
-	}
-	if minPrice > 0 {
-		conditions = append(conditions, models.Filter{Field: "price", Op: ">=", Value: minPrice})
-	}
-	if maxPrice > 0 {
-		conditions = append(conditions, models.Filter{Field: "price", Op: "<=", Value: maxPrice})
-	}
-	if limit > 0 {
-		conditions = append(conditions, models.Pagination{Limit: limit, Offset: offset})
-	}
-
-	if err := h.repository.List(c.Request.Context(), &items, conditions...); err != nil {
+	// The total is not part of the response (a plain array); ListPaged counts
+	// the matching rows for callers that page.
+	if _, err := h.repository.ListPaged(c.Request.Context(), &items, limit, offset, filter); err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})
 		return

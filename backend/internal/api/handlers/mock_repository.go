@@ -224,6 +224,36 @@ func (m *MockRepository) List(_ context.Context, dest interface{}, conditions ..
 	return nil
 }
 
+// ListPaged implements the Repository interface on top of List, so the mock
+// filters and pages like the handler expects.
+func (m *MockRepository) ListPaged(ctx context.Context, dest interface{}, limit, offset int, filter models.ItemFilter) (int64, error) {
+	var conditions []interface{}
+	if filter.NameExact != "" {
+		conditions = append(conditions, models.Filter{Field: "name", Op: "exact", Value: filter.NameExact})
+	} else if filter.Name != "" {
+		conditions = append(conditions, models.Filter{Field: "name", Value: filter.Name})
+	}
+	if filter.MinPrice > 0 {
+		conditions = append(conditions, models.Filter{Field: "price", Op: ">=", Value: filter.MinPrice})
+	}
+	if filter.MaxPrice > 0 {
+		conditions = append(conditions, models.Filter{Field: "price", Op: "<=", Value: filter.MaxPrice})
+	}
+
+	var all []models.Item
+	err := m.List(ctx, &all, conditions...)
+	if err == nil {
+		if limit > 0 {
+			conditions = append(conditions, models.Pagination{Limit: limit, Offset: offset})
+		}
+		err = m.List(ctx, dest, conditions...)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(all)), nil
+}
+
 // Ping implements the Repository interface
 func (m *MockRepository) Ping(_ context.Context) error {
 	return nil

@@ -11,7 +11,6 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 const (
@@ -21,11 +20,10 @@ const (
 
 // NewFromAppConfig creates a new database instance from application config
 func NewFromAppConfig(cfg *config.Config) (*Database, error) {
-	// Set up logging based on environment
-	logLevel := logger.Info
-	if !cfg.App.Debug {
-		logLevel = logger.Error
-	}
+	// GORM logs through slog.Default(); with APP_DEBUG=false the SQL values
+	// and the error texts are redacted.
+	debug := cfg.Server.AppDebug
+	gormLogger := newGormLogger(debug)
 
 	// Initialize database with retries
 	var db *gorm.DB
@@ -34,7 +32,7 @@ func NewFromAppConfig(cfg *config.Config) (*Database, error) {
 
 	for retryCount < maxRetries {
 		db, err = gorm.Open(mysql.Open(cfg.Database.DSN()), &gorm.Config{
-			Logger: logger.Default.LogMode(logLevel),
+			Logger: gormLogger,
 		})
 
 		if err == nil {
@@ -60,6 +58,13 @@ func NewFromAppConfig(cfg *config.Config) (*Database, error) {
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, NewDatabaseError("configure", err)
+	}
+
+	if !debug {
+		// db.Scan logs through a package-level filter: make it redact too.
+		if err := useParameterizedScanSQL(db); err != nil {
+			return nil, NewDatabaseError("configure", err)
+		}
 	}
 
 	// Set connection pool settings from config
@@ -90,7 +95,7 @@ func NewFromDBConfig(cfg *Config) (*Database, error) {
 	// For testing, use SQLite in-memory database when cfg is nil
 	if cfg == nil {
 		db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
-			Logger: logger.Default.LogMode(logger.Info),
+			Logger: newGormLogger(true),
 		})
 		if err != nil {
 			return nil, NewDatabaseError("connect", err)
@@ -116,7 +121,7 @@ func NewFromDBConfig(cfg *Config) (*Database, error) {
 
 	for retryCount < maxRetries {
 		db, err = gorm.Open(mysql.Open(cfg.DSN()), &gorm.Config{
-			Logger: logger.Default.LogMode(logger.Info),
+			Logger: newGormLogger(false),
 		})
 
 		if err == nil {
@@ -141,6 +146,10 @@ func NewFromDBConfig(cfg *Config) (*Database, error) {
 
 	sqlDB, err := db.DB()
 	if err != nil {
+		return nil, NewDatabaseError("configure", err)
+	}
+
+	if err := useParameterizedScanSQL(db); err != nil {
 		return nil, NewDatabaseError("configure", err)
 	}
 
