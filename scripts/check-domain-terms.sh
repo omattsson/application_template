@@ -4,8 +4,12 @@
 # forbidden term case-insensitively as a whole word.
 #
 # Usage: scripts/check-domain-terms.sh
-#   Prints "file:line:term" for each hit that is not allowlisted. Exit 1 if there
-#   is at least one hit, 0 otherwise.
+#   Takes no arguments; any argument is rejected (exit 2 with a usage line).
+#   There is deliberately no --self-test flag: the self-test is the separate
+#   script scripts/check-domain-terms.test.sh.
+#   Prints "file:line:term" for each hit that is not allowlisted.
+#   Exit codes: 0 no hits, 1 at least one hit, 2 usage/configuration/scan error
+#   (bad allowlist, not a git repository, git grep failure). Errors never pass.
 #
 # Environment:
 #   DOMAIN_TERMS_ROOT  Git repository to scan. Defaults to the repository that
@@ -14,17 +18,26 @@
 #                      (The self-test scripts/check-domain-terms.test.sh sets this
 #                      to temporary fixture repositories.)
 #
-# Allowlist format, one entry per line ("#" starts a comment):
+# Allowlist format, one entry per line ("#" starts a comment, blank lines ok):
 #   path-glob|term|reason
 # An entry allows one term in every file matching the glob (bash case pattern,
-# "*" also matches "/"). Generic uses of "stack", "namespace" and "cluster"
-# (e.g. "full-stack", "call stack") need a reviewed entry with a reason.
+# "*" also matches "/"). Rules, enforced on load (violations exit 2):
+#   - only the generic words stack, namespace and cluster may be allowlisted;
+#     domain terms (kubeconfig, helm, azure, ...) must be removed, never listed;
+#   - the reason must not be empty;
+#   - the glob must not be a catch-all made only of "*" and "/" (e.g. *, **, **/*);
+#   - every line must have exactly the three fields.
 #
 # Never scanned: docs/superpowers/**, .superpowers/**, the allowlist itself,
 # lockfiles (package-lock.json, go.sum) and the two check scripts (they list the
 # terms).
 
 set -u
+
+if [ "$#" -gt 0 ]; then
+  echo "usage: scripts/check-domain-terms.sh (no arguments; set DOMAIN_TERMS_ROOT to scan another repo)" >&2
+  exit 2
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="${DOMAIN_TERMS_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -50,42 +63,80 @@ if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 2
 fi
 
+# Load and validate allowlist entries as "glob|term" (reason is documentation).
+ALLOW_ENTRIES=""
+if [ -f "$ALLOWLIST" ]; then
+  lineno=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    case "$line" in
+      '' | '#'*) continue ;;
+    esac
+    where="scripts/domain-terms.allowlist:$lineno"
+    seps="${line//[^|]/}"
+    if [ "${#seps}" -lt 2 ]; then
+      echo "error: $where: malformed entry (expected path-glob|term|reason): $line" >&2
+      exit 2
+    fi
+    glob="${line%%|*}"
+    rest="${line#*|}"
+    term="${rest%%|*}"
+    reason="${rest#*|}"
+    term="$(printf '%s' "$term" | tr '[:upper:]' '[:lower:]')"
+    case "$term" in
+      stack | namespace | cluster) ;;
+      *)
+        echo "error: $where: term '$term' cannot be allowlisted; only stack, namespace and cluster may be (remove the term from the template instead)" >&2
+        exit 2
+        ;;
+    esac
+    if [ -z "${reason//[[:space:]]/}" ]; then
+      echo "error: $where: empty reason; every allowlist entry needs a reason" >&2
+      exit 2
+    fi
+    if [ -z "$glob" ] || [ -z "${glob//[*\/]/}" ]; then
+      echo "error: $where: glob '$glob' is too broad or empty; name the specific file(s)" >&2
+      exit 2
+    fi
+    ALLOW_ENTRIES="${ALLOW_ENTRIES}${glob}|${term}
+"
+  done <"$ALLOWLIST"
+fi
+
 HITS_FILE="$(mktemp)"
-trap 'rm -f "$HITS_FILE"' EXIT
+ERR_FILE="$(mktemp)"
+trap 'rm -f "$HITS_FILE" "$ERR_FILE"' EXIT
 
 # Collect raw hits as "path:line:term" for every term.
 while IFS='|' read -r term regex; do
   [ -n "$term" ] || continue
-  git -C "$ROOT" grep -I -n -i -w -E -e "$regex" -- . \
+  out="$(git -C "$ROOT" grep -I -n -i -w -E -e "$regex" -- . \
     ':(exclude,glob)docs/superpowers/**' \
     ':(exclude,glob).superpowers/**' \
     ':(exclude)scripts/domain-terms.allowlist' \
     ':(exclude)scripts/check-domain-terms.sh' \
     ':(exclude)scripts/check-domain-terms.test.sh' \
     ':(exclude,glob)**/package-lock.json' \
-    ':(exclude,glob)**/go.sum' 2>/dev/null |
-    while IFS= read -r line; do
-      path="${line%%:*}"
-      rest="${line#*:}"
-      lineno="${rest%%:*}"
-      printf '%s:%s:%s\n' "$path" "$lineno" "$term"
-    done >>"$HITS_FILE"
+    ':(exclude,glob)**/go.sum' 2>"$ERR_FILE")"
+  status=$?
+  # git grep: 0 = matches, 1 = no matches; anything else is a real error.
+  if [ "$status" -gt 1 ]; then
+    echo "error: git grep failed (exit $status) while scanning for '$term':" >&2
+    cat "$ERR_FILE" >&2
+    exit 2
+  fi
+  [ -n "$out" ] || continue
+  while IFS= read -r line; do
+    path="${line%%:*}"
+    rest="${line#*:}"
+    hitline="${rest%%:*}"
+    printf '%s:%s:%s\n' "$path" "$hitline" "$term"
+  done <<EOF >>"$HITS_FILE"
+$out
+EOF
 done <<EOF
 $TERMS
 EOF
-
-# Load allowlist entries as "glob|term" (reason is documentation only).
-ALLOW_ENTRIES=""
-if [ -f "$ALLOWLIST" ]; then
-  while IFS='|' read -r glob term _reason; do
-    case "$glob" in
-      '' | '#'*) continue ;;
-    esac
-    [ -n "$term" ] || continue
-    ALLOW_ENTRIES="${ALLOW_ENTRIES}${glob}|$(printf '%s' "$term" | tr '[:upper:]' '[:lower:]')
-"
-  done <"$ALLOWLIST"
-fi
 
 is_allowed() { # path term
   local path="$1" term="$2" glob aterm
