@@ -202,6 +202,95 @@ else
   fail "unknown argument exits 2 with usage (rc=$RC out=$OUT)"
 fi
 
+# Case 13: domain terms inside identifiers (no word boundary), case-insensitive.
+# Each fixture line holds one identifier form; the expected term is the label
+# the check prints for it.
+repo="$(new_repo identifiers)"
+cat >"$repo/ids.go" <<'IDS'
+var a = cfg.ClusterID
+func stackAccess() {}
+kube_config: x
+var kubeConfigPath string
+k8sClient := nil
+type helmRelease struct{}
+newDeployerFn()
+gitProviderURL := ""
+gitprovider_token := ""
+maxQuotaCPU := 1
+useAzureTables := true
+azuriteHost := ""
+mempalaceID := 0
+isKubernetesNode := false
+CLUSTER_ROLE := ""
+var s StackInstance
+stackDefID := 1
+stack_template_name := ""
+IDS
+git -C "$repo" add -A
+run_check "$repo"
+expect_line() { # line term
+  if echo "$OUT" | grep -q "^ids.go:$1:$2\$"; then
+    pass "identifier form on line $1 is reported as $2"
+  else
+    fail "identifier form on line $1 is reported as $2 (rc=$RC out=$OUT)"
+  fi
+}
+if [ "$RC" -eq 1 ]; then
+  pass "identifier forms fail the check"
+else
+  fail "identifier forms fail the check (rc=$RC out=$OUT)"
+fi
+expect_line 1 clusterid
+expect_line 2 stackaccess
+expect_line 3 kubeconfig
+expect_line 4 kubeconfig
+expect_line 5 k8s
+expect_line 6 helm
+expect_line 7 deployer
+expect_line 8 gitprovider
+expect_line 9 gitprovider
+expect_line 10 quota
+expect_line 11 azure
+expect_line 12 azurite
+expect_line 13 mempalace
+expect_line 14 kubernetes
+expect_line 15 clusterrole
+expect_line 16 stackinstance
+expect_line 17 stackdef
+expect_line 18 stacktemplate
+
+# Case 14: an allowlist entry for the generic words stack and cluster does not
+# mask their identifier forms.
+repo="$(new_repo identifiers-allowlisted)"
+printf 'call stack and cluster\nvar id = ClusterID\nfunc stackAccess() {}\n' >"$repo/g.go"
+printf 'g.go|stack|generic English\ng.go|cluster|generic English\n' >"$repo/scripts/domain-terms.allowlist"
+git -C "$repo" add -A
+run_check "$repo"
+if [ "$RC" -eq 1 ] && echo "$OUT" | grep -q '^g.go:2:clusterid$' \
+  && echo "$OUT" | grep -q '^g.go:3:stackaccess$' \
+  && ! echo "$OUT" | grep -q '^g.go:1:'; then
+  pass "allowlisted generic words do not mask identifier forms"
+else
+  fail "allowlisted generic words do not mask identifier forms (rc=$RC out=$OUT)"
+fi
+
+# Case 15: the identifier forms cannot be allowlisted
+expect_config_error "identifier form clusterid" "c.md|clusterid|attempt to mask an identifier" "domain-terms.allowlist:1.*clusterid"
+expect_config_error "identifier form stackaccess" "c.md|stackaccess|attempt to mask an identifier" "domain-terms.allowlist:1.*stackaccess"
+
+# Case 16: bare stack/cluster stay word-bounded, and a word hit is reported
+# once, not again by the identifier pass.
+repo="$(new_repo identifiers-bounded)"
+printf 'the stacked deck\nclustered data\nHelm chart\n' >"$repo/h.md"
+git -C "$repo" add -A
+run_check "$repo"
+if [ "$RC" -eq 1 ] && [ "$(echo "$OUT" | grep -c '^h.md:')" -eq 1 ] \
+  && echo "$OUT" | grep -q '^h.md:3:helm$'; then
+  pass "bare stack/cluster stay word-bounded; one line per hit"
+else
+  fail "bare stack/cluster stay word-bounded; one line per hit (rc=$RC out=$OUT)"
+fi
+
 if [ "$FAILED" -ne 0 ]; then
   echo "$FAILED test(s) failed"
   exit 1

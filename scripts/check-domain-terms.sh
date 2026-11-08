@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Domain-term check: fails when a Kubernetes/stack/Helm/Azure/mempalace concept
-# leaks into this template. Scans files tracked by git (git grep), matching each
-# forbidden term case-insensitively as a whole word.
+# leaks into this template. Scans files tracked by git (git grep) in two passes,
+# both case-insensitive:
+#   1. each forbidden term as a whole word (TERMS);
+#   2. the domain terms inside identifiers, without word boundaries
+#      (IDENT_TERMS): kubeConfigPath, kube_config, k8sClient, helmRelease, ...,
+#      and the identifier forms of the domain words cluster and stack
+#      (ClusterID, clusterRole, stackAccess, StackInstance, stackDef,
+#      stackTemplate). Bare stack and cluster stay word-bounded (pass 1 only).
+#   A line that both passes report under the same term is printed once.
 #
 # Usage: scripts/check-domain-terms.sh
 #   Takes no arguments; any argument is rejected (exit 2 with a usage line).
@@ -23,7 +30,9 @@
 # An entry allows one term in every file matching the glob (bash case pattern,
 # "*" also matches "/"). Rules, enforced on load (violations exit 2):
 #   - only the generic words stack, namespace and cluster may be allowlisted;
-#     domain terms (kubeconfig, helm, azure, ...) must be removed, never listed;
+#     domain terms (kubeconfig, helm, azure, ...) and the identifier forms
+#     (clusterid, stackaccess, ...) must be removed, never listed. An entry for
+#     stack or cluster does not cover their identifier forms;
 #   - the reason must not be empty;
 #   - the glob must not be a catch-all made only of "*" and "/" (e.g. *, **, **/*);
 #   - every line must have exactly the three fields.
@@ -57,6 +66,25 @@ mempalace|mempalace
 cluster|cluster
 namespace|namespace
 stack|stack"
+
+# term|regex for pass 2 (grep -E without -w). The term is the label printed
+# and matched against the allowlist; none of these labels can be allowlisted.
+IDENT_TERMS="kubeconfig|kube[_-]?config
+k8s|k8s
+kubernetes|kubernetes
+helm|helm
+deployer|deployer
+gitprovider|git[_-]?provider
+quota|quota
+azure|azure
+azurite|azurite
+mempalace|mempalace
+clusterid|cluster_?id
+clusterrole|cluster_?role
+stackaccess|stack_?access
+stackinstance|stack_?instance
+stackdef|stack_?def
+stacktemplate|stack_?template"
 
 if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "error: $ROOT is not a git repository" >&2
@@ -107,36 +135,44 @@ HITS_FILE="$(mktemp)"
 ERR_FILE="$(mktemp)"
 trap 'rm -f "$HITS_FILE" "$ERR_FILE"' EXIT
 
-# Collect raw hits as "path:line:term" for every term.
-while IFS='|' read -r term regex; do
-  [ -n "$term" ] || continue
-  out="$(git -C "$ROOT" grep -I -n -i -w -E -e "$regex" -- . \
-    ':(exclude,glob)docs/superpowers/**' \
-    ':(exclude,glob).superpowers/**' \
-    ':(exclude)scripts/domain-terms.allowlist' \
-    ':(exclude)scripts/check-domain-terms.sh' \
-    ':(exclude)scripts/check-domain-terms.test.sh' \
-    ':(exclude,glob)**/package-lock.json' \
-    ':(exclude,glob)**/go.sum' 2>"$ERR_FILE")"
-  status=$?
-  # git grep: 0 = matches, 1 = no matches; anything else is a real error.
-  if [ "$status" -gt 1 ]; then
-    echo "error: git grep failed (exit $status) while scanning for '$term':" >&2
-    cat "$ERR_FILE" >&2
-    exit 2
-  fi
-  [ -n "$out" ] || continue
-  while IFS= read -r line; do
-    path="${line%%:*}"
-    rest="${line#*:}"
-    hitline="${rest%%:*}"
-    printf '%s:%s:%s\n' "$path" "$hitline" "$term"
-  done <<EOF >>"$HITS_FILE"
+# scan_terms TERMS [-w]: append raw hits as "path:line:term" for every
+# term|regex line of TERMS to HITS_FILE; -w matches whole words only.
+scan_terms() {
+  local terms="$1" word="${2:-}" term regex out status line path rest hitline
+  while IFS='|' read -r term regex; do
+    [ -n "$term" ] || continue
+    # shellcheck disable=SC2086 # $word is empty or the single flag -w
+    out="$(git -C "$ROOT" grep -I -n -i $word -E -e "$regex" -- . \
+      ':(exclude,glob)docs/superpowers/**' \
+      ':(exclude,glob).superpowers/**' \
+      ':(exclude)scripts/domain-terms.allowlist' \
+      ':(exclude)scripts/check-domain-terms.sh' \
+      ':(exclude)scripts/check-domain-terms.test.sh' \
+      ':(exclude,glob)**/package-lock.json' \
+      ':(exclude,glob)**/go.sum' 2>"$ERR_FILE")"
+    status=$?
+    # git grep: 0 = matches, 1 = no matches; anything else is a real error.
+    if [ "$status" -gt 1 ]; then
+      echo "error: git grep failed (exit $status) while scanning for '$term':" >&2
+      cat "$ERR_FILE" >&2
+      exit 2
+    fi
+    [ -n "$out" ] || continue
+    while IFS= read -r line; do
+      path="${line%%:*}"
+      rest="${line#*:}"
+      hitline="${rest%%:*}"
+      printf '%s:%s:%s\n' "$path" "$hitline" "$term"
+    done <<EOF >>"$HITS_FILE"
 $out
 EOF
-done <<EOF
-$TERMS
+  done <<EOF
+$terms
 EOF
+}
+
+scan_terms "$TERMS" -w
+scan_terms "$IDENT_TERMS"
 
 is_allowed() { # path term
   local path="$1" term="$2" glob aterm
@@ -161,7 +197,7 @@ while IFS=: read -r path lineno term; do
   fi
   echo "$path:$lineno:$term"
   FOUND=$((FOUND + 1))
-done < <(sort -t: -k1,1 -k2,2n -k3,3 "$HITS_FILE")
+done < <(sort -u -t: -k1,1 -k2,2n -k3,3 "$HITS_FILE")
 
 if [ "$FOUND" -gt 0 ]; then
   echo "domain-term check failed: $FOUND hit(s). Remove the term or add a reviewed entry to scripts/domain-terms.allowlist." >&2
