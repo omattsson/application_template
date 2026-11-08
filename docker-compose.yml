@@ -35,6 +35,10 @@ services:
     container_name: app-backend-${GO_ENV:-prod}
     ports:
       - "${PORT:-8081}:8081"
+    # The ordered shutdown runs up to four steps of SERVER_SHUTDOWN_TIMEOUT
+    # each (HTTP drain, leader workers, in-flight work, telemetry): 4 x 30s
+    # with the default, plus a margin. Raise it with SERVER_SHUTDOWN_TIMEOUT.
+    stop_grace_period: 130s
     environment:
       - APP_NAME=${APP_NAME:-application}
       - APP_ENV=${GO_ENV:-production}
