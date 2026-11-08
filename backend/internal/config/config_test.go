@@ -155,6 +155,8 @@ func TestConfigValidate(t *testing.T) {
 				WriteTimeout:    5 * time.Second,
 				IdleTimeout:     30 * time.Second,
 				ShutdownTimeout: 10 * time.Second,
+				RateLimit:       100,
+				LoginRateLimit:  10,
 			},
 		}
 
@@ -186,6 +188,8 @@ func TestConfigValidate(t *testing.T) {
 				WriteTimeout:    5 * time.Second,
 				IdleTimeout:     30 * time.Second,
 				ShutdownTimeout: 10 * time.Second,
+				RateLimit:       100,
+				LoginRateLimit:  10,
 			},
 		}
 		err := cfg.Validate()
@@ -218,6 +222,8 @@ func TestConfigValidate(t *testing.T) {
 				WriteTimeout:    5 * time.Second,
 				IdleTimeout:     30 * time.Second,
 				ShutdownTimeout: 10 * time.Second,
+				RateLimit:       100,
+				LoginRateLimit:  10,
 			},
 		}
 		err := cfg.Validate()
@@ -250,6 +256,8 @@ func TestConfigValidate(t *testing.T) {
 				WriteTimeout:    5 * time.Second,
 				IdleTimeout:     30 * time.Second,
 				ShutdownTimeout: 10 * time.Second,
+				RateLimit:       100,
+				LoginRateLimit:  10,
 			},
 		}
 		err := cfg.Validate()
@@ -279,6 +287,8 @@ func TestConfigValidate(t *testing.T) {
 				WriteTimeout:    0, // disabled at server level; per-write deadlines in WebSocket pump
 				IdleTimeout:     30 * time.Second,
 				ShutdownTimeout: 10 * time.Second,
+				RateLimit:       100,
+				LoginRateLimit:  10,
 			},
 		}
 		assert.NoError(t, cfg.Validate())
@@ -306,6 +316,8 @@ func TestConfigValidate(t *testing.T) {
 				WriteTimeout:    -1 * time.Second,
 				IdleTimeout:     30 * time.Second,
 				ShutdownTimeout: 10 * time.Second,
+				RateLimit:       100,
+				LoginRateLimit:  10,
 			},
 		}
 		err := cfg.Validate()

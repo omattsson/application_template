@@ -250,6 +250,14 @@ func (c *ServerConfig) Validate() error {
 		return errors.New("idle timeout must be positive")
 	}
 
+	if c.RateLimit <= 0 {
+		return errors.New("RATE_LIMIT must be positive")
+	}
+
+	if c.LoginRateLimit <= 0 {
+		return errors.New("LOGIN_RATE_LIMIT must be positive")
+	}
+
 	return nil
 }
 
@@ -336,8 +344,6 @@ func LoadConfig() (*Config, error) {
 			WriteTimeout:    getEnvDuration("SERVER_WRITE_TIMEOUT", defaultWriteTimeout),
 			IdleTimeout:     getEnvDuration("SERVER_IDLE_TIMEOUT", defaultIdleTimeout),
 			ShutdownTimeout: getEnvDuration("SERVER_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
-			RateLimit:       getEnvInt32("RATE_LIMIT", 100),
-			LoginRateLimit:  getEnvInt32("LOGIN_RATE_LIMIT", 10),
 			EnableSwagger:   getEnvBool("ENABLE_SWAGGER", false),
 			AppDebug:        getEnvBool("APP_DEBUG", true),
 		},
@@ -356,6 +362,16 @@ func LoadConfig() (*Config, error) {
 	}
 
 	cfg.Server.TrustedProxies = trustedProxies
+
+	// A rate limit that is set but not a number is an error: a silent
+	// fallback to the default would hide a typo in a security setting.
+	if cfg.Server.RateLimit, err = parseEnvInt32Strict("RATE_LIMIT", 100); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	if cfg.Server.LoginRateLimit, err = parseEnvInt32Strict("LOGIN_RATE_LIMIT", 10); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
 
 	// Validate the configuration (this also rejects an invalid LOG_LEVEL)
 	if err := cfg.Validate(); err != nil {
@@ -401,6 +417,22 @@ func getEnvInt32(key string, fallback int32) int32 {
 		return int32(v)
 	}
 	return fallback
+}
+
+// parseEnvInt32Strict reads an int32 from the environment. An unset or empty
+// variable gives the fallback; a value that is not a valid int32 is an error.
+func parseEnvInt32Strict(key string, fallback int32) (int32, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+
+	v, err := strconv.ParseInt(strings.TrimSpace(value), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, errors.Unwrap(err))
+	}
+
+	return int32(v), nil
 }
 
 func getEnvDuration(key string, fallback time.Duration) time.Duration {

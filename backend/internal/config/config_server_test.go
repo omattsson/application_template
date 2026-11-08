@@ -3,6 +3,7 @@ package config_test
 import (
 	"log/slog"
 	"testing"
+	"time"
 
 	"backend/internal/config"
 
@@ -113,6 +114,81 @@ func TestLoadConfigServerSettings(t *testing.T) {
 		assert.False(t, cfg.Server.AppDebug)
 		assert.False(t, cfg.App.Debug)
 	})
+}
+
+func TestLoadConfigRateLimitValues(t *testing.T) {
+	// Not parallel: subtests use t.Setenv which modifies process env.
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "RATE_LIMIT zero", key: "RATE_LIMIT", value: "0"},
+		{name: "RATE_LIMIT negative", key: "RATE_LIMIT", value: "-5"},
+		{name: "RATE_LIMIT non-numeric", key: "RATE_LIMIT", value: "lots"},
+		{name: "RATE_LIMIT out of int32 range", key: "RATE_LIMIT", value: "99999999999"},
+		{name: "LOGIN_RATE_LIMIT zero", key: "LOGIN_RATE_LIMIT", value: "0"},
+		{name: "LOGIN_RATE_LIMIT negative", key: "LOGIN_RATE_LIMIT", value: "-1"},
+		{name: "LOGIN_RATE_LIMIT non-numeric", key: "LOGIN_RATE_LIMIT", value: "ten"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENV_FILE", "/nonexistent/.env")
+			t.Setenv("RATE_LIMIT", "")
+			t.Setenv("LOGIN_RATE_LIMIT", "")
+			t.Setenv(tt.key, tt.value)
+
+			cfg, err := config.LoadConfig()
+			require.Error(t, err)
+			assert.Nil(t, cfg)
+			assert.Contains(t, err.Error(), tt.key)
+		})
+	}
+}
+
+func TestServerConfigValidateRateLimits(t *testing.T) {
+	t.Parallel()
+
+	valid := func() config.ServerConfig {
+		return config.ServerConfig{
+			Port:           "8080",
+			ReadTimeout:    time.Second,
+			IdleTimeout:    time.Second,
+			RateLimit:      100,
+			LoginRateLimit: 10,
+		}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*config.ServerConfig)
+		wantErr string
+	}{
+		{name: "valid", mutate: func(*config.ServerConfig) {}},
+		{name: "rate limit zero", mutate: func(c *config.ServerConfig) { c.RateLimit = 0 }, wantErr: "RATE_LIMIT"},
+		{name: "rate limit negative", mutate: func(c *config.ServerConfig) { c.RateLimit = -1 }, wantErr: "RATE_LIMIT"},
+		{name: "login rate limit zero", mutate: func(c *config.ServerConfig) { c.LoginRateLimit = 0 }, wantErr: "LOGIN_RATE_LIMIT"},
+		{name: "login rate limit negative", mutate: func(c *config.ServerConfig) { c.LoginRateLimit = -1 }, wantErr: "LOGIN_RATE_LIMIT"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := valid()
+			tt.mutate(&cfg)
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestDatabaseDSNIncludesMySQLSessionParams(t *testing.T) {
