@@ -35,7 +35,15 @@ func NewBaseRepository(db *gorm.DB) *BaseRepository {
 // fn must use tx for every statement, must reset any in-memory state it
 // changed, and must not retry a statement itself: each attempt is a whole
 // transaction.
+//
+// When DB is already inside a transaction (a repository built on the tx of
+// an outer Tx), Tx runs fn once in a SAVEPOINT and does not retry: InnoDB
+// rolled back the whole outer transaction on a deadlock, so the lock error
+// goes up to the outer Tx, which runs again from the start.
 func (b *BaseRepository) Tx(ctx context.Context, fn func(tx *gorm.DB) error) error {
+	if inTransaction(b.DB) {
+		return b.DB.WithContext(ctx).Transaction(fn)
+	}
 	return models.RetryOnLock(ctx, func() error {
 		return b.DB.WithContext(ctx).Transaction(fn)
 	})
@@ -45,8 +53,21 @@ func (b *BaseRepository) Tx(ctx context.Context, fn func(tx *gorm.DB) error) err
 // again after a deadlock or lock wait timeout. Use Tx for more than one
 // statement: a retry of a single statement inside a larger transaction is
 // not safe. fn must reset any in-memory state it changed.
+//
+// When DB is already inside a transaction, Write runs fn once and returns a
+// lock error to the outer Tx (see Tx).
 func (b *BaseRepository) Write(ctx context.Context, fn func(db *gorm.DB) error) error {
+	if inTransaction(b.DB) {
+		return fn(b.DB.WithContext(ctx))
+	}
 	return models.RetryOnLock(ctx, func() error {
 		return fn(b.DB.WithContext(ctx))
 	})
+}
+
+// inTransaction reports whether db runs inside a transaction: its connection
+// pool is then a *sql.Tx (or GORM's prepared-statement tx), which commits.
+func inTransaction(db *gorm.DB) bool {
+	_, ok := db.Statement.ConnPool.(gorm.TxCommitter)
+	return ok
 }

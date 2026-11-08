@@ -31,7 +31,9 @@ func NewDatabase(dsn string, logCfg logger.Interface) (*Database, error) {
 	return &Database{DB: db}, nil
 }
 
-// Transaction executes operations within a database transaction.
+// Transaction executes operations within a database transaction. It runs fn
+// once and does not retry after a deadlock or lock wait timeout; repository
+// writes use BaseRepository.Tx, which runs the whole transaction again.
 func (d *Database) Transaction(fn func(tx *gorm.DB) error) error {
 	err := d.DB.Transaction(fn)
 	if err != nil {

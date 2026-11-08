@@ -252,3 +252,78 @@ func TestGenericRepositoryMapsDuplicateKey(t *testing.T) {
 		assert.NotErrorIs(t, err, dberrors.ErrDuplicateKey)
 	})
 }
+
+// A repository built on the tx of an outer transaction must not retry on its
+// own: InnoDB rolled back the whole outer transaction on a deadlock, so only
+// the outer Tx may run again, from the start.
+func TestBaseRepositoryInsideTransactionDoesNotRetry(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		inner func(ctx context.Context, repo *BaseRepository, innerCalls *int) error
+	}{
+		{name: "Tx", inner: func(ctx context.Context, repo *BaseRepository, innerCalls *int) error {
+			return repo.Tx(ctx, func(tx *gorm.DB) error {
+				*innerCalls++
+				return tx.Create(&baseRepoRow{ID: "in", Username: "inner"}).Error
+			})
+		}},
+		{name: "Write", inner: func(ctx context.Context, repo *BaseRepository, innerCalls *int) error {
+			return repo.Write(ctx, func(db *gorm.DB) error {
+				*innerCalls++
+				return db.Create(&baseRepoRow{ID: "in", Username: "inner"}).Error
+			})
+		}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			db := openBaseRepoDB(t)
+			// The first CREATE (of the outer transaction) succeeds, the second
+			// (the inner one) deadlocks once.
+			creates := failCreateOnCall(t, db, 2, &mysql.MySQLError{Number: 1213, Message: "Deadlock found"})
+			ctx := context.Background()
+
+			var outerCalls, innerCalls int
+			err := NewBaseRepository(db).Tx(ctx, func(tx *gorm.DB) error {
+				outerCalls++
+				if err := tx.Create(&baseRepoRow{ID: "out", Username: "outer"}).Error; err != nil {
+					return err
+				}
+				return tt.inner(ctx, NewBaseRepository(tx), &innerCalls)
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, 2, outerCalls, "the outer transaction runs again")
+			assert.Equal(t, 2, innerCalls, "once per outer attempt, never retried inside")
+			assert.Equal(t, int32(4), creates.Load())
+			assert.Equal(t, int64(1), countRows(t, db, "outer"))
+			assert.Equal(t, int64(1), countRows(t, db, "inner"))
+		})
+	}
+}
+
+func TestBaseRepositoryInsideTransactionReturnsLockError(t *testing.T) {
+	t.Parallel()
+	db := openBaseRepoDB(t)
+	ctx := context.Background()
+
+	var innerCalls int
+	var innerErr error
+	err := db.Transaction(func(tx *gorm.DB) error {
+		innerErr = NewBaseRepository(tx).Write(ctx, func(*gorm.DB) error {
+			innerCalls++
+			return &mysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}
+		})
+		return innerErr
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, 1, innerCalls, "no retry inside a transaction")
+	var mysqlErr *mysql.MySQLError
+	require.ErrorAs(t, innerErr, &mysqlErr)
+	assert.Equal(t, uint16(1205), mysqlErr.Number)
+}
