@@ -12,8 +12,6 @@ import (
 
 func TestHealthCheckHandler(t *testing.T) {
 	t.Parallel()
-	// Set Gin to Test Mode
-	gin.SetMode(gin.TestMode)
 
 	// Setup the router
 	r := gin.Default()
@@ -38,8 +36,6 @@ func TestHealthCheckHandler(t *testing.T) {
 
 func TestPingHandler(t *testing.T) {
 	t.Parallel()
-	// Set Gin to Test Mode
-	gin.SetMode(gin.TestMode)
 
 	// Setup the router
 	r := gin.Default()

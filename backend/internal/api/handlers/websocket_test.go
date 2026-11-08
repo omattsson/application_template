@@ -119,7 +119,6 @@ func waitForHubClients(t *testing.T, hub *websocket.Hub, want int) {
 
 func TestHandleWebSocket_SuccessfulUpgrade(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	hub := websocket.NewHub()
 	go hub.Run()
@@ -146,7 +145,6 @@ func TestHandleWebSocket_SuccessfulUpgrade(t *testing.T) {
 
 func TestHandleWebSocket_BroadcastReceived(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	hub := websocket.NewHub()
 	go hub.Run()
@@ -183,7 +181,6 @@ func TestHandleWebSocket_BroadcastReceived(t *testing.T) {
 
 func TestHandleWebSocket_MultipleClients(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	hub := websocket.NewHub()
 	go hub.Run()
@@ -224,7 +221,6 @@ func TestHandleWebSocket_MultipleClients(t *testing.T) {
 
 func TestHandleWebSocket_HubShutdown(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	hub := websocket.NewHub()
 	go hub.Run()
@@ -259,7 +255,6 @@ func TestHandleWebSocket_HubShutdown(t *testing.T) {
 
 func TestHandleWebSocket_HubClosedBeforeUpgrade(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	hub := websocket.NewHub()
 	go hub.Run()
@@ -294,7 +289,6 @@ func TestHandleWebSocket_HubClosedBeforeUpgrade(t *testing.T) {
 
 func TestHandleWebSocket_OriginRejected(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	hub := websocket.NewHub()
 	go hub.Run()
@@ -323,7 +317,6 @@ func TestHandleWebSocket_OriginRejected(t *testing.T) {
 
 func TestHandleWebSocket_OriginAllowed(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	hub := websocket.NewHub()
 	go hub.Run()
@@ -352,7 +345,6 @@ func TestHandleWebSocket_OriginAllowed(t *testing.T) {
 
 func TestHandleWebSocket_ClientDisconnect(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	hub := websocket.NewHub()
 	go hub.Run()

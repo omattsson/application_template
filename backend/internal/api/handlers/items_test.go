@@ -21,7 +21,6 @@ import (
 )
 
 func setupTestRouter() (*gin.Engine, *MockRepository) {
-	gin.SetMode(gin.TestMode)
 	router := gin.Default()
 	mockRepo := NewMockRepository()
 	handler := NewHandler(mockRepo)
@@ -936,7 +935,6 @@ func TestHandleDBError(t *testing.T) {
 // setupTestRouterWithHub creates a test router wired with the given BroadcastSender.
 func setupTestRouterWithHub(t *testing.T, hub *MockBroadcastSender) (*gin.Engine, *MockRepository) {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
 	router := gin.Default()
 	mockRepo := NewMockRepository()
 	handler := NewHandlerWithHub(mockRepo, hub)
@@ -1091,7 +1089,6 @@ func TestBroadcastNilHub(t *testing.T) {
 			t.Parallel()
 
 			// Use NewHandler (no hub) — existing setupTestRouter pattern
-			gin.SetMode(gin.TestMode)
 			router := gin.Default()
 			mockRepo := NewMockRepository()
 			handler := NewHandler(mockRepo) // nil hub
