@@ -84,18 +84,40 @@ func Recovery() gin.HandlerFunc {
 	}
 }
 
-// RequestID adds a unique request ID to each request.
-// If the client sends an X-Request-ID header, it is reused; otherwise a new one is generated.
+// maxRequestIDLength is the longest client-supplied X-Request-ID that is
+// reused.
+const maxRequestIDLength = 64
+
+// RequestID adds a unique request ID to each request. A client-supplied
+// X-Request-ID is reused when it is a valid ID (see validRequestID);
+// otherwise, and when there is none, a new one is generated. The ID goes into
+// the logs and the response, so a client value must not carry anything else.
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestID := c.GetHeader("X-Request-ID")
-		if requestID == "" {
+		if !validRequestID(requestID) {
 			requestID = generateRequestID()
 		}
 		c.Set("request_id", requestID)
 		c.Writer.Header().Set("X-Request-ID", requestID)
 		c.Next()
 	}
+}
+
+// validRequestID reports whether id is 1 to maxRequestIDLength characters of
+// [A-Za-z0-9._-].
+func validRequestID(id string) bool {
+	if id == "" || len(id) > maxRequestIDLength {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		switch b := id[i]; {
+		case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9', b == '.', b == '_', b == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // maxBytesBodyCapture wraps an io.ReadCloser to detect *http.MaxBytesError.

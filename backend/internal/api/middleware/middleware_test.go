@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -145,6 +146,62 @@ func TestRequestIDMiddleware(t *testing.T) {
 			ids[id] = true
 		}
 	})
+}
+
+// A client-supplied X-Request-ID ends up in the logs and in the response, so
+// only a short token of safe characters is reused; anything else is replaced
+// with a generated ID.
+func TestRequestIDValidatesClientValue(t *testing.T) {
+	t.Parallel()
+
+	longest := strings.Repeat("a", 64)
+	tests := []struct {
+		name      string
+		header    string
+		wantReuse bool
+	}{
+		{name: "valid with all allowed characters", header: "Abc-123_x.Y", wantReuse: true},
+		{name: "valid at 64 characters", header: longest, wantReuse: true},
+		{name: "empty", header: "", wantReuse: false},
+		{name: "too long", header: longest + "a", wantReuse: false},
+		{name: "space", header: "a b", wantReuse: false},
+		{name: "log injection newline", header: "abc\nlevel=ERROR msg=forged", wantReuse: false},
+		{name: "equals and quote", header: `id="x"`, wantReuse: false},
+		{name: "slash", header: "a/b", wantReuse: false},
+		{name: "non-ASCII", header: "idé", wantReuse: false},
+		{name: "html", header: "<script>", wantReuse: false},
+	}
+
+	generated := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := gin.New()
+			r.Use(RequestID())
+			var capturedID string
+			r.GET("/test", func(c *gin.Context) {
+				capturedID = c.GetString("request_id")
+				c.Status(http.StatusOK)
+			})
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			if tt.header != "" {
+				req.Header["X-Request-Id"] = []string{tt.header}
+			}
+			r.ServeHTTP(w, req)
+
+			got := w.Header().Get("X-Request-ID")
+			assert.Equal(t, capturedID, got)
+			if tt.wantReuse {
+				assert.Equal(t, tt.header, got)
+				return
+			}
+			assert.NotEqual(t, tt.header, got)
+			assert.Regexp(t, generated, got, "a new ID is generated")
+		})
+	}
 }
 
 func TestSecurityHeaders(t *testing.T) {
