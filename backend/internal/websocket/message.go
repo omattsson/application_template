@@ -5,6 +5,15 @@ import (
 	"fmt"
 )
 
+// Message types that clients send to the server. The payload of both is
+// {"topic": "<name>"}.
+const (
+	// MessageTypeSubscribe asks the hub to deliver the messages of a topic.
+	MessageTypeSubscribe = "subscribe"
+	// MessageTypeUnsubscribe stops the delivery of a topic.
+	MessageTypeUnsubscribe = "unsubscribe"
+)
+
 // Message is the envelope for all WebSocket messages sent to clients.
 type Message struct {
 	// Type identifies the event kind, e.g. "item.created", "item.updated".

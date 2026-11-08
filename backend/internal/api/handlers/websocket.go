@@ -17,6 +17,18 @@ import (
 type WebSocketHandler struct {
 	hub            *websocket.Hub
 	allowedOrigins string
+	// identityResolver reads the caller's identity (user, token, API key) from
+	// the request context. Nil: the socket has an empty identity (auth off).
+	identityResolver func(*gin.Context) websocket.ClientIdentity
+}
+
+// SetIdentityResolver sets the function that derives the ClientIdentity of a
+// new socket from the request. The hub uses the identity to address the socket
+// by user and to close it on a revocation or when the credential expires. Call
+// it before the server starts handling requests. A nil resolver means an empty
+// identity.
+func (h *WebSocketHandler) SetIdentityResolver(resolve func(*gin.Context) websocket.ClientIdentity) {
+	h.identityResolver = resolve
 }
 
 // NewWebSocketHandler creates a new WebSocketHandler with the given hub and allowed origins config.
@@ -48,7 +60,11 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 		return
 	}
 
-	if _, err := websocket.NewClient(h.hub, conn); err != nil {
+	var identity websocket.ClientIdentity
+	if h.identityResolver != nil {
+		identity = h.identityResolver(c)
+	}
+	if _, err := websocket.NewClientWithIdentity(h.hub, conn, identity); err != nil {
 		slog.Error("WebSocket client creation failed", "error", err)
 		return
 	}
