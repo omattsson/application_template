@@ -127,7 +127,7 @@ func TestRetryOnLockStopsOnContextCancel(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		calls := 0
-		err := retryOnLock(ctx, func() error { calls++; return nil })
+		err := RetryOnLock(ctx, func() error { calls++; return nil })
 		assert.NoError(t, err, "a successful attempt is not turned into an error")
 		assert.Equal(t, 1, calls)
 	})
@@ -137,7 +137,7 @@ func TestRetryOnLockDefaultBackoff(t *testing.T) {
 	t.Parallel()
 
 	calls := 0
-	err := retryOnLock(context.Background(), func() error {
+	err := RetryOnLock(context.Background(), func() error {
 		calls++
 		if calls < 3 {
 			return errTestDeadlock

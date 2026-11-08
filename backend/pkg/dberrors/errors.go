@@ -51,7 +51,7 @@ func HandleGormError(op string, err error) error {
 	}
 
 	// Check for duplicate key violations
-	if strings.Contains(err.Error(), "Duplicate entry") {
+	if IsDuplicateKey(err) {
 		return NewDatabaseError(op, ErrDuplicateKey)
 	}
 

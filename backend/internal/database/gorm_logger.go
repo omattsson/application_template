@@ -109,7 +109,7 @@ func (l *slogGormLogger) Trace(ctx context.Context, begin time.Time, fc func() (
 	case l.level >= logger.Error && err != nil && !errors.Is(err, logger.ErrRecordNotFound):
 		level, msg, isErr = slog.LevelError, "SQL error", true
 		switch {
-		case isDuplicateKeyError(err):
+		case IsDuplicateKey(err):
 			// The repositories answer it with ErrDuplicateKey (409).
 			level, msg = slog.LevelWarn, "SQL duplicate key"
 		case errors.Is(err, context.Canceled):

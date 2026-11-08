@@ -35,17 +35,20 @@ func isLockError(err error) bool {
 	return mysqlErr.Number == mysqlErrDeadlock || mysqlErr.Number == mysqlErrLockWaitTimeout
 }
 
-// retryOnLock runs fn and runs it again after a deadlock or lock wait
+// RetryOnLock runs fn and runs it again after a deadlock or lock wait
 // timeout, up to lockRetryMax more times with a short backoff. It returns the
-// error of the last attempt.
+// error of the last attempt. Any other error is returned at once.
 //
-// fn must be one complete statement or transaction: the server rolled back
-// the failed attempt, so a retry applies the write once. fn must reset any
-// in-memory state it changed before it returns an error.
+// fn must be one complete statement or one whole transaction: the server
+// rolled back the failed attempt, so a retry applies the write once. Never
+// call it around a single statement inside a larger transaction (InnoDB
+// rolled back the whole transaction on a deadlock); wrap the transaction
+// instead, as database.BaseRepository.Tx does. fn must reset any in-memory
+// state it changed before it returns an error.
 //
-// When ctx is done, retryOnLock stops and the error matches the context error
+// When ctx is done, RetryOnLock stops and the error matches the context error
 // as well as the lock error, so a cancelled request still maps to 499.
-func retryOnLock(ctx context.Context, fn func() error) error {
+func RetryOnLock(ctx context.Context, fn func() error) error {
 	return retryOnLockWait(ctx, lockRetryWait, fn)
 }
 

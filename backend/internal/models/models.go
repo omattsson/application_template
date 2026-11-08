@@ -59,6 +59,12 @@ type Repository interface {
 	FindByID(ctx context.Context, id uint, dest interface{}) error
 	Update(ctx context.Context, entity interface{}) error
 	Delete(ctx context.Context, entity interface{}) error
+	// List fills dest with the rows that match the Filter and Pagination
+	// conditions. It returns no total and cannot select columns.
+	//
+	// Deprecated: use ListPaged, which takes a typed filter, returns the
+	// number of matches and selects only the list columns. List stays for
+	// existing callers and will be removed with them.
 	List(ctx context.Context, dest interface{}, conditions ...interface{}) error
 	// ListPaged fills dest (a *[]Item) with one page of the items that match
 	// filter and returns the number of items that match, not the page size.
@@ -121,7 +127,7 @@ func (r *GenericRepository) Create(ctx context.Context, entity interface{}) erro
 		}
 	}
 
-	return retryOnLock(ctx, func() error {
+	return RetryOnLock(ctx, func() error {
 		if err := r.db.WithContext(ctx).Create(entity).Error; err != nil {
 			return r.handleError("create", err)
 		}
@@ -159,7 +165,7 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 		// on a deadlock, and it resets the in-memory version on every failure,
 		// so a retry increments the version once. A version mismatch is not a
 		// lock error: it is returned at once.
-		return retryOnLock(ctx, func() error {
+		return RetryOnLock(ctx, func() error {
 			ver.SetVersion(currentVersion + 1)
 			result := r.db.WithContext(ctx).
 				Model(entity).
@@ -178,7 +184,7 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 		})
 	}
 
-	return retryOnLock(ctx, func() error {
+	return RetryOnLock(ctx, func() error {
 		if err := r.db.WithContext(ctx).Save(entity).Error; err != nil {
 			return r.handleError("update", err)
 		}
@@ -188,7 +194,7 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 
 func (r *GenericRepository) Delete(ctx context.Context, entity interface{}) error {
 	var rowsAffected int64
-	err := retryOnLock(ctx, func() error {
+	err := RetryOnLock(ctx, func() error {
 		result := r.db.WithContext(ctx).Delete(entity)
 		if result.Error != nil {
 			return r.handleError("delete", result.Error)
@@ -205,6 +211,10 @@ func (r *GenericRepository) Delete(ctx context.Context, entity interface{}) erro
 	return nil
 }
 
+// List fills dest with the rows that match the Filter and Pagination
+// conditions.
+//
+// Deprecated: use ListPaged.
 func (r *GenericRepository) List(ctx context.Context, dest interface{}, conditions ...interface{}) error {
 	query := r.db.WithContext(ctx)
 	for _, cond := range conditions {
@@ -318,7 +328,7 @@ func (r *GenericRepository) handleError(op string, err error) error {
 	switch {
 	case err == gorm.ErrRecordNotFound:
 		return dberrors.NewDatabaseError(op, dberrors.ErrNotFound)
-	case strings.Contains(err.Error(), "Duplicate entry"):
+	case dberrors.IsDuplicateKey(err):
 		return dberrors.NewDatabaseError(op, dberrors.ErrDuplicateKey)
 	case strings.Contains(err.Error(), "validation failed"):
 		return dberrors.NewDatabaseError(op, dberrors.ErrValidation)
