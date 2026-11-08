@@ -5,23 +5,11 @@ import (
 	"log/slog"
 
 	"backend/internal/config"
-	"backend/internal/database/azure"
 	"backend/internal/models"
 )
 
 // NewRepository creates a new repository based on the configuration
 func NewRepository(cfg *config.Config) (models.Repository, error) {
-	if cfg.AzureTable.UseAzureTable {
-		slog.Info("Using Azure Table Storage as repository")
-		return azure.NewTableRepository(
-			cfg.AzureTable.AccountName,
-			cfg.AzureTable.AccountKey,
-			cfg.AzureTable.Endpoint,
-			cfg.AzureTable.TableName,
-			cfg.AzureTable.UseAzurite,
-		)
-	}
-
 	slog.Info("Using MySQL as repository")
 	db, err := NewFromAppConfig(cfg)
 	if err != nil {

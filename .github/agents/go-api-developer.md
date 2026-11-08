@@ -41,7 +41,7 @@ When given a GitHub issue:
 ## Project Architecture
 
 - **Module**: `backend` (Go 1.23, Gin web framework, GORM ORM)
-- **Data stores**: MySQL (primary) or Azure Table Storage (swappable via `USE_AZURE_TABLE`)
+- **Data stores**: MySQL
 - **Bootstrap**: `api/main.go` → `config.LoadConfig()` → `database.NewRepository(cfg)` → `routes.SetupRoutes()` → `http.Server` with graceful shutdown
 - **Ports**: Backend `:8081` on host; inside Docker backend listens on `:8080`
 
@@ -60,7 +60,7 @@ backend/
     api/middleware/middleware.go       # CORS, Logger, Recovery, RequestID, MaxBodySize
     config/config.go                  # Env var loading with typed structs
     database/factory.go               # MySQL connection with retry
-    database/repository.go            # Repository factory (MySQL vs Azure)
+    database/repository.go            # Repository factory (MySQL)
     database/migrations.go            # Versioned migrations (auto-run on startup)
     database/errors.go                # Re-exports from pkg/dberrors
     models/models.go                  # Domain models + Repository interface
@@ -176,7 +176,7 @@ c.JSON(500, gin.H{"error": err.Error()})  // LEAKS INTERNALS
 - NEVER skip tests — every handler method needs test coverage
 - Use `testify/assert` exclusively (never bare `if` checks)
 - Integration tests use build tags: `//go:build integration`
-- Integration test names: `TestDatabase*` (MySQL), `TestAzureTable*` (Azure)
+- Integration test names: `TestDatabase*` (MySQL)
 - Target 80% code coverage minimum
 
 ### Commands to verify your work

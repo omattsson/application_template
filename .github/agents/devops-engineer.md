@@ -47,13 +47,12 @@ Four services:
 | `db` | mysql:8.0 | backend-net | `mysqladmin ping` |
 | `backend` | ./backend (multi-stage) | backend-net, frontend-net | `curl /health/live` |
 | `frontend` | ./frontend (multi-stage) | frontend-net | — |
-| `azurite` | azure-storage/azurite | backend-net | TCP port 10002 |
 
-**Network isolation**: `backend-net` connects db + backend + azurite. `frontend-net` connects backend + frontend. Frontend CANNOT reach the database directly. Always maintain this separation.
+**Network isolation**: `backend-net` connects db + backend. `frontend-net` connects backend + frontend. Frontend CANNOT reach the database directly. Always maintain this separation.
 
 **Environment variables**: All config flows via env vars with defaults. Secrets use `${VAR:-default}` substitution — defaults are for local dev ONLY.
 
-**Volumes**: Persistent data (`mysql_data`, `azurite_data`), caches (`backend_go_mod`, `frontend_node_modules`), log mounts (`mysql_logs`).
+**Volumes**: Persistent data (`mysql_data`), caches (`backend_go_mod`, `frontend_node_modules`), log mounts (`mysql_logs`).
 
 ### Backend Dockerfile (`backend/Dockerfile`)
 
@@ -93,7 +92,7 @@ CMD ["go", "run", "main.go"]
 ```
 
 ### Network isolation
-- `backend-net` — db, backend, azurite (backend services only)
+- `backend-net` — db, backend (backend services only)
 - `frontend-net` — backend, frontend
 - Frontend container MUST NOT access the database directly
 - New services: decide which network(s) they belong to based on least-privilege
@@ -116,12 +115,11 @@ Use `depends_on` with `condition: service_healthy` for startup ordering.
 | db | 3306 | 3306 | MySQL |
 | backend | 8080 | 8081 | API |
 | frontend | 80 (nginx) / 3000 (dev) | 3000 | Web UI |
-| azurite | 10000-10002 | 10000-10002 | Azure Storage emulator |
 
 Changing a port requires updating: docker-compose.yml, nginx.conf, frontend API config, and any health check URLs.
 
 ### Volume management
-- Named volumes for persistent data: `mysql_data`, `azurite_data`
+- Named volumes for persistent data: `mysql_data`
 - Named volumes for caches: `backend_go_mod`, `frontend_node_modules`
 - Bind mounts for config: `config/mysql/my.cnf`
 - Use `make clean` to remove all volumes and rebuild from scratch

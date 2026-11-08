@@ -43,7 +43,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize repository using the factory (selects MySQL or Azure Table based on config)
+	// Initialize repository using the factory (MySQL)
 	repo, err := database.NewRepository(cfg)
 	if err != nil {
 		slog.Error("Failed to initialize repository", "error", err)

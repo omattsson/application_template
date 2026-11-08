@@ -16,11 +16,11 @@ These are set on the `sql.DB` pool via `SetMaxOpenConns`, `SetMaxIdleConns`, `Se
 `NewFromAppConfig()` in `internal/database/factory.go` retries DB connections up to 5 times with 2-second delays. This handles container startup ordering and transient network issues. Extend the retry pattern for any new external service connections.
 
 ## Swappable Data Store
-The `models.Repository` interface enables switching between MySQL (GORM) and Azure Table Storage without changing handler code. The factory in `internal/database/repository.go` selects based on `USE_AZURE_TABLE` config. When adding new storage backends, implement the `Repository` interface and add a case in `NewRepository()`.
+The `models.Repository` interface keeps handlers independent of the storage backend. The factory in `internal/database/repository.go` builds the repository. When adding new storage backends, implement the `Repository` interface and add a case in `NewRepository()`.
 
 ## Docker Network Isolation
 `docker-compose.yml` uses two networks:
-- `backend-net` — connects db, backend, and azurite (backend services only)
+- `backend-net` — connects db and backend (backend services only)
 - `frontend-net` — connects backend and frontend
 
 This prevents the frontend container from directly accessing the database. Maintain this separation when adding new services.
@@ -31,7 +31,7 @@ The health system in `internal/health/health.go` supports multiple dependency ch
 healthChecker.AddCheck("database", db.Ping)
 healthChecker.AddCheck("cache", cacheClient.Ping)  // example for new dependency
 ```
-Docker and Kubernetes use `/health/live` (liveness) and `/health/ready` (readiness). Readiness gates on all registered dependency checks. Always register health checks for new external dependencies.
+Orchestrators and load balancers use `/health/live` (liveness) and `/health/ready` (readiness). Readiness gates on all registered dependency checks. Always register health checks for new external dependencies.
 
 ## Optimistic Locking
 `Item` has a `Version` field for optimistic locking — concurrent updates are detected via version mismatch, returning `409 Conflict`. Use this pattern for any model that may be updated concurrently:

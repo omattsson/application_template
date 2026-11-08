@@ -27,6 +27,12 @@ const (
 	defaultShutdownTimeout = 30 * time.Second
 )
 
+// Supported values for DB_TYPE.
+const (
+	DBTypeMySQL  = "mysql"
+	DBTypeSQLite = "sqlite"
+)
+
 // CORSConfig holds CORS configuration
 type CORSConfig struct {
 	AllowedOrigins string
@@ -40,10 +46,9 @@ type Config struct {
 	Database DatabaseConfig
 	Server   ServerConfig
 	// Then string and simple field structs
-	App        AppConfig
-	AzureTable AzureTableConfig
-	CORS       CORSConfig
-	Logging    LogConfig
+	App     AppConfig
+	CORS    CORSConfig
+	Logging LogConfig
 }
 
 // AppConfig holds application-wide configuration
@@ -60,6 +65,8 @@ type DatabaseConfig struct {
 	// 8-byte aligned fields first
 	ConnMaxLifetime time.Duration
 	// String fields (8-byte on 64-bit systems)
+	// Type is the database backend: "mysql" (default) or "sqlite" (unit tests).
+	Type     string
 	Host     string
 	Port     string
 	User     string
@@ -70,16 +77,6 @@ type DatabaseConfig struct {
 	MaxIdleConns int32
 	// Add padding field to maintain 8-byte alignment
 	_ [4]byte
-}
-
-// AzureTableConfig holds Azure Table Storage configuration
-type AzureTableConfig struct {
-	AccountName   string
-	AccountKey    string
-	Endpoint      string
-	TableName     string
-	UseAzureTable bool // true to use Azure Table as backend
-	UseAzurite    bool // true to use local Azurite emulator
 }
 
 // ServerConfig holds HTTP server configuration
@@ -116,14 +113,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("app config: %w", err)
 	}
 
-	if c.AzureTable.UseAzureTable {
-		if err := c.AzureTable.Validate(); err != nil {
-			return fmt.Errorf("azure table config: %w", err)
-		}
-	} else {
-		if err := c.Database.Validate(); err != nil {
-			return fmt.Errorf("database config: %w", err)
-		}
+	if err := c.Database.Validate(); err != nil {
+		return fmt.Errorf("database config: %w", err)
 	}
 
 	if err := c.Server.Validate(); err != nil {
@@ -146,6 +137,12 @@ func (c *AppConfig) Validate() error {
 }
 
 func (c *DatabaseConfig) Validate() error {
+	switch c.Type {
+	case "", DBTypeMySQL, DBTypeSQLite: // empty means the default (mysql)
+	default:
+		return fmt.Errorf("unsupported database type %q (supported: %s, %s)", c.Type, DBTypeMySQL, DBTypeSQLite)
+	}
+
 	if c.Host == "" {
 		return errors.New("host is required")
 	}
@@ -172,26 +169,6 @@ func (c *DatabaseConfig) Validate() error {
 
 	if c.ConnMaxLifetime <= 0 {
 		return errors.New("connection max lifetime must be positive")
-	}
-
-	return nil
-}
-
-func (c *AzureTableConfig) Validate() error {
-	if c.AccountName == "" {
-		return errors.New("account name is required")
-	}
-
-	if c.AccountKey == "" {
-		return errors.New("account key is required")
-	}
-
-	if c.Endpoint == "" {
-		return errors.New("endpoint is required")
-	}
-
-	if c.TableName == "" {
-		return errors.New("table name is required")
 	}
 
 	return nil
@@ -268,6 +245,7 @@ func LoadConfig() (*Config, error) {
 			Debug:       getEnvBool("APP_DEBUG", true),
 		},
 		Database: DatabaseConfig{
+			Type:            strings.ToLower(strings.TrimSpace(getEnv("DB_TYPE", DBTypeMySQL))),
 			Host:            getEnv("DB_HOST", "localhost"),
 			Port:            getEnv("DB_PORT", "3306"),
 			User:            getEnv("DB_USER", "root"),
@@ -276,14 +254,6 @@ func LoadConfig() (*Config, error) {
 			MaxOpenConns:    getEnvInt32("DB_MAX_OPEN_CONNS", defaultMaxOpenConns),
 			MaxIdleConns:    getEnvInt32("DB_MAX_IDLE_CONNS", defaultMaxIdleConns),
 			ConnMaxLifetime: getEnvDuration("DB_CONN_MAX_LIFETIME", defaultConnMaxLifetime),
-		},
-		AzureTable: AzureTableConfig{
-			AccountName:   getEnv("AZURE_TABLE_ACCOUNT_NAME", ""),
-			AccountKey:    getEnv("AZURE_TABLE_ACCOUNT_KEY", ""),
-			Endpoint:      getEnv("AZURE_TABLE_ENDPOINT", ""),
-			TableName:     getEnv("AZURE_TABLE_NAME", "items"),
-			UseAzureTable: getEnvBool("USE_AZURE_TABLE", false),
-			UseAzurite:    getEnvBool("USE_AZURITE", false),
 		},
 		Server: ServerConfig{
 			Host:            getEnv("SERVER_HOST", ""),

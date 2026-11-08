@@ -2,9 +2,9 @@
 
 ## Architecture Overview
 
-Full-stack app: **Go (Gin) backend** + **React (TypeScript, Vite, MUI) frontend**, with **MySQL** (GORM) or **Azure Table Storage** as swappable data stores. Docker Compose orchestrates all services.
+Full-stack app: **Go (Gin) backend** + **React (TypeScript, Vite, MUI) frontend**, with a **MySQL** (GORM) data store. Docker Compose orchestrates all services.
 
-**Bootstrap flow**: `backend/api/main.go` → `config.LoadConfig()` → `database.NewRepository(cfg)` (factory selects MySQL or Azure based on `USE_AZURE_TABLE`) → `routes.SetupRoutes(router, repo, healthChecker, cfg)` → `http.Server` with graceful shutdown (`SIGINT`/`SIGTERM`).
+**Bootstrap flow**: `backend/api/main.go` → `config.LoadConfig()` → `database.NewRepository(cfg)` (factory initializes MySQL and runs migrations) → `routes.SetupRoutes(router, repo, healthChecker, cfg)` → `http.Server` with graceful shutdown (`SIGINT`/`SIGTERM`).
 
 **Ports**: Backend `:8081` on host, frontend `:3000` in dev. Inside Docker, nginx and Vite proxy `/api` to `backend:8080`. Local non-Docker dev hits `localhost:8081` directly (`frontend/src/api/config.ts`).
 
@@ -22,7 +22,7 @@ backend/
     api/middleware/middleware.go  # CORS, Logger, Recovery, RequestID, MaxBodySize
     config/config.go             # Env vars with godotenv .env fallback, typed config structs
     database/factory.go          # MySQL connection with retry (5x, 2s delay)
-    database/repository.go       # NewRepository() factory: MySQL vs Azure Table
+    database/repository.go       # NewRepository() factory: MySQL
     database/migrations.go       # Versioned migrations via schema.Migrator, auto-run on startup
     database/errors.go           # Re-exports from pkg/dberrors (single source of truth)
     models/models.go             # Domain models + Repository interface + Filter/Pagination
@@ -33,7 +33,7 @@ backend/
 
 ## Key Backend Patterns
 
-**Repository interface** (`models.Repository`): All data access uses `Create`, `FindByID`, `Update`, `Delete`, `List` — all take `context.Context` first. Two implementations: `GenericRepository` (GORM/MySQL) and `azure.TableRepository`. The repository auto-calls `Validate()` on create/update if the model implements `Validator`.
+**Repository interface** (`models.Repository`): All data access uses `Create`, `FindByID`, `Update`, `Delete`, `List` — all take `context.Context` first. The implementation is `GenericRepository` (GORM/MySQL). The repository auto-calls `Validate()` on create/update if the model implements `Validator`.
 
 **Handler struct**: `handlers.Handler` holds `models.Repository` via constructor injection (`NewHandler(repo)`). CRUD handlers are receiver methods. Health handlers use a different pattern — factory functions returning `gin.HandlerFunc` with `*health.HealthChecker` via closure. If a new resource needs dependencies beyond Repository, create a separate handler struct.
 
@@ -64,7 +64,7 @@ frontend/src/
 |---|---|
 | Full stack (Docker) | `make dev` |
 | Backend tests (unit, no DB) | `cd backend && go test ./... -v -short` |
-| All backend tests (unit + integration) | `make test-backend-all` (starts MySQL + Azurite) |
+| All backend tests (unit + integration) | `make test-backend-all` (starts MySQL) |
 | Frontend tests | `cd frontend && npm test` |
 | E2E tests | `make test-e2e` (starts infra + backend + Playwright) |
 | Swagger docs | `cd backend && make docs` (runs `swag init -g api/main.go`) |
@@ -78,7 +78,7 @@ frontend/src/
 
 **Frontend**: Vitest + Testing Library (unit), Playwright (e2e).
 
-**Integration test naming**: `TestDatabase*` (MySQL), `TestAzureTable*`/`TestAzure*Integration` (Azure).
+**Integration test naming**: `TestDatabase*` (MySQL).
 
 ## Adding a New API Resource
 

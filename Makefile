@@ -63,15 +63,10 @@ test-backend:
 # Start infrastructure for integration tests
 integration-infra-start:
 	@echo "Starting integration test infrastructure..."
-	GO_ENV=test docker compose up -d db azurite
+	GO_ENV=test docker compose up -d db
 	@echo "Waiting for MySQL to be ready..."
 	@until docker compose exec db mysqladmin ping -h localhost -u$${MYSQL_USER:-appuser} -p$${MYSQL_PASSWORD:-apppass} --silent 2>/dev/null; do \
 		echo "Waiting for MySQL..."; \
-		sleep 2; \
-	done
-	@echo "Waiting for Azurite to be ready..."
-	@until curl -s -o /dev/null http://localhost:10002/ 2>/dev/null; do \
-		echo "Waiting for Azurite..."; \
 		sleep 2; \
 	done
 	@echo "Integration infrastructure is ready!"
@@ -79,7 +74,7 @@ integration-infra-start:
 # Stop infrastructure for integration tests
 integration-infra-stop:
 	@echo "Stopping integration test infrastructure..."
-	GO_ENV=test docker compose stop db azurite
+	GO_ENV=test docker compose stop db
 
 # Run backend integration tests (starts/stops infra automatically)
 test-backend-integration: integration-infra-start
