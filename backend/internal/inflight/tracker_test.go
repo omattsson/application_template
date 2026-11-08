@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -123,6 +124,68 @@ func TestTrackerZeroValueAndNoWork(t *testing.T) {
 	t.Parallel()
 	var tr Tracker
 	assert.NoError(t, tr.Wait(context.Background()))
+}
+
+func TestTrackerNilReceiver(t *testing.T) {
+	t.Parallel()
+	var tr *Tracker
+
+	var ran atomic.Bool
+	assert.NotPanics(t, func() {
+		assert.False(t, tr.Go(func() { ran.Store(true) }), "a nil tracker accepts no work")
+	})
+	assert.False(t, ran.Load(), "rejected work must not run")
+	assert.NotPanics(t, func() {
+		assert.NoError(t, tr.Wait(context.Background()), "a nil tracker has nothing to wait for")
+	})
+}
+
+// panicSiteForTest panics in a named function, so the log can name it.
+func panicSiteForTest() {
+	var m map[string]int
+	m["x"] = 1 // runtime error: assignment to entry in nil map
+}
+
+func TestTrackerPanicLogNamesThePanicSite(t *testing.T) {
+	// Not parallel: it replaces the default slog logger.
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	slog.SetDefault(slog.New(slog.NewTextHandler(&lockedWriter{w: &buf, mu: &mu}, nil)))
+
+	tr := New()
+	require.True(t, tr.Go(panicSiteForTest))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, tr.Wait(ctx))
+
+	mu.Lock()
+	defer mu.Unlock()
+	out := buf.String()
+	assert.Contains(t, out, "panic_site=")
+	assert.Regexp(t, `inflight\.panicSiteForTest:\d+`, out, "the top frame is the function that panicked")
+	assert.NotContains(t, out, "runtime.gopanic", "runtime frames are skipped")
+	assert.NotContains(t, strings.ToLower(out), "stack")
+}
+
+func TestPanicSiteFrames(t *testing.T) {
+	t.Parallel()
+
+	var got []string
+	func() {
+		defer func() {
+			_ = recover()
+			got = panicSite(3)
+		}()
+		panicSiteForTest()
+	}()
+
+	require.NotEmpty(t, got)
+	assert.LessOrEqual(t, len(got), 3)
+	assert.Regexp(t, `inflight\.panicSiteForTest:\d+$`, got[0])
+
+	assert.Empty(t, panicSite(0))
 }
 
 type lockedWriter struct {

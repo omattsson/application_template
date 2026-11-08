@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"time"
 
 	_ "backend/docs" // registers the Swagger spec served by /swagger/*any
@@ -88,6 +89,17 @@ type services struct {
 	rateLimiters      stopper
 	db                closer
 	servers           []httpServer
+}
+
+// isNilInterface reports whether v is nil or holds a nil pointer. A typed nil
+// (for example a nil *inflight.Tracker) in an interface is not == nil, so a
+// plain nil check would call a method on it.
+func isNilInterface(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
 }
 
 // setupLoggingTo makes a slog text handler on w, filtered at level, the
@@ -274,7 +286,7 @@ func shutdown(ctx context.Context, s *services) error {
 		errs = append(errs, fmt.Errorf("leader workers did not stop: %w", context.DeadlineExceeded))
 	}
 
-	if s.inFlight != nil {
+	if !isNilInterface(s.inFlight) {
 		waitCtx, cancel := ctxutil.Detach(ctx, budget)
 		err := s.inFlight.Wait(waitCtx)
 		cancel()

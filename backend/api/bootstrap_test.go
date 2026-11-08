@@ -199,6 +199,37 @@ func TestShutdownOrder(t *testing.T) {
 	})
 }
 
+// A typed nil in the inFlight interface is not == nil; shutdown must skip it
+// like an untyped nil and still run every other step.
+func TestShutdownSkipsTypedNilInFlight(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		w    waiter
+	}{
+		{name: "untyped nil", w: nil},
+		{name: "nil *inflight.Tracker", w: (*inflight.Tracker)(nil)},
+		{name: "nil pointer of a waiter that dereferences", w: (*fakeWaiter)(nil)},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			rec := &callRecorder{}
+			s := fakeServices(rec)
+			s.inFlight = tt.w
+
+			var err error
+			require.NotPanics(t, func() { err = shutdown(context.Background(), s) })
+
+			require.NoError(t, err)
+			assert.Equal(t, []string{"server", "leader group", "hub", "telemetry", "rate limiters", "database"}, rec.list())
+		})
+	}
+}
+
 func TestShutdownCompletesWithinTimeout(t *testing.T) {
 	t.Parallel()
 
