@@ -89,12 +89,12 @@ integration-infra-stop:
 
 # Run backend integration tests (starts/stops infra automatically)
 test-backend-integration: integration-infra-start
-	cd backend && go test -tags integration ./... -v
+	cd backend && go test -tags integration -p 1 ./... -v
 	$(MAKE) integration-infra-stop
 
 # Run all backend tests (unit + integration)
 test-backend-all: integration-infra-start
-	cd backend && go test -tags integration ./... -v
+	cd backend && go test -tags integration -p 1 ./... -v
 	$(MAKE) integration-infra-stop
 
 test-frontend:

@@ -132,6 +132,7 @@ func TestDatabaseConcurrentAutoMigrate(t *testing.T) {
 	require.NoError(t, db.AutoMigrate())
 	m := schema.NewMigrator(db.DB)
 	registerMigrations(m)
+	require.NoError(t, m.MigrateDown(), "roll back 20260101000002")
 	require.NoError(t, m.MigrateDown(), "roll back 20260101000001")
 	require.True(t, db.Migrator().HasColumn("users", "name"), "the old users table is back")
 

@@ -85,6 +85,7 @@ func registerMigrations(migrator *schema.Migrator) {
 	migrator.AddMigration(addIndexesMigration())
 	migrator.AddMigration(updateItemsVersionDefaultMigration())
 	migrator.AddMigration(replaceUsersAndAddAuthTablesMigration())
+	migrator.AddMigration(createSessionEntriesMigration())
 }
 
 // legacyUser is the users table of migrations 20231201000001 and
@@ -314,4 +315,57 @@ func replaceUsersDown(tx *gorm.DB) error {
 		return tx.Exec("CREATE INDEX idx_users_email ON users(email)").Error
 	}
 	return nil
+}
+
+// sessionEntryV1 is the session_entries table as 20260101000002 creates it, a
+// frozen copy of sessionstore.SessionEntry: a model change needs a new
+// migration (TestSessionEntriesMatchModel fails without one).
+type sessionEntryV1 struct {
+	EntryKey  string `gorm:"column:entry_key;primaryKey;size:255"`
+	Kind      string `gorm:"column:kind;primaryKey;size:20"`
+	Data      string `gorm:"column:data;type:text"`
+	ExpiresAt int64  `gorm:"column:expires_at;not null;index:idx_session_entries_expires_at"`
+}
+
+func (sessionEntryV1) TableName() string { return "session_entries" }
+
+// createSessionEntriesMigration creates session_entries, the one table of the
+// session store: the blocklist of revoked tokens, users and sessions, and the
+// pending OIDC login states (see package sessionstore). A row is told apart by
+// kind, and the index on expires_at serves the cleanup of expired rows.
+//
+// On MySQL the key column gets the binary NO PAD collation utf8mb4_0900_bin
+// (MySQL 8.0.17 and later): a token ID or an OIDC state that differs only in
+// letter case or in trailing spaces is another key. Both directions are
+// idempotent.
+func createSessionEntriesMigration() schema.Migration {
+	return schema.Migration{
+		Version:     "20260101000002",
+		Name:        "create_session_entries",
+		Description: "Create session_entries for the token blocklist and OIDC login state",
+		Up:          createSessionEntriesUp,
+		Down: func(tx *gorm.DB) error {
+			return dropTables(tx, "session_entries")
+		},
+	}
+}
+
+// dialectMySQL is the GORM dialector name of MySQL.
+const dialectMySQL = "mysql"
+
+func createSessionEntriesUp(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(&sessionEntryV1{}); err != nil {
+		return err
+	}
+	if tx.Dialector.Name() != dialectMySQL {
+		return nil
+	}
+	var collation string
+	if err := tx.Raw("SELECT COLLATION_NAME FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'session_entries' AND column_name = 'entry_key'").Scan(&collation).Error; err != nil {
+		return err
+	}
+	if collation == "utf8mb4_0900_bin" {
+		return nil
+	}
+	return tx.Exec("ALTER TABLE session_entries MODIFY entry_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL").Error
 }

@@ -7,6 +7,7 @@ import (
 
 	"backend/internal/database/schema"
 	"backend/internal/models"
+	"backend/internal/sessionstore"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -47,7 +48,7 @@ func TestMigrationRunsTwice(t *testing.T) {
 	t.Parallel()
 	db := openMigratedDB(t)
 	first := appliedVersions(t, db)
-	assert.Equal(t, []string{"20231201000001", "20231201000002", "20231201000003", "20260101000001"}, first)
+	assert.Equal(t, []string{"20231201000001", "20231201000002", "20231201000003", "20260101000001", "20260101000002"}, first)
 
 	// A user written between the runs survives: the second run applies nothing.
 	u := &models.User{ID: uuid.New().String(), Username: "keep-me", Role: models.RoleAdmin, AuthProvider: models.AuthProviderLocal}
@@ -76,13 +77,13 @@ func TestMigrationOnDatabaseWithOldUsersTable(t *testing.T) {
 
 	require.NoError(t, (&Database{DB: db}).AutoMigrate())
 
-	assert.Len(t, appliedVersions(t, db), 4)
+	assert.Len(t, appliedVersions(t, db), 5)
 	for _, col := range []string{"id", "username", "email", "password_hash", "display_name", "role", "auth_provider", "external_id", "disabled", "service_account", "created_at", "updated_at"} {
 		assert.True(t, db.Migrator().HasColumn("users", col), "users.%s", col)
 	}
 	assert.False(t, db.Migrator().HasColumn("users", "name"), "the old table is replaced")
 	assert.False(t, db.Migrator().HasColumn("users", "deleted_at"), "the old table is replaced")
-	for _, table := range []string{"refresh_tokens", "api_keys", "audit_logs", "items"} {
+	for _, table := range []string{"refresh_tokens", "api_keys", "audit_logs", "items", "session_entries"} {
 		assert.True(t, db.Migrator().HasTable(table), table)
 	}
 
@@ -100,7 +101,8 @@ func TestReplaceUsersMigrationDownRestoresOldTable(t *testing.T) {
 	m := schema.NewMigrator(db)
 	registerMigrations(m)
 
-	require.NoError(t, m.MigrateDown())
+	require.NoError(t, m.MigrateDown(), "roll back 20260101000002")
+	require.NoError(t, m.MigrateDown(), "roll back 20260101000001")
 
 	assert.Len(t, appliedVersions(t, db), 3)
 	for _, table := range []string{"refresh_tokens", "api_keys", "audit_logs"} {
@@ -113,7 +115,7 @@ func TestReplaceUsersMigrationDownRestoresOldTable(t *testing.T) {
 
 	// Up again replaces the table once more.
 	require.NoError(t, m.MigrateUp())
-	assert.Len(t, appliedVersions(t, db), 4)
+	assert.Len(t, appliedVersions(t, db), 5)
 	assert.True(t, db.Migrator().HasColumn("users", "password_hash"))
 	assert.True(t, db.Migrator().HasTable("audit_logs"))
 }
@@ -159,6 +161,84 @@ func TestAuthTablesMatchModels(t *testing.T) {
 			assert.True(t, db.Migrator().HasIndex(model, idx.Name), "%s index %s", stmt.Schema.Table, idx.Name)
 		}
 	}
+}
+
+func TestCreateSessionEntriesMigration(t *testing.T) {
+	t.Parallel()
+	db := openMigratedDB(t)
+	mig := createSessionEntriesMigration()
+	assert.Equal(t, "20260101000002", mig.Version)
+	assert.Equal(t, "create_session_entries", mig.Name)
+	require.True(t, db.Migrator().HasTable("session_entries"))
+
+	// Up on the existing table keeps its rows.
+	require.NoError(t, db.Create(&sessionstore.SessionEntry{EntryKey: "jti", Kind: "token_block", ExpiresAt: 1}).Error)
+	require.NoError(t, mig.Up(db), "a second Up is a no-op")
+	var n int64
+	require.NoError(t, db.Model(&sessionstore.SessionEntry{}).Count(&n).Error)
+	assert.Equal(t, int64(1), n)
+
+	require.NoError(t, mig.Down(db))
+	require.NoError(t, mig.Down(db), "a second Down is a no-op")
+	assert.False(t, db.Migrator().HasTable("session_entries"))
+	assert.True(t, db.Migrator().HasTable("users"), "Down touches only its own table")
+
+	require.NoError(t, mig.Up(db))
+	assert.True(t, db.Migrator().HasTable("session_entries"))
+}
+
+func TestSessionEntriesMigrationDownKeepsTheAuthTables(t *testing.T) {
+	t.Parallel()
+	db := openMigratedDB(t)
+	m := schema.NewMigrator(db)
+	registerMigrations(m)
+
+	require.NoError(t, m.MigrateDown())
+
+	assert.Len(t, appliedVersions(t, db), 4)
+	assert.False(t, db.Migrator().HasTable("session_entries"))
+	assert.True(t, db.Migrator().HasColumn("users", "password_hash"))
+	require.NoError(t, m.MigrateUp())
+	assert.True(t, db.Migrator().HasTable("session_entries"))
+}
+
+// The migration creates session_entries from a frozen copy of the model. A
+// model field, key or index without a migration fails here.
+func TestSessionEntriesMatchModel(t *testing.T) {
+	t.Parallel()
+	db := openMigratedDB(t)
+	model := &sessionstore.SessionEntry{}
+
+	stmt := &gorm.Statement{DB: db}
+	require.NoError(t, stmt.Parse(model))
+	assert.Equal(t, "session_entries", stmt.Schema.Table)
+	for _, f := range stmt.Schema.Fields {
+		assert.True(t, db.Migrator().HasColumn(model, f.DBName), f.DBName)
+	}
+	for _, idx := range stmt.Schema.ParseIndexes() {
+		assert.True(t, db.Migrator().HasIndex(model, idx.Name), idx.Name)
+	}
+	assert.True(t, db.Migrator().HasIndex(model, "idx_session_entries_expires_at"))
+
+	frozen := &gorm.Statement{DB: db}
+	require.NoError(t, frozen.Parse(&sessionEntryV1{}))
+	require.Len(t, frozen.Schema.Fields, len(stmt.Schema.Fields))
+	for i, f := range stmt.Schema.Fields {
+		g := frozen.Schema.Fields[i]
+		assert.Equal(t, f.DBName, g.DBName)
+		assert.Equal(t, f.PrimaryKey, g.PrimaryKey, f.DBName)
+		assert.Equal(t, f.Size, g.Size, f.DBName)
+		assert.Equal(t, f.DataType, g.DataType, f.DBName)
+		assert.Equal(t, f.NotNull, g.NotNull, f.DBName)
+	}
+
+	// The row of a token block round-trips, and the key is per kind.
+	rows := []sessionstore.SessionEntry{
+		{EntryKey: "x", Kind: "token_block", ExpiresAt: 10},
+		{EntryKey: "x", Kind: "session_block", ExpiresAt: 10},
+	}
+	require.NoError(t, db.Create(&rows).Error)
+	require.Error(t, db.Create(&sessionstore.SessionEntry{EntryKey: "x", Kind: "token_block"}).Error, "the key is unique per kind")
 }
 
 func TestUsersTableIndexes(t *testing.T) {
