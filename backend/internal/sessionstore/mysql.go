@@ -223,7 +223,7 @@ func (s *mysqlStore) SaveOIDCState(ctx context.Context, state string, data OIDCS
 	if err != nil {
 		return err
 	}
-	row := SessionEntry{EntryKey: state, Kind: kindOIDCState, Data: string(raw), ExpiresAt: expiryMs(s.now().Add(ttl))}
+	row := SessionEntry{EntryKey: stateKey(state), Kind: kindOIDCState, Data: string(raw), ExpiresAt: expiryMs(s.now().Add(ttl))}
 	err = s.write(ctx, func(db *gorm.DB) error {
 		return db.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "entry_key"}, {Name: "kind"}},
@@ -247,10 +247,11 @@ func (s *mysqlStore) ConsumeOIDCState(ctx context.Context, state string) (*OIDCS
 		return nil, err
 	}
 	now := s.nowMs()
+	key := stateKey(state)
 	const where = "entry_key = ? AND kind = ? AND expires_at > ?"
 
 	var rows []SessionEntry
-	if err := s.db.WithContext(ctx).Where(where, state, kindOIDCState, now).Limit(1).Find(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where(where, key, kindOIDCState, now).Limit(1).Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("read %s: %w", kindOIDCState, err)
 	}
 	if len(rows) == 0 {
@@ -259,7 +260,7 @@ func (s *mysqlStore) ConsumeOIDCState(ctx context.Context, state string) (*OIDCS
 
 	var deleted int64
 	err := s.write(ctx, func(db *gorm.DB) error {
-		res := db.Where(where, state, kindOIDCState, now).Delete(&SessionEntry{})
+		res := db.Where(where, key, kindOIDCState, now).Delete(&SessionEntry{})
 		deleted = res.RowsAffected
 		return res.Error
 	})

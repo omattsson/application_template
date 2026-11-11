@@ -257,6 +257,180 @@
                 }
             }
         },
+        "/api/v1/auth/oidc/callback": {
+            "get": {
+                "description": "The identity provider sends the browser here with a code and the state. The state works once and only from the browser that started the login (the oidc_binding cookie); the code is exchanged with the PKCE verifier; the ID token is validated (signature, issuer, audience, expiry, nonce). The account is found by issuer and sub, or created with auth_provider oidc and the role user (admin when a role of the OIDC_ADMIN_ROLES claim matches exactly); an existing OIDC account gets its role from the claim at every login. An existing local account is never linked or taken over. On success the answer sets the httpOnly refresh_token cookie and redirects (302) to the fixed web UI path OIDC_FRONTEND_PATH, without any token in the URL; the web UI then calls POST /api/v1/auth/refresh for its access token. Every refusal caused by the request or the provider answers 400 {\"error\":\"Login failed\"}.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "OIDC callback",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Authorization code from the identity provider",
+                        "name": "code",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "State of the login",
+                        "name": "state",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Error code from the identity provider (the login is refused)",
+                        "name": "error",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Ignored",
+                        "name": "error_description",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "302": {
+                        "description": "Redirect to the web UI",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Login failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Login not permitted (disabled account)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "501": {
+                        "description": "Refresh tokens not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Identity provider unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/oidc/login": {
+            "get": {
+                "description": "Redirects the browser to the identity provider (authorization code flow with PKCE S256, a random state and a nonce). The state, the PKCE verifier and the nonce are kept on the server for OIDC_STATE_TTL and work once; a short-lived httpOnly cookie (oidc_binding, SameSite=Lax, Path /api/v1/auth/oidc) ties the login to this browser. Answers 404 unless AUTH_ENABLED and OIDC_ENABLED are true. No parameter of the request is used.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Start the OIDC login",
+                "responses": {
+                    "302": {
+                        "description": "Redirect to the identity provider",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "501": {
+                        "description": "Refresh tokens not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Identity provider unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/auth/refresh": {
             "post": {
                 "description": "Issues a new access token for the session of the refresh token cookie and rotates the refresh token (the old one is consumed, a new cookie is set). The request needs the X-Requested-With header (any value) and must not be cross-site; otherwise 403. A session ends SESSION_MAX_LIFETIME after login and SESSION_IDLE_TIMEOUT after its last login or refresh; rotation never extends it, and the access token never outlives it. A token rotated less than REFRESH_REUSE_GRACE ago (two tabs refreshing at once) gets one more access token, once, without a new cookie. Any other reuse of a consumed token revokes the session and blocks its access tokens. Every refusal answers the same 401 and deletes the cookie.",

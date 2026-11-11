@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"backend/internal/models"
 	"backend/pkg/dberrors"
@@ -294,6 +295,26 @@ func (r *GORMUserRepository) UpdatePassword(ctx context.Context, id, passwordHas
 	return nil
 }
 
+// validateProviderLink checks the link part of a profile update. A link needs
+// a known identity provider (not empty, not local, not an unknown name) and a
+// non-empty external ID that fits the column; an external ID without a
+// provider is refused, because it would be written to a local user's row.
+func validateProviderLink(upd models.UserProfileUpdate) error {
+	if upd.LinkProvider == nil {
+		if upd.ExternalID != nil {
+			return models.ErrInvalidExternalID
+		}
+		return nil
+	}
+	if !models.IsSSOProvider(*upd.LinkProvider) {
+		return models.ErrInvalidAuthProvider
+	}
+	if upd.ExternalID == nil || *upd.ExternalID == "" || utf8.RuneCountInString(*upd.ExternalID) > models.MaxExternalIDLen {
+		return models.ErrInvalidExternalID
+	}
+	return nil
+}
+
 // UpdateProfile sets only the columns listed in upd. See
 // models.UserRepository.
 func (r *GORMUserRepository) UpdateProfile(ctx context.Context, id string, upd models.UserProfileUpdate) error {
@@ -302,6 +323,9 @@ func (r *GORMUserRepository) UpdateProfile(ctx context.Context, id string, upd m
 	}
 	if upd.Email != nil && *upd.Email != "" && !models.IsValidEmail(*upd.Email) {
 		return validationError("update_profile", models.ErrInvalidEmail)
+	}
+	if err := validateProviderLink(upd); err != nil {
+		return validationError("update_profile", err)
 	}
 	err := r.Tx(ctx, func(tx *gorm.DB) error {
 		if upd.Role != nil {

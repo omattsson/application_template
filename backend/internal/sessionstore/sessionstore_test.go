@@ -2,6 +2,8 @@ package sessionstore_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -436,6 +438,33 @@ func TestOIDCState(t *testing.T) {
 		got, err = s.ConsumeOIDCState(ctx, "never-saved")
 		require.NoError(t, err)
 		assert.Nil(t, got)
+	})
+}
+
+// The nonce and the browser binding come back as saved, and the store keeps
+// only the SHA-256 of the state as its key: a state that is still valid cannot
+// be read from the table.
+func TestOIDCStateKeepsOnlyTheHashOfTheState(t *testing.T) {
+	t.Parallel()
+	eachBackend(t, func(t *testing.T, s sessionstore.SessionStore, clk *fakeClock) {
+		t.Helper()
+		ctx := context.Background()
+		const state = "a-state-value-that-must-not-be-stored-as-is"
+		data := sessionstore.OIDCStateData{CodeVerifier: "v", Nonce: "n-1", BindingHash: "b-1"}
+		require.NoError(t, s.SaveOIDCState(ctx, state, data, time.Minute))
+
+		sum := sha256.Sum256([]byte(state))
+		assert.Equal(t, []string{hex.EncodeToString(sum[:])}, sessionstore.StateKeys(s))
+
+		// The stored hash is not itself a state that consumes anything.
+		got, err := s.ConsumeOIDCState(ctx, sessionstore.StateKeys(s)[0])
+		require.NoError(t, err)
+		assert.Nil(t, got, "the stored key is not a usable state")
+
+		got, err = s.ConsumeOIDCState(ctx, state)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, data, *got)
 	})
 }
 

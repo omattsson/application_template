@@ -10,6 +10,8 @@ package sessionstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,9 +51,19 @@ const (
 
 // OIDCStateData is what a login keeps between the redirect to the identity
 // provider and the callback. It is stored as given (as JSON in the database).
+// A field added later is optional in the JSON, so rows saved before it (they
+// live a few minutes at most) still decode.
 type OIDCStateData struct {
 	CodeVerifier string `json:"code_verifier"`
 	RedirectURL  string `json:"redirect_url"`
+	// Nonce is the nonce of the authorization request. The callback checks that
+	// the ID token carries the same value.
+	Nonce string `json:"nonce,omitempty"`
+	// BindingHash is the SHA-256 (hex) of the random value that the login sets
+	// in a cookie of the browser that started it. The callback accepts the
+	// state only from a browser that presents the matching cookie (login CSRF
+	// protection).
+	BindingHash string `json:"binding_hash,omitempty"`
 }
 
 // SessionStore is the shared auth state. Every method takes the request
@@ -134,6 +146,16 @@ func checkKey(key string) error {
 		return fmt.Errorf("%w: longer than %d characters", ErrInvalidKey, MaxKeyLen)
 	}
 	return nil
+}
+
+// stateKey returns the key under which an OIDC state is stored: the SHA-256
+// (hex) of the state. A read of the table (a backup, an SQL injection
+// elsewhere, a replica operator) then does not reveal a state that is still
+// valid, which an attacker could use with the callback of a browser session
+// they control. The state itself must be a valid key (checkKey).
+func stateKey(state string) string {
+	sum := sha256.Sum256([]byte(state))
+	return hex.EncodeToString(sum[:])
 }
 
 // checkKeys checks every key of a batch, so a batch writes all or nothing of

@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"backend/internal/models"
@@ -500,6 +501,69 @@ func TestUserRepositoryTargetedUpdates(t *testing.T) {
 				return r.UpdateProfile(context.Background(), "u1", models.UserProfileUpdate{LinkProvider: strPtr(models.AuthProviderOIDC), ExternalID: strPtr("sub-1"), Role: strPtr(models.RoleDevOps)})
 			},
 			want: models.User{Role: models.RoleDevOps, AuthProvider: models.AuthProviderOIDC, Disabled: true},
+		},
+		{
+			name: "link to an empty provider is refused",
+			user: models.User{ID: "u1", Username: "u1", Role: models.RoleUser, PasswordHash: "h"},
+			run: func(r *GORMUserRepository) error {
+				return r.UpdateProfile(context.Background(), "u1", models.UserProfileUpdate{LinkProvider: strPtr(""), ExternalID: strPtr("sub-1")})
+			},
+			want:      models.User{Role: models.RoleUser, AuthProvider: models.AuthProviderLocal, PasswordHash: "h"},
+			wantErrIs: dberrors.ErrValidation,
+		},
+		{
+			name: "link to an unknown provider is refused",
+			user: models.User{ID: "u1", Username: "u1", Role: models.RoleUser, PasswordHash: "h"},
+			run: func(r *GORMUserRepository) error {
+				return r.UpdateProfile(context.Background(), "u1", models.UserProfileUpdate{LinkProvider: strPtr("saml"), ExternalID: strPtr("sub-1")})
+			},
+			want:      models.User{Role: models.RoleUser, AuthProvider: models.AuthProviderLocal, PasswordHash: "h"},
+			wantErrIs: dberrors.ErrValidation,
+		},
+		{
+			name: "link to the local provider is refused",
+			user: models.User{ID: "u1", Username: "u1", Role: models.RoleUser, PasswordHash: "h"},
+			run: func(r *GORMUserRepository) error {
+				return r.UpdateProfile(context.Background(), "u1", models.UserProfileUpdate{LinkProvider: strPtr(models.AuthProviderLocal), ExternalID: strPtr("sub-1")})
+			},
+			want:      models.User{Role: models.RoleUser, AuthProvider: models.AuthProviderLocal, PasswordHash: "h"},
+			wantErrIs: dberrors.ErrValidation,
+		},
+		{
+			name: "link without an external ID is refused",
+			user: models.User{ID: "u1", Username: "u1", Role: models.RoleUser, PasswordHash: "h"},
+			run: func(r *GORMUserRepository) error {
+				return r.UpdateProfile(context.Background(), "u1", models.UserProfileUpdate{LinkProvider: strPtr(models.AuthProviderOIDC)})
+			},
+			want:      models.User{Role: models.RoleUser, AuthProvider: models.AuthProviderLocal, PasswordHash: "h"},
+			wantErrIs: dberrors.ErrValidation,
+		},
+		{
+			name: "link with an empty external ID is refused",
+			user: models.User{ID: "u1", Username: "u1", Role: models.RoleUser, PasswordHash: "h"},
+			run: func(r *GORMUserRepository) error {
+				return r.UpdateProfile(context.Background(), "u1", models.UserProfileUpdate{LinkProvider: strPtr(models.AuthProviderOIDC), ExternalID: strPtr("")})
+			},
+			want:      models.User{Role: models.RoleUser, AuthProvider: models.AuthProviderLocal, PasswordHash: "h"},
+			wantErrIs: dberrors.ErrValidation,
+		},
+		{
+			name: "link with an external ID longer than the column is refused",
+			user: models.User{ID: "u1", Username: "u1", Role: models.RoleUser, PasswordHash: "h"},
+			run: func(r *GORMUserRepository) error {
+				return r.UpdateProfile(context.Background(), "u1", models.UserProfileUpdate{LinkProvider: strPtr(models.AuthProviderOIDC), ExternalID: strPtr(strings.Repeat("x", models.MaxExternalIDLen+1))})
+			},
+			want:      models.User{Role: models.RoleUser, AuthProvider: models.AuthProviderLocal, PasswordHash: "h"},
+			wantErrIs: dberrors.ErrValidation,
+		},
+		{
+			name: "an external ID without a provider is refused",
+			user: models.User{ID: "u1", Username: "u1", Role: models.RoleUser, PasswordHash: "h"},
+			run: func(r *GORMUserRepository) error {
+				return r.UpdateProfile(context.Background(), "u1", models.UserProfileUpdate{ExternalID: strPtr("sub-1")})
+			},
+			want:      models.User{Role: models.RoleUser, AuthProvider: models.AuthProviderLocal, PasswordHash: "h"},
+			wantErrIs: dberrors.ErrValidation,
 		},
 		{
 			name: "profile update of an unknown user",

@@ -165,7 +165,7 @@ func (s *memoryStore) SaveOIDCState(ctx context.Context, state string, data OIDC
 	expires := expiryMs(s.now().Add(ttl))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.states[state] = memEntry{data: string(raw), expiresMs: expires}
+	s.states[stateKey(state)] = memEntry{data: string(raw), expiresMs: expires}
 	return nil
 }
 
@@ -176,8 +176,9 @@ func (s *memoryStore) ConsumeOIDCState(ctx context.Context, state string) (*OIDC
 	}
 	now := s.nowMs()
 	s.mu.Lock()
-	e, ok := s.states[state]
-	delete(s.states, state)
+	key := stateKey(state)
+	e, ok := s.states[key]
+	delete(s.states, key)
 	s.mu.Unlock()
 	if !ok || e.expiresMs <= now {
 		return nil, nil

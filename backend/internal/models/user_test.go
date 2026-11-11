@@ -9,6 +9,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsSSOProvider(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		provider string
+		want     bool
+	}{
+		{provider: AuthProviderOIDC, want: true},
+		{provider: AuthProviderLocal, want: false},
+		{provider: "", want: false},
+		{provider: "OIDC", want: false},
+		{provider: "saml", want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.provider, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, IsSSOProvider(tt.provider))
+		})
+	}
+}
+
 func TestUserValidateRole(t *testing.T) {
 	t.Parallel()
 

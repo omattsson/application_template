@@ -20,8 +20,29 @@ const (
 	AuthProviderOIDC  = "oidc"
 )
 
-// MaxUsernameLen is the size of users.username.
-const MaxUsernameLen = 100
+// IsSSOProvider reports whether provider is an identity provider that a user
+// can be linked to (AuthProviderOIDC). The empty string, AuthProviderLocal and
+// any unknown name are not.
+func IsSSOProvider(provider string) bool {
+	return provider == AuthProviderOIDC
+}
+
+// MaxUsernameLen is the size of users.username. MaxExternalIDLen is the size
+// of users.external_id.
+const (
+	MaxUsernameLen   = 100
+	MaxExternalIDLen = 255
+)
+
+// Errors of a link to an identity provider (UserRepository.UpdateProfile).
+var (
+	// ErrInvalidAuthProvider: the provider to link to is empty, local or
+	// unknown.
+	ErrInvalidAuthProvider = errors.New("auth provider must be a known identity provider")
+	// ErrInvalidExternalID: the external ID is missing, empty or longer than
+	// MaxExternalIDLen, or is set without a provider.
+	ErrInvalidExternalID = errors.New("external id must be set with a provider and at most 255 characters")
+)
 
 // IsValidRole reports whether role is one of RoleUser, RoleDevOps or RoleAdmin.
 func IsValidRole(role string) bool {

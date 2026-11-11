@@ -51,6 +51,7 @@ type Config struct {
 	// Then string and simple field structs
 	App     AppConfig
 	Auth    AuthConfig
+	OIDC    OIDCConfig
 	CORS    CORSConfig
 	Logging LogConfig
 	// LogLevel is LOG_LEVEL parsed to a slog level; main applies it to the
@@ -312,6 +313,14 @@ func (c *Config) Validate() error {
 		if err := c.Auth.Validate(); err != nil {
 			return fmt.Errorf("auth config: %w", err)
 		}
+
+		// OIDC needs authentication: with auth off the OIDC routes answer 404
+		// and its settings are not used.
+		if c.OIDC.Enabled {
+			if err := c.OIDC.Validate(); err != nil {
+				return fmt.Errorf("oidc config: %w", err)
+			}
+		}
 	}
 
 	return nil
@@ -498,6 +507,10 @@ func LoadConfig() (*Config, error) {
 	var err error
 
 	if cfg.Auth, err = loadAuthConfig(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	if cfg.OIDC, err = loadOIDCConfig(cfg.Auth.Enabled); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 

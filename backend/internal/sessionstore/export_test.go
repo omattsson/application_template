@@ -37,6 +37,29 @@ func EntryCount(s SessionStore) int {
 	panic("unknown store type")
 }
 
+// StateKeys returns the stored keys of the OIDC state rows (the form in which
+// the store keeps a state), expired or not.
+func StateKeys(s SessionStore) []string {
+	switch st := s.(type) {
+	case *memoryStore:
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		keys := make([]string, 0, len(st.states))
+		for k := range st.states {
+			keys = append(keys, k)
+		}
+		return keys
+	case *mysqlStore:
+		var keys []string
+		if err := st.db.WithContext(context.Background()).Model(&SessionEntry{}).
+			Where("kind = ?", kindOIDCState).Pluck("entry_key", &keys).Error; err != nil {
+			panic(err)
+		}
+		return keys
+	}
+	panic("unknown store type")
+}
+
 // CleanupExited returns a channel that closes when the cleanup goroutine of s
 // has returned.
 func CleanupExited(s SessionStore) <-chan struct{} {
