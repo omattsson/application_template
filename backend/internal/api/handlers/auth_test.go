@@ -1507,33 +1507,47 @@ func TestDummyPasswordHash(t *testing.T) {
 	assert.Equal(t, hash, dummyPasswordHash(), "computed once")
 }
 
-type fakeRefreshTokenRepo struct{ models.RefreshTokenRepository }
 type fakeSessionStore struct{ sessionstore.SessionStore }
 type fakeRevoker struct{ websocket.ClientRevoker }
 
-// The setters accept nil and a value; a login works either way and issues
-// only an access token.
+// The setters accept nil and a value. Without a refresh repository a login
+// issues only an access token (JWT_EXPIRATION, no session); with one it
+// starts a session (cookie, ACCESS_TOKEN_EXPIRATION).
 func TestAuthHandlerSetters(t *testing.T) {
 	t.Parallel()
 	for _, set := range []bool{false, true} {
-		h, _, _ := newTestAuthHandler(newMockUserRepo(localUser("u1", "alice")), testAuthConfig(), nil)
+		cfg := testAuthConfig()
+		cfg.RefreshTokenExpiration = time.Hour
+		h, _, _ := newTestAuthHandler(newMockUserRepo(localUser("u1", "alice")), cfg, nil)
 		h.SetRefreshTokenRepo(nil)
 		h.SetSessionStore(nil)
 		h.SetWebSocketRevoker(nil)
 		assert.Nil(t, h.refreshTokenRepo)
 		assert.Nil(t, h.sessionStore)
 		assert.Nil(t, h.wsRevoker)
+		assert.Equal(t, cfg.JWTExpiration, h.loginTokenExpiration())
 		if set {
-			h.SetRefreshTokenRepo(&fakeRefreshTokenRepo{})
+			h.SetRefreshTokenRepo(database.NewGORMRefreshTokenRepository(openRefreshDB(t)))
 			h.SetSessionStore(&fakeSessionStore{})
 			h.SetWebSocketRevoker(&fakeRevoker{})
 			assert.NotNil(t, h.refreshTokenRepo)
 			assert.NotNil(t, h.sessionStore)
 			assert.NotNil(t, h.wsRevoker)
+			assert.Equal(t, cfg.AccessTokenExpiration, h.loginTokenExpiration())
 		}
 		w := postJSON(t, newAuthRouter(h), "/api/v1/auth/login", loginBody(t, "alice", testPassword))
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Empty(t, w.Header().Values("Set-Cookie"))
+		var resp LoginResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		claims, err := middleware.ValidateJWT(resp.Token, testJWTSecret)
+		require.NoError(t, err)
+		if set {
+			assert.Len(t, w.Header().Values("Set-Cookie"), 1)
+			assert.NotEmpty(t, claims.SessionID)
+		} else {
+			assert.Empty(t, w.Header().Values("Set-Cookie"))
+			assert.Empty(t, claims.SessionID)
+		}
 	}
 }
 

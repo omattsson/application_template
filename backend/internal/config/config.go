@@ -83,8 +83,19 @@ const (
 	defaultAccessTokenExpiration = 15 * time.Minute
 	defaultSessionIdleTimeout    = 30 * time.Minute
 	defaultSessionMaxLifetime    = 12 * time.Hour
-	defaultAdminUsername         = "admin"
+	// defaultRefreshTokenExpiration and defaultRefreshReuseGrace are the
+	// defaults of the source project. The session deadline
+	// (SESSION_MAX_LIFETIME) caps every refresh token, so with the defaults a
+	// refresh token lives at most 12h.
+	defaultRefreshTokenExpiration = 168 * time.Hour
+	defaultRefreshReuseGrace      = 30 * time.Second
+	defaultAdminUsername          = "admin"
 )
+
+// MaxRefreshReuseGrace caps REFRESH_REUSE_GRACE. The grace window only has to
+// cover concurrent refresh requests (two browser tabs); a long window weakens
+// replay detection.
+const MaxRefreshReuseGrace = 5 * time.Minute
 
 // AuthConfig holds authentication configuration.
 //
@@ -102,6 +113,16 @@ type AuthConfig struct {
 	// SessionMaxLifetime is SESSION_MAX_LIFETIME (default 12h): the absolute
 	// lifetime of a session. Refreshing never extends a session beyond it.
 	SessionMaxLifetime time.Duration
+	// RefreshTokenExpiration is REFRESH_TOKEN_EXPIRATION (default 168h): the
+	// lifetime of one refresh token. It is capped by the session deadline
+	// (SessionMaxLifetime after the login), so rotation never extends a
+	// session.
+	RefreshTokenExpiration time.Duration
+	// RefreshReuseGrace is REFRESH_REUSE_GRACE (default 30s, 0 to
+	// MaxRefreshReuseGrace, 0 turns it off): a refresh token that a rotation
+	// consumed less than this long ago gets one more access token (two tabs
+	// that refresh at the same time). Any other reuse revokes the session.
+	RefreshReuseGrace time.Duration
 	// JWTSecret is JWT_SECRET: the HMAC key of the access tokens. It has no
 	// default. Generate it (for example `openssl rand -base64 48`); it is
 	// required, at least MinJWTSecretLength characters, when Enabled is true.
@@ -118,6 +139,12 @@ type AuthConfig struct {
 	// SelfRegistration is SELF_REGISTRATION (default false): anyone can create
 	// a local account.
 	SelfRegistration bool
+	// SecureCookies is SECURE_COOKIES (default true): the refresh token
+	// cookie has the Secure attribute, so the browser sends it over HTTPS
+	// only. Set it to false only for plain-HTTP local development on a host
+	// other than localhost (browsers accept Secure cookies on
+	// http://localhost).
+	SecureCookies bool
 }
 
 // Validate checks the auth settings. LoadConfig calls it only when Enabled is
@@ -155,6 +182,14 @@ func (c *AuthConfig) Validate() error {
 
 	if c.AccessTokenExpiration > c.SessionIdleTimeout {
 		return errors.New("access_token_expiration must not exceed session_idle_timeout")
+	}
+
+	if c.RefreshTokenExpiration <= 0 {
+		return errors.New("refresh_token_expiration must be positive")
+	}
+
+	if c.RefreshReuseGrace < 0 || c.RefreshReuseGrace > MaxRefreshReuseGrace {
+		return fmt.Errorf("refresh_reuse_grace must be between 0s and %s", MaxRefreshReuseGrace)
 	}
 
 	return nil
@@ -511,6 +546,15 @@ func loadAuthConfig() (AuthConfig, error) {
 		AdminUsername:    getEnv("ADMIN_USERNAME", defaultAdminUsername),
 		AdminPassword:    getEnv("ADMIN_PASSWORD", ""),
 		SelfRegistration: getEnvBool("SELF_REGISTRATION", false),
+		SecureCookies:    true,
+	}
+
+	// SECURE_COOKIES is strict with auth on: a typo must not drop the Secure
+	// attribute. With auth off it is unused and keeps the default.
+	if enabled {
+		if cfg.SecureCookies, err = parseEnvBoolStrict("SECURE_COOKIES", true); err != nil {
+			return AuthConfig{}, err
+		}
 	}
 
 	durations := []struct {
@@ -522,6 +566,8 @@ func loadAuthConfig() (AuthConfig, error) {
 		{&cfg.AccessTokenExpiration, "ACCESS_TOKEN_EXPIRATION", defaultAccessTokenExpiration},
 		{&cfg.SessionIdleTimeout, "SESSION_IDLE_TIMEOUT", defaultSessionIdleTimeout},
 		{&cfg.SessionMaxLifetime, "SESSION_MAX_LIFETIME", defaultSessionMaxLifetime},
+		{&cfg.RefreshTokenExpiration, "REFRESH_TOKEN_EXPIRATION", defaultRefreshTokenExpiration},
+		{&cfg.RefreshReuseGrace, "REFRESH_REUSE_GRACE", defaultRefreshReuseGrace},
 	}
 
 	for _, d := range durations {

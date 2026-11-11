@@ -99,6 +99,17 @@ func (r *GORMRefreshTokenRepository) MarkRotatedIfActive(ctx context.Context, id
 	}, map[string]any{"revoked": true, "rotated_at": rotatedAt.UTC()})
 }
 
+// ClaimReuseGrace clears rotated_at of a token consumed by a rotation at or
+// after rotatedSince. The conditional UPDATE decides between concurrent
+// claims: one changes the row, the others find rotated_at NULL. See
+// models.RefreshTokenRepository.
+func (r *GORMRefreshTokenRepository) ClaimReuseGrace(ctx context.Context, id string, rotatedSince time.Time) (bool, error) {
+	n, err := r.update(ctx, "claim_reuse_grace", func(db *gorm.DB) *gorm.DB {
+		return db.Where("id = ? AND revoked = ? AND rotated_at IS NOT NULL AND rotated_at >= ?", id, true, rotatedSince.UTC())
+	}, map[string]any{"rotated_at": nil})
+	return n == 1, err
+}
+
 // RevokeFamily revokes the active tokens of a family. "id = ?" also matches
 // a token without a family_id that started the family.
 func (r *GORMRefreshTokenRepository) RevokeFamily(ctx context.Context, familyID string) error {

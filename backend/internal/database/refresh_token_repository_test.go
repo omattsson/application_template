@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -328,6 +329,79 @@ func TestRefreshTokenRepositoryCreateDefaultsFamilyToID(t *testing.T) {
 	require.NoError(t, repo.DB.Model(&models.RefreshToken{}).Where("id = ?", "legacy").Update("family_id", "").Error)
 	require.NoError(t, repo.TouchFamily(ctx, "legacy", now))
 	assert.WithinDuration(t, now, loadRefreshToken(t, repo, "legacy").LastActivity, time.Second, "TouchFamily matches a legacy row by ID")
+}
+
+// ClaimReuseGrace succeeds once, only for a token that a rotation consumed
+// inside the window, also when many requests claim at the same time.
+func TestRefreshTokenRepositoryClaimReuseGrace(t *testing.T) {
+	t.Parallel()
+	repo := setupRefreshTokenRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	since := now.Add(-30 * time.Second)
+	rotated := func(at time.Time) func(*models.RefreshToken) {
+		return func(rt *models.RefreshToken) { rt.Revoked = true; rt.RotatedAt = &at }
+	}
+	seedRefreshToken(t, repo, "fresh", "f1", rotated(now.Add(-5*time.Second)))
+	seedRefreshToken(t, repo, "stale", "f2", rotated(now.Add(-time.Minute)))
+	seedRefreshToken(t, repo, "logged-out", "f3", func(rt *models.RefreshToken) { rt.Revoked = true })
+	seedRefreshToken(t, repo, "active", "f4", nil)
+	seedRefreshToken(t, repo, "raced", "f5", rotated(now.Add(-time.Second)))
+
+	tests := []struct {
+		name string
+		id   string
+		want bool
+	}{
+		{name: "rotated inside the window", id: "fresh", want: true},
+		{name: "second claim of the same token", id: "fresh", want: false},
+		{name: "rotated before the window", id: "stale", want: false},
+		{name: "revoked by logout (no rotation)", id: "logged-out", want: false},
+		{name: "not consumed", id: "active", want: false},
+		{name: "unknown token", id: "missing", want: false},
+	}
+	for _, tt := range tests { // sequential: the second row depends on the first
+		got, err := repo.ClaimReuseGrace(ctx, tt.id, since)
+		require.NoError(t, err, tt.name)
+		assert.Equal(t, tt.want, got, tt.name)
+	}
+	assert.Nil(t, loadRefreshToken(t, repo, "fresh").RotatedAt, "the grace is spent")
+	assert.True(t, loadRefreshToken(t, repo, "fresh").Revoked, "the token stays consumed")
+
+	const claimers = 8
+	var wins atomicCounter
+	var wg sync.WaitGroup
+	for i := 0; i < claimers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := repo.ClaimReuseGrace(ctx, "raced", since)
+			assert.NoError(t, err)
+			if ok {
+				wins.add()
+			}
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, 1, wins.get(), "exactly one concurrent claim wins")
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err := repo.ClaimReuseGrace(cancelled, "raced", since)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// atomicCounter counts concurrent wins.
+type atomicCounter struct {
+	n  int
+	mu sync.Mutex
+}
+
+func (c *atomicCounter) add() { c.mu.Lock(); c.n++; c.mu.Unlock() }
+func (c *atomicCounter) get() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
 }
 
 func TestRefreshTokenRepositoryRevokeOldestForUser(t *testing.T) {

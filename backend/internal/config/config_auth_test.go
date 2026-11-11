@@ -15,7 +15,8 @@ import (
 var authEnvKeys = []string{
 	"AUTH_ENABLED", "JWT_SECRET", "JWT_EXPIRATION", "ACCESS_TOKEN_EXPIRATION",
 	"SESSION_IDLE_TIMEOUT", "SESSION_MAX_LIFETIME", "ADMIN_USERNAME",
-	"ADMIN_PASSWORD", "SELF_REGISTRATION",
+	"ADMIN_PASSWORD", "SELF_REGISTRATION", "REFRESH_TOKEN_EXPIRATION",
+	"REFRESH_REUSE_GRACE", "SECURE_COOKIES",
 }
 
 // clearAuthEnv unsets the auth variables for the test (t.Setenv restores them)
@@ -44,6 +45,9 @@ func TestLoadConfigAuthDefaults(t *testing.T) {
 	assert.Equal(t, 15*time.Minute, cfg.Auth.AccessTokenExpiration)
 	assert.Equal(t, 30*time.Minute, cfg.Auth.SessionIdleTimeout)
 	assert.Equal(t, 12*time.Hour, cfg.Auth.SessionMaxLifetime)
+	assert.Equal(t, 168*time.Hour, cfg.Auth.RefreshTokenExpiration)
+	assert.Equal(t, 30*time.Second, cfg.Auth.RefreshReuseGrace)
+	assert.True(t, cfg.Auth.SecureCookies, "the refresh cookie is Secure unless turned off")
 }
 
 func TestLoadConfigAuthEnabledSecret(t *testing.T) {
@@ -101,6 +105,9 @@ func TestLoadConfigAuthEnv(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "root")
 	t.Setenv("ADMIN_PASSWORD", "pw")
 	t.Setenv("SELF_REGISTRATION", "true")
+	t.Setenv("REFRESH_TOKEN_EXPIRATION", "48h")
+	t.Setenv("REFRESH_REUSE_GRACE", "0s")
+	t.Setenv("SECURE_COOKIES", "false")
 
 	cfg, err := config.LoadConfig()
 	require.NoError(t, err)
@@ -112,11 +119,51 @@ func TestLoadConfigAuthEnv(t *testing.T) {
 	assert.Equal(t, "root", cfg.Auth.AdminUsername)
 	assert.Equal(t, "pw", cfg.Auth.AdminPassword)
 	assert.True(t, cfg.Auth.SelfRegistration)
+	assert.Equal(t, 48*time.Hour, cfg.Auth.RefreshTokenExpiration)
+	assert.Equal(t, time.Duration(0), cfg.Auth.RefreshReuseGrace, "0 turns the grace off")
+	assert.False(t, cfg.Auth.SecureCookies)
+}
+
+// A SECURE_COOKIES typo must not turn the Secure attribute off silently.
+func TestLoadConfigSecureCookiesParsing(t *testing.T) {
+	// Not parallel: subtests use t.Setenv.
+	tests := []struct {
+		name    string
+		value   string
+		enabled bool
+		want    bool
+		wantErr bool
+	}{
+		{name: "unset defaults to true", value: "", enabled: true, want: true},
+		{name: "false", value: "false", enabled: true, want: false},
+		{name: "typo fails when auth is on", value: "flase", enabled: true, wantErr: true},
+		{name: "typo keeps the default when auth is off", value: "flase", enabled: false, want: true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			clearAuthEnv(t)
+			if tt.enabled {
+				t.Setenv("AUTH_ENABLED", "true")
+				t.Setenv("JWT_SECRET", "a-secret-of-sufficient-length")
+			}
+			t.Setenv("SECURE_COOKIES", tt.value)
+			cfg, err := config.LoadConfig()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "SECURE_COOKIES")
+				assert.NotContains(t, err.Error(), tt.value)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.Auth.SecureCookies)
+		})
+	}
 }
 
 func TestLoadConfigAuthInvalidDuration(t *testing.T) {
 	// Not parallel: subtests use t.Setenv.
-	for _, key := range []string{"JWT_EXPIRATION", "ACCESS_TOKEN_EXPIRATION", "SESSION_IDLE_TIMEOUT", "SESSION_MAX_LIFETIME"} {
+	for _, key := range []string{"JWT_EXPIRATION", "ACCESS_TOKEN_EXPIRATION", "SESSION_IDLE_TIMEOUT", "SESSION_MAX_LIFETIME", "REFRESH_TOKEN_EXPIRATION", "REFRESH_REUSE_GRACE"} {
 		key := key
 		t.Run(key+" typo fails when auth is on", func(t *testing.T) {
 			clearAuthEnv(t)
@@ -142,12 +189,14 @@ func TestAuthConfigValidate(t *testing.T) {
 	t.Parallel()
 	valid := func() config.AuthConfig {
 		return config.AuthConfig{
-			Enabled:               true,
-			JWTSecret:             "1234567890123456",
-			JWTExpiration:         24 * time.Hour,
-			AccessTokenExpiration: 15 * time.Minute,
-			SessionIdleTimeout:    30 * time.Minute,
-			SessionMaxLifetime:    12 * time.Hour,
+			Enabled:                true,
+			JWTSecret:              "1234567890123456",
+			JWTExpiration:          24 * time.Hour,
+			AccessTokenExpiration:  15 * time.Minute,
+			SessionIdleTimeout:     30 * time.Minute,
+			SessionMaxLifetime:     12 * time.Hour,
+			RefreshTokenExpiration: 168 * time.Hour,
+			RefreshReuseGrace:      30 * time.Second,
 		}
 	}
 	tests := []struct {
@@ -165,6 +214,11 @@ func TestAuthConfigValidate(t *testing.T) {
 		{name: "idle above max lifetime", mutate: func(c *config.AuthConfig) { c.SessionIdleTimeout = 13 * time.Hour }, wantErr: "session_idle_timeout must not exceed session_max_lifetime"},
 		{name: "idle equal to max lifetime", mutate: func(c *config.AuthConfig) { c.SessionIdleTimeout = c.SessionMaxLifetime }},
 		{name: "access above idle", mutate: func(c *config.AuthConfig) { c.AccessTokenExpiration = time.Hour }, wantErr: "access_token_expiration must not exceed session_idle_timeout"},
+		{name: "zero refresh token expiration", mutate: func(c *config.AuthConfig) { c.RefreshTokenExpiration = 0 }, wantErr: "refresh_token_expiration must be positive"},
+		{name: "zero reuse grace turns it off", mutate: func(c *config.AuthConfig) { c.RefreshReuseGrace = 0 }},
+		{name: "reuse grace at the cap", mutate: func(c *config.AuthConfig) { c.RefreshReuseGrace = 5 * time.Minute }},
+		{name: "reuse grace above the cap", mutate: func(c *config.AuthConfig) { c.RefreshReuseGrace = 5*time.Minute + time.Second }, wantErr: "refresh_reuse_grace must be between 0s and 5m0s"},
+		{name: "negative reuse grace", mutate: func(c *config.AuthConfig) { c.RefreshReuseGrace = -time.Second }, wantErr: "refresh_reuse_grace must be between 0s and 5m0s"},
 	}
 	for _, tt := range tests {
 		tt := tt

@@ -30,11 +30,18 @@ const (
 	// locked or busy (any spelling, also the stored name); the password is
 	// not checked.
 	loginReasonAccountThrottled = "account_throttled"
+	// loginReasonRecheckFailed: the user was disabled or deleted while the
+	// token was signed. loginReasonSessionRevoked: a logout-all or revoke
+	// ended the new session before the answer.
+	loginReasonRecheckFailed  = "recheck_failed"
+	loginReasonSessionRevoked = "session_revoked"
 
 	// Server-side failures (500).
-	loginReasonLookupError = "lookup_error" // the user lookup failed
-	loginReasonRereadError = "reread_error" // the re-read after the password check failed
-	loginReasonTokenError  = "token_error"  // the access token could not be signed
+	loginReasonLookupError  = "lookup_error"  // the user lookup failed
+	loginReasonRereadError  = "reread_error"  // the re-read after the password check failed
+	loginReasonTokenError   = "token_error"   // the access token could not be signed
+	loginReasonRecheckError = "recheck_error" // the re-read after signing failed
+	loginReasonSessionError = "session_error" // the refresh session could not be stored or checked
 )
 
 // maxLoggedUsernameLen caps the username in a log line: the value is client

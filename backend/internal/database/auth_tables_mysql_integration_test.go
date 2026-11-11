@@ -167,3 +167,82 @@ func TestDatabaseConcurrentAutoMigrate(t *testing.T) {
 	require.NoError(t, db.Model(&schema.SchemaVersion{}).Where("version = ?", "20260101000001").Count(&n).Error)
 	assert.Equal(t, int64(1), n)
 }
+
+// TestDatabaseRefreshRotationIsSingleUse rotates one refresh token from many
+// goroutines at once on MySQL, the way the refresh handler does (consume and
+// create the successor in one transaction): exactly one rotation commits and
+// the family has exactly one active token. Then many goroutines claim the
+// reuse grace of the consumed token: exactly one wins.
+func TestDatabaseRefreshRotationIsSingleUse(t *testing.T) {
+	db, err := NewFromAppConfig(mysqlTestConfig(false))
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate())
+	ctx := context.Background()
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	userID := "it-rotate-" + suffix
+	t.Cleanup(func() { db.Where("user_id = ?", userID).Delete(&models.RefreshToken{}) })
+
+	tokens := NewGORMRefreshTokenRepository(db.DB)
+	now := time.Now().UTC()
+	first := &models.RefreshToken{UserID: userID, TokenHash: hashOf("first-" + suffix), ExpiresAt: now.Add(time.Hour), LastActivity: now}
+	require.NoError(t, tokens.Create(ctx, first))
+	require.Equal(t, first.ID, first.FamilyID, "a first token is its own family")
+
+	errConsumed := fmt.Errorf("consumed")
+	const racers = 8
+	results := make(chan error, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results <- tokens.WithTx(ctx, func(tx models.RefreshTokenRepository) error {
+				n, err := tx.MarkRotatedIfActive(ctx, first.ID, time.Now().UTC())
+				if err != nil {
+					return err
+				}
+				if n == 0 {
+					return errConsumed
+				}
+				return tx.Create(ctx, &models.RefreshToken{
+					UserID: userID, FamilyID: first.FamilyID, TokenHash: hashOf(fmt.Sprintf("next-%s-%d", suffix, i)),
+					ExpiresAt: now.Add(time.Hour), LastActivity: time.Now().UTC(), SessionStartedAt: first.SessionStartedAt,
+				})
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+	won := 0
+	for err := range results {
+		if err == nil {
+			won++
+			continue
+		}
+		require.ErrorIs(t, err, errConsumed)
+	}
+	assert.Equal(t, 1, won, "exactly one rotation commits")
+	active, err := tokens.CountActiveInFamily(ctx, first.FamilyID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), active, "the family has one successor")
+
+	claims := make(chan bool, racers)
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := tokens.ClaimReuseGrace(ctx, first.ID, now.Add(-time.Minute))
+			assert.NoError(t, err)
+			claims <- ok
+		}()
+	}
+	wg.Wait()
+	close(claims)
+	wins := 0
+	for ok := range claims {
+		if ok {
+			wins++
+		}
+	}
+	assert.Equal(t, 1, wins, "the reuse grace is spent once")
+}

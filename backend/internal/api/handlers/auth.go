@@ -186,7 +186,7 @@ type RegisterRequest struct {
 
 // Login godoc
 // @Summary     User login
-// @Description Authenticate with username and password; returns a JWT access token and the user. Every credential failure (unknown user, wrong password, disabled account, SSO-only account) answers the same 401 "Invalid username or password". After 5 failed attempts for one username within 15 minutes, every login for that username answers 429 with Retry-After for 15 minutes.
+// @Description Authenticate with username and password; returns a JWT access token and the user. With refresh sessions on, the login starts a session: the access token lives ACCESS_TOKEN_EXPIRATION and carries the session ID (sid), and the response sets the httpOnly refresh_token cookie (Path /api/v1/auth, SameSite=Strict, Secure unless SECURE_COOKIES=false) for POST /api/v1/auth/refresh; without them the token lives JWT_EXPIRATION. Every credential failure (unknown user, wrong password, disabled account, SSO-only account) answers the same 401 "Invalid username or password". After 5 failed attempts for one username within 15 minutes, every login for that username answers 429 with Retry-After for 15 minutes.
 // @Tags        auth
 // @Accept      json
 // @Produce     json
@@ -320,6 +320,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	// With a refresh repository the login starts a session; the access token
+	// carries its ID ("sid").
+	var sess refreshSession
+	if h.refreshTokenRepo != nil {
+		sess = newRefreshSession()
+	}
 	token, err := h.signToken(middleware.GenerateTokenOptions{
 		UserID:       fresh.ID,
 		Username:     fresh.Username,
@@ -329,9 +335,28 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		Expiration:   h.loginTokenExpiration(),
 		AuthProvider: authProviderOf(fresh),
 		Email:        fresh.Email,
+		SessionID:    sess.familyID,
 	})
 	if err != nil {
 		fail(loginFailure{reason: loginReasonTokenError, userID: user.ID, httpCode: http.StatusInternalServerError, err: err})
+		return
+	}
+
+	// Close the disable race: re-read the user after signing and before the
+	// token or a refresh token leaves the server.
+	if err := recheckUserActive(ctx, h.userRepo, fresh.ID); err != nil {
+		if respondCancelled(c, err) {
+			return
+		}
+		if errors.Is(err, errAccountDisabled) || errors.Is(err, errUserGone) {
+			fail(loginFailure{reason: loginReasonRecheckFailed, userID: user.ID, httpCode: http.StatusUnauthorized})
+		} else {
+			fail(loginFailure{reason: loginReasonRecheckError, userID: user.ID, httpCode: http.StatusInternalServerError, err: err})
+		}
+		return
+	}
+
+	if h.refreshTokenRepo != nil && !h.startSession(c, fresh.ID, sess, fail) {
 		return
 	}
 
@@ -345,13 +370,43 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, LoginResponse{Token: token, User: *fresh})
 }
 
-// loginTokenExpiration is the lifetime of a login token. The login starts no
-// refresh session, so the token is one "issued outside a refresh session"
-// and lives JWT_EXPIRATION (as in the source project without refresh
-// tokens). A login that starts a refresh session uses
-// ACCESS_TOKEN_EXPIRATION instead.
+// loginTokenExpiration is the lifetime of a login token. A login with a
+// refresh repository starts a session and its token lives
+// ACCESS_TOKEN_EXPIRATION (the client refreshes it). Without one the token
+// is "issued outside a refresh session" and lives JWT_EXPIRATION.
 func (h *AuthHandler) loginTokenExpiration() time.Duration {
+	if h.refreshTokenRepo != nil {
+		return h.cfg.AccessTokenExpiration
+	}
 	return h.cfg.JWTExpiration
+}
+
+// startSession stores the first refresh token of the login session sess and
+// sets the cookie. It fails closed: when the token cannot be stored, or a
+// logout-all or revoke ended the session before the answer, it revokes the
+// family, answers through fail and returns false. The writes are detached: a
+// client that leaves cannot skip the session cap or the abandon revoke.
+func (h *AuthHandler) startSession(c *gin.Context, userID string, sess refreshSession, fail func(loginFailure)) bool {
+	wctx, cancel := detachedCtx(c)
+	defer cancel()
+	raw, expires, err := h.createRefreshToken(wctx, c, h.refreshTokenRepo, userID, sess, "")
+	if err != nil {
+		fail(loginFailure{reason: loginReasonSessionError, userID: userID, httpCode: http.StatusInternalServerError, err: err})
+		return false
+	}
+	if err := recheckSessionActive(wctx, h.refreshTokenRepo, sess.familyID); err != nil {
+		if rerr := h.refreshTokenRepo.RevokeFamily(wctx, sess.familyID); rerr != nil {
+			h.log().Error("Failed to revoke an abandoned login session", "user_id", userID, "session_id", sess.familyID, "error", rerr)
+		}
+		if errors.Is(err, errSessionRevoked) {
+			fail(loginFailure{reason: loginReasonSessionRevoked, userID: userID, httpCode: http.StatusUnauthorized})
+		} else {
+			fail(loginFailure{reason: loginReasonSessionError, userID: userID, httpCode: http.StatusInternalServerError, err: err})
+		}
+		return false
+	}
+	h.setRefreshCookie(c, raw, expires)
+	return true
 }
 
 // unusableForPassword returns the failure reason when the user cannot sign in

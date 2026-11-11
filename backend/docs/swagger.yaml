@@ -17,6 +17,11 @@ definitions:
       user:
         $ref: '#/definitions/models.User'
     type: object
+  handlers.RefreshResponse:
+    properties:
+      token:
+        type: string
+    type: object
   handlers.RegisterRequest:
     properties:
       display_name:
@@ -124,11 +129,16 @@ paths:
     post:
       consumes:
       - application/json
-      description: Authenticate with username and password; returns a JWT access token
-        and the user. Every credential failure (unknown user, wrong password, disabled
-        account, SSO-only account) answers the same 401 "Invalid username or password".
-        After 5 failed attempts for one username within 15 minutes, every login for
-        that username answers 429 with Retry-After for 15 minutes.
+      description: 'Authenticate with username and password; returns a JWT access
+        token and the user. With refresh sessions on, the login starts a session:
+        the access token lives ACCESS_TOKEN_EXPIRATION and carries the session ID
+        (sid), and the response sets the httpOnly refresh_token cookie (Path /api/v1/auth,
+        SameSite=Strict, Secure unless SECURE_COOKIES=false) for POST /api/v1/auth/refresh;
+        without them the token lives JWT_EXPIRATION. Every credential failure (unknown
+        user, wrong password, disabled account, SSO-only account) answers the same
+        401 "Invalid username or password". After 5 failed attempts for one username
+        within 15 minutes, every login for that username answers 429 with Retry-After
+        for 15 minutes.'
       parameters:
       - description: Login credentials
         in: body
@@ -176,6 +186,81 @@ paths:
       summary: User login
       tags:
       - auth
+  /api/v1/auth/logout:
+    post:
+      description: 'Ends the sessions that the request proves: the session of the
+        refresh token cookie and the session (sid) of a valid bearer token. It revokes
+        their refresh tokens, blocks the sessions so that all their access tokens
+        get 401, blocks the presented access token until its expiry, closes the WebSockets
+        opened with it and deletes the cookie. Other sessions of the user keep working.
+        An expired or invalid bearer token is ignored. A request without a cookie
+        and without a valid bearer token ends nothing and answers 200; a repeated
+        logout answers 200. The request needs the X-Requested-With header (any value)
+        and must not be cross-site; otherwise 403. When a lookup, revoke or block
+        fails, the other steps still run and the cookie is deleted, but the answer
+        is 500.'
+      parameters:
+      - description: Any value (CSRF protection), for example XMLHttpRequest
+        in: header
+        name: X-Requested-With
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Cross-site request refused
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Logout
+      tags:
+      - auth
+  /api/v1/auth/logout-all:
+    post:
+      description: 'Ends every session of the current user: revokes all their refresh
+        tokens, blocks every session that can still hold a live access token, writes
+        a user block that rejects every access token issued up to now, blocks the
+        presented access token, closes all WebSockets of the user and deletes the
+        cookie. A login after the answer works. It is idempotent. When a step fails,
+        the other steps still run and the answer is 500.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Logout from all sessions
+      tags:
+      - auth
   /api/v1/auth/me:
     get:
       description: Returns the authenticated user. A disabled account answers 401,
@@ -206,6 +291,58 @@ paths:
               type: string
             type: object
       summary: Get current user
+      tags:
+      - auth
+  /api/v1/auth/refresh:
+    post:
+      description: Issues a new access token for the session of the refresh token
+        cookie and rotates the refresh token (the old one is consumed, a new cookie
+        is set). The request needs the X-Requested-With header (any value) and must
+        not be cross-site; otherwise 403. A session ends SESSION_MAX_LIFETIME after
+        login and SESSION_IDLE_TIMEOUT after its last login or refresh; rotation never
+        extends it, and the access token never outlives it. A token rotated less than
+        REFRESH_REUSE_GRACE ago (two tabs refreshing at once) gets one more access
+        token, once, without a new cookie. Any other reuse of a consumed token revokes
+        the session and blocks its access tokens. Every refusal answers the same 401
+        and deletes the cookie.
+      parameters:
+      - description: Any value (CSRF protection), for example XMLHttpRequest
+        in: header
+        name: X-Requested-With
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.RefreshResponse'
+        "401":
+          description: Invalid or expired session
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Cross-site request refused
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "501":
+          description: Refresh tokens not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Refresh access token
       tags:
       - auth
   /api/v1/auth/register:

@@ -68,6 +68,11 @@ type RefreshTokenRepository interface {
 	// the token is still active. It returns the number of rows changed (0 when
 	// another request already consumed or revoked the token).
 	MarkRotatedIfActive(ctx context.Context, id string, rotatedAt time.Time) (int64, error)
+	// ClaimReuseGrace spends the reuse grace of a consumed token: it clears
+	// RotatedAt, but only when a rotation consumed the token at or after
+	// rotatedSince. It returns true for the one caller that cleared it; every
+	// later claim (and a token revoked without rotation) returns false.
+	ClaimReuseGrace(ctx context.Context, id string, rotatedSince time.Time) (bool, error)
 	// RevokeFamily revokes all active tokens of a session family (including a
 	// token without a family whose own ID is the family ID).
 	RevokeFamily(ctx context.Context, familyID string) error
