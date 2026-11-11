@@ -1535,7 +1535,12 @@ func TestAuthHandlerSetters(t *testing.T) {
 			assert.NotNil(t, h.wsRevoker)
 			assert.Equal(t, cfg.AccessTokenExpiration, h.loginTokenExpiration())
 		}
-		w := postJSON(t, newAuthRouter(h), "/api/v1/auth/login", loginBody(t, "alice", testPassword))
+		// A session login needs the same-site marker; the plain login does not.
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody(t, "alice", testPassword)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		w := httptest.NewRecorder()
+		newAuthRouter(h).ServeHTTP(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
 		var resp LoginResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))

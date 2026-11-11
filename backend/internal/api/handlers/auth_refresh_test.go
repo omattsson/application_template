@@ -832,7 +832,7 @@ func TestCookieEndpointsRefuseCrossSiteRequests(t *testing.T) {
 		{name: "no header, foreign origin", opts: []reqOpt{withoutCSRF(), withHeader("Origin", "https://evil.example")}},
 		{name: "cross-site fetch metadata", opts: []reqOpt{withHeader("Sec-Fetch-Site", "cross-site")}},
 	}
-	for _, path := range []string{"/api/v1/auth/refresh", "/api/v1/auth/logout"} {
+	for _, path := range []string{"/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout"} {
 		for _, tt := range tests {
 			path, tt := path, tt
 			t.Run(path+" "+tt.name, func(t *testing.T) {
@@ -848,6 +848,94 @@ func TestCookieEndpointsRefuseCrossSiteRequests(t *testing.T) {
 			})
 		}
 	}
+}
+
+// Login CSRF: a login that sets the session cookie needs the same-site marker
+// and a JSON Content-Type, checked before the body, the user lookup, bcrypt
+// and the throttle. A cross-site form (text/plain carrying a JSON body)
+// cannot plant the attacker's session, and forged attempts do not use up the
+// throttle budget of the victim's name.
+func TestLoginRefusesForgedCrossSiteRequests(t *testing.T) {
+	t.Parallel()
+	// The body a cross-site <form enctype="text/plain"> produces from the
+	// input name `{"username":"alice","password":"x","x":"` and value `"}`.
+	forged := `{"username":"alice","password":"wrong-password","x":"="}`
+	tests := []struct {
+		name        string
+		contentType string
+		wantBody    string
+		opts        []reqOpt
+		wantCode    int
+	}{
+		{name: "forged text/plain form", contentType: "text/plain", opts: []reqOpt{withoutCSRF()},
+			wantCode: http.StatusForbidden, wantBody: `{"error":"Cross-site request refused: send the X-Requested-With header"}`},
+		{name: "JSON without the marker", contentType: "application/json", opts: []reqOpt{withoutCSRF()},
+			wantCode: http.StatusForbidden, wantBody: `{"error":"Cross-site request refused: send the X-Requested-With header"}`},
+		{name: "cross-site fetch metadata", contentType: "application/json", opts: []reqOpt{withHeader("Sec-Fetch-Site", "cross-site")},
+			wantCode: http.StatusForbidden, wantBody: `{"error":"Cross-site request refused: send the X-Requested-With header"}`},
+		{name: "marker but text/plain", contentType: "text/plain",
+			wantCode: http.StatusUnsupportedMediaType, wantBody: `{"error":"Content-Type must be application/json"}`},
+		{name: "marker but a form encoding", contentType: "application/x-www-form-urlencoded",
+			wantCode: http.StatusUnsupportedMediaType, wantBody: `{"error":"Content-Type must be application/json"}`},
+		{name: "marker but no Content-Type", contentType: "",
+			wantCode: http.StatusUnsupportedMediaType, wantBody: `{"error":"Content-Type must be application/json"}`},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSessionHarness(t, nil)
+			var lookups int
+			var mu sync.Mutex
+			s.users.gate = func(op, _ string) {
+				if op == "by_username" {
+					mu.Lock()
+					lookups++
+					mu.Unlock()
+				}
+			}
+			opts := append([]reqOpt{withHeader("Content-Type", tt.contentType)}, tt.opts...)
+
+			// Ten forged attempts with a wrong password: more than the throttle
+			// threshold if any of them reached the password check.
+			for i := 0; i < 10; i++ {
+				w := s.post(t, "/api/v1/auth/login", forged, opts...)
+				require.Equal(t, tt.wantCode, w.Code, w.Body.String())
+				assert.JSONEq(t, tt.wantBody, w.Body.String())
+				assert.Nil(t, refreshCookieOf(t, w), "no cookie is set")
+			}
+			assert.Zero(t, s.rowCount(t), "no session is created")
+			mu.Lock()
+			assert.Zero(t, lookups, "refused before the user lookup")
+			mu.Unlock()
+
+			// The victim's own login still works: no throttle budget was used.
+			_, raw := s.login(t, "alice")
+			assert.NotEmpty(t, raw)
+		})
+	}
+
+	t.Run("a JSON Content-Type with parameters is accepted", func(t *testing.T) {
+		t.Parallel()
+		s := newSessionHarness(t, nil)
+		w := s.post(t, "/api/v1/auth/login", loginBody(t, "alice", testPassword), withHeader("Content-Type", "application/json; charset=utf-8"))
+		assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.NotNil(t, refreshCookieOf(t, w))
+	})
+
+	// Without a refresh repository the login sets no cookie and is unchanged
+	// (no marker, any Content-Type): its token is only in the JSON body,
+	// which a cross-site page cannot read.
+	t.Run("without refresh sessions the login is unchanged", func(t *testing.T) {
+		t.Parallel()
+		h, _, _ := newTestAuthHandler(newMockUserRepo(localUser("u1", "alice")), testAuthConfig(), nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody(t, "alice", testPassword)))
+		req.Header.Set("Content-Type", "text/plain")
+		w := httptest.NewRecorder()
+		newAuthRouter(h).ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, w.Header().Values("Set-Cookie"))
+	})
 }
 
 // A client that leaves during the refresh gets 499 and nothing changes: the

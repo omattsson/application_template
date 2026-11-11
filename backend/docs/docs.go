@@ -20,7 +20,7 @@ const docTemplate = `{
     "paths": {
         "/api/v1/auth/login": {
             "post": {
-                "description": "Authenticate with username and password; returns a JWT access token and the user. With refresh sessions on, the login starts a session: the access token lives ACCESS_TOKEN_EXPIRATION and carries the session ID (sid), and the response sets the httpOnly refresh_token cookie (Path /api/v1/auth, SameSite=Strict, Secure unless SECURE_COOKIES=false) for POST /api/v1/auth/refresh; without them the token lives JWT_EXPIRATION. Every credential failure (unknown user, wrong password, disabled account, SSO-only account) answers the same 401 \"Invalid username or password\". After 5 failed attempts for one username within 15 minutes, every login for that username answers 429 with Retry-After for 15 minutes.",
+                "description": "Authenticate with username and password; returns a JWT access token and the user. With refresh sessions on, the login starts a session: the access token lives ACCESS_TOKEN_EXPIRATION and carries the session ID (sid), and the response sets the httpOnly refresh_token cookie (Path /api/v1/auth, SameSite=Strict, Secure unless SECURE_COOKIES=false) for POST /api/v1/auth/refresh; without them the token lives JWT_EXPIRATION. With refresh sessions on, the request needs the X-Requested-With header (any value) and must not be cross-site (403), and its Content-Type must be application/json (415); both are checked first (login CSRF protection). Every credential failure (unknown user, wrong password, disabled account, SSO-only account) answers the same 401 \"Invalid username or password\". After 5 failed attempts for one username within 15 minutes, every login for that username answers 429 with Retry-After for 15 minutes.",
                 "consumes": [
                     "application/json"
                 ],
@@ -32,6 +32,12 @@ const docTemplate = `{
                 ],
                 "summary": "User login",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Required with refresh sessions on (any value, for example XMLHttpRequest)",
+                        "name": "X-Requested-With",
+                        "in": "header"
+                    },
                     {
                         "description": "Login credentials",
                         "name": "credentials",
@@ -67,8 +73,26 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "Cross-site request refused",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "413": {
                         "description": "Request Entity Too Large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "415": {
+                        "description": "Content-Type must be application/json",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

@@ -57,6 +57,9 @@ const (
 	msgPasswordTooLong      = "Password must be at most 72 bytes"
 	msgInvalidEmail         = "Invalid email address"
 	msgDisplayNameTooLong   = "Display name must be at most 255 characters"
+	// msgJSONContentTypeRequired is the 415 of a session login without a JSON
+	// Content-Type.
+	msgJSONContentTypeRequired = "Content-Type must be application/json"
 )
 
 // usernamePattern is the format of a self-registered username. The length is
@@ -186,19 +189,32 @@ type RegisterRequest struct {
 
 // Login godoc
 // @Summary     User login
-// @Description Authenticate with username and password; returns a JWT access token and the user. With refresh sessions on, the login starts a session: the access token lives ACCESS_TOKEN_EXPIRATION and carries the session ID (sid), and the response sets the httpOnly refresh_token cookie (Path /api/v1/auth, SameSite=Strict, Secure unless SECURE_COOKIES=false) for POST /api/v1/auth/refresh; without them the token lives JWT_EXPIRATION. Every credential failure (unknown user, wrong password, disabled account, SSO-only account) answers the same 401 "Invalid username or password". After 5 failed attempts for one username within 15 minutes, every login for that username answers 429 with Retry-After for 15 minutes.
+// @Description Authenticate with username and password; returns a JWT access token and the user. With refresh sessions on, the login starts a session: the access token lives ACCESS_TOKEN_EXPIRATION and carries the session ID (sid), and the response sets the httpOnly refresh_token cookie (Path /api/v1/auth, SameSite=Strict, Secure unless SECURE_COOKIES=false) for POST /api/v1/auth/refresh; without them the token lives JWT_EXPIRATION. With refresh sessions on, the request needs the X-Requested-With header (any value) and must not be cross-site (403), and its Content-Type must be application/json (415); both are checked first (login CSRF protection). Every credential failure (unknown user, wrong password, disabled account, SSO-only account) answers the same 401 "Invalid username or password". After 5 failed attempts for one username within 15 minutes, every login for that username answers 429 with Retry-After for 15 minutes.
 // @Tags        auth
 // @Accept      json
 // @Produce     json
-// @Param       credentials body     LoginRequest true "Login credentials"
-// @Success     200         {object} LoginResponse
-// @Failure     400         {object} map[string]string
-// @Failure     401         {object} map[string]string
-// @Failure     413         {object} map[string]string
-// @Failure     429         {object} map[string]string
-// @Failure     500         {object} map[string]string
+// @Param       X-Requested-With header   string       false "Required with refresh sessions on (any value, for example XMLHttpRequest)"
+// @Param       credentials      body     LoginRequest true  "Login credentials"
+// @Success     200              {object} LoginResponse
+// @Failure     400              {object} map[string]string
+// @Failure     401              {object} map[string]string
+// @Failure     403              {object} map[string]string "Cross-site request refused"
+// @Failure     413              {object} map[string]string
+// @Failure     415              {object} map[string]string "Content-Type must be application/json"
+// @Failure     429              {object} map[string]string
+// @Failure     500              {object} map[string]string
 // @Router      /api/v1/auth/login [post]
 func (h *AuthHandler) Login(c *gin.Context) {
+	// A login that sets the session cookie must come from our own pages, or
+	// a cross-site form could plant the attacker's session in the victim's
+	// browser (login CSRF): a SameSite=Strict cookie can still be set by the
+	// answer to a cross-site top-level POST. Checked before the body, the
+	// throttle and any lookup, so a forged request costs nothing and uses no
+	// throttle budget of the name.
+	if h.refreshTokenRepo != nil && !requireSessionLoginRequest(c) {
+		return
+	}
+
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBindError(c, err)
@@ -368,6 +384,24 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		"request_id", c.GetString(requestIDKey))
 	noStore(c)
 	c.JSON(http.StatusOK, LoginResponse{Token: token, User: *fresh})
+}
+
+// requireSessionLoginRequest refuses a login that would set the session
+// cookie unless the request carries the same-site marker (the rule of
+// refresh and logout, 403) and a Content-Type of application/json (415). A
+// cross-site form can send neither: it cannot set the header, and its
+// enctype is never application/json (text/plain can still carry a JSON
+// body, which ShouldBindJSON would decode). It writes the answer and returns
+// false on refusal.
+func requireSessionLoginRequest(c *gin.Context) bool {
+	if !requireSameSiteRequest(c) {
+		return false
+	}
+	if c.ContentType() != "application/json" {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": msgJSONContentTypeRequired})
+		return false
+	}
+	return true
 }
 
 // loginTokenExpiration is the lifetime of a login token. A login with a
