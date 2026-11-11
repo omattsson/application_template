@@ -540,3 +540,49 @@ func TestAuthOnEveryV1RouteIsAuthenticated(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, w.Code, "%s %s", r.Method, r.Path)
 	}
 }
+
+// TestSetupBuildsTheOIDCProviderFromTheConfig: without an injected client,
+// Setup builds the identity provider from OIDC_* (no network at
+// construction); a configuration it cannot use is an error and nothing is
+// registered.
+func TestSetupBuildsTheOIDCProviderFromTheConfig(t *testing.T) {
+	t.Parallel()
+	oidcCfg := func(issuer string) config.OIDCConfig {
+		return config.OIDCConfig{
+			Enabled: true, Issuer: issuer, ClientID: "app", ClientSecret: "s3cret-value",
+			RedirectURL: "https://app.example.com/api/v1/auth/oidc/callback", StateTTL: 5 * time.Minute,
+			FrontendPath: "/auth/callback",
+		}
+	}
+
+	t.Run("valid config", func(t *testing.T) {
+		t.Parallel()
+		cfg := authOn()
+		cfg.OIDC = oidcCfg("https://idp.example.com")
+		env := newAuthEnv(t, cfg) // no injected provider
+		assert.NotNil(t, env.res.AuthHandler)
+	})
+
+	t.Run("unusable config", func(t *testing.T) {
+		t.Parallel()
+		cfg := authOn()
+		cfg.OIDC = oidcCfg("http://idp.example.com")
+		db := openAuthDB(t)
+		st := sessionstore.NewMemory()
+		t.Cleanup(st.Stop)
+		router := gin.New()
+		res, err := Setup(router, Deps{
+			Config: cfg, Repository: handlers.NewMockRepository(), HealthChecker: health.New(), Hub: websocket.NewHub(),
+			Auth: &AuthDeps{
+				Users: database.NewGORMUserRepository(db), RefreshTokens: database.NewGORMRefreshTokenRepository(db),
+				APIKeys: database.NewGORMAPIKeyRepository(db), AuditLogs: database.NewGORMAuditLogRepository(db),
+				SessionStore: st,
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "oidc")
+		assert.NotContains(t, err.Error(), "s3cret-value")
+		assert.Nil(t, res)
+		assert.Empty(t, router.Routes())
+	})
+}

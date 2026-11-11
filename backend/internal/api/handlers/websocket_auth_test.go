@@ -210,9 +210,12 @@ func TestHandleWebSocket_RecheckAfterRegistration(t *testing.T) {
 		handler.SetIdentityResolver(func(*gin.Context) websocket.ClientIdentity {
 			return websocket.ClientIdentity{UserID: "u1"}
 		})
-		var seen []websocket.ClientIdentity
+		// The re-check runs in the server goroutine.
+		seen := make(chan websocket.ClientIdentity, 4)
 		handler.SetRecheck(func(_ context.Context, ids []websocket.ClientIdentity) []bool {
-			seen = append(seen, ids...)
+			for _, id := range ids {
+				seen <- id
+			}
 			return []bool{revoked}
 		})
 		url := newWSTestServer(t, handler)
@@ -229,8 +232,13 @@ func TestHandleWebSocket_RecheckAfterRegistration(t *testing.T) {
 		} else {
 			waitForHubClients(t, hub, 1)
 		}
-		require.Len(t, seen, 1)
-		assert.Equal(t, "u1", seen[0].UserID)
+		select {
+		case id := <-seen:
+			assert.Equal(t, "u1", id.UserID)
+		case <-time.After(2 * time.Second):
+			t.Fatal("the re-check did not run")
+		}
+		assert.Empty(t, seen, "one re-check per socket")
 		_ = conn.Close()
 		hub.Shutdown()
 	}
