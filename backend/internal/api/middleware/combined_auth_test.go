@@ -63,10 +63,10 @@ func TestCombinedAuth(t *testing.T) {
 
 		{name: "repos set: valid bearer", deps: withRepos, headers: map[string]string{"Authorization": "Bearer " + good}, want: http.StatusOK},
 		{name: "repos set: revoked bearer", deps: withRepos, headers: map[string]string{"Authorization": "Bearer " + revoked}, want: http.StatusUnauthorized},
-		{name: "repos set: garbage bearer does not fall through to the key", deps: withRepos, headers: map[string]string{"Authorization": "Bearer garbage", "X-API-Key": rawKey}, want: http.StatusUnauthorized},
+		{name: "repos set: garbage bearer does not fall through to the key", deps: withRepos, headers: map[string]string{"Authorization": "Bearer garbage", "X-API-Key": rawKey}, want: http.StatusBadRequest},
 		{name: "repos set: no credentials", deps: withRepos, want: http.StatusUnauthorized},
 		{name: "repos set: ApiKey scheme does not authenticate", deps: withRepos, headers: map[string]string{"Authorization": "ApiKey " + rawKey}, want: http.StatusUnauthorized},
-		{name: "repos set: X-API-Key is refused until key verification exists", deps: withRepos, headers: map[string]string{"X-API-Key": rawKey}, want: http.StatusUnauthorized},
+		{name: "repos set: a malformed X-API-Key is refused before any lookup", deps: withRepos, headers: map[string]string{"X-API-Key": rawKey}, want: http.StatusUnauthorized},
 		{name: "repos set: only one repo set behaves as JWT only", deps: APIKeyAuthDeps{JWTSecret: testSecret, APIKeyRepo: explodingAPIKeyRepo{}}, headers: map[string]string{"X-API-Key": rawKey}, want: http.StatusUnauthorized},
 	}
 

@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"backend/internal/models"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Compile-time interface check.
@@ -85,6 +87,74 @@ func (r *GORMAPIKeyRepository) ListByUser(ctx context.Context, userID string) ([
 	return keys, nil
 }
 
+// apiKeyListColumns are the columns of a list page: everything but the hash.
+var apiKeyListColumns = []string{"id", "user_id", "name", "prefix", "created_at", "last_used_at", "expires_at"}
+
+// ListPaged returns one page of API keys and the number of matches. See
+// models.APIKeyRepository.
+func (r *GORMAPIKeyRepository) ListPaged(ctx context.Context, filter models.APIKeyFilter, limit, offset int) ([]*models.APIKey, int64, error) {
+	where := func(q *gorm.DB) *gorm.DB {
+		if filter.UserID != "" {
+			q = q.Where("user_id = ?", filter.UserID)
+		}
+		return q
+	}
+	db := r.DB.WithContext(ctx)
+	var total int64
+	if err := where(db.Model(&models.APIKey{})).Count(&total).Error; err != nil {
+		return nil, 0, repoError(ctx, "list_paged", err)
+	}
+	q := where(db.Model(&models.APIKey{})).Select(apiKeyListColumns).Order("created_at DESC").Order("id DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+		if offset > 0 {
+			q = q.Offset(offset)
+		}
+	}
+	keys := []*models.APIKey{}
+	if err := q.Find(&keys).Error; err != nil {
+		return nil, 0, repoError(ctx, "list_paged", err)
+	}
+	return keys, total, nil
+}
+
+// CreateLimited inserts an API key unless its owner already has maxActive
+// keys that have not expired. The owner row is locked for the count and the
+// insert, so concurrent creates of one user cannot pass the limit. See
+// models.APIKeyRepository.
+func (r *GORMAPIKeyRepository) CreateLimited(ctx context.Context, key *models.APIKey, maxActive int, now time.Time) error {
+	if maxActive < 1 {
+		return dberrors.NewDatabaseError("create", dberrors.ErrValidation)
+	}
+	if err := key.Validate(); err != nil {
+		return validationError("create", err)
+	}
+	if key.ID == "" {
+		key.ID = uuid.New().String()
+	}
+	key.CreatedAt = time.Now().UTC()
+	err := r.Tx(ctx, func(tx *gorm.DB) error {
+		var owner models.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", key.UserID).Take(&owner).Error; err != nil {
+			return err
+		}
+		var active int64
+		if err := tx.Model(&models.APIKey{}).
+			Where("user_id = ? AND (expires_at IS NULL OR expires_at > ?)", key.UserID, now.UTC()).
+			Count(&active).Error; err != nil {
+			return err
+		}
+		if active >= int64(maxActive) {
+			return models.ErrTooManyAPIKeys
+		}
+		return tx.Create(key).Error
+	})
+	if errors.Is(err, models.ErrTooManyAPIKeys) {
+		return err
+	}
+	return repoError(ctx, "create", err)
+}
+
 // write runs one statement with the lock retry and returns the changed rows.
 func (r *GORMAPIKeyRepository) write(ctx context.Context, op string, fn func(db *gorm.DB) *gorm.DB) (int64, error) {
 	var affected int64
@@ -99,15 +169,27 @@ func (r *GORMAPIKeyRepository) write(ctx context.Context, op string, fn func(db 
 	return affected, nil
 }
 
-// UpdateLastUsed sets the last_used_at timestamp of an API key.
+// UpdateLastUsed sets the last_used_at timestamp of an API key. MySQL reports
+// 0 affected rows when the new value equals the stored one (the same
+// millisecond), so zero rows is not "not found": the key is looked up, and
+// only a key that does not exist (for this user) is ErrNotFound. This runs on
+// the authentication path, where a missing-row error must not appear for a key
+// that has just authenticated.
 func (r *GORMAPIKeyRepository) UpdateLastUsed(ctx context.Context, userID, keyID string, t time.Time) error {
 	n, err := r.write(ctx, "update_last_used", func(db *gorm.DB) *gorm.DB {
 		return db.Model(&models.APIKey{}).Where("user_id = ? AND id = ?", userID, keyID).Update("last_used_at", t.UTC())
 	})
-	if err == nil && n == 0 {
-		err = dberrors.NewDatabaseError("update_last_used", dberrors.ErrNotFound)
+	if err != nil || n > 0 {
+		return err
 	}
-	return err
+	var exists int64
+	if cerr := r.DB.WithContext(ctx).Model(&models.APIKey{}).Where("user_id = ? AND id = ?", userID, keyID).Limit(1).Count(&exists).Error; cerr != nil {
+		return repoError(ctx, "update_last_used", cerr)
+	}
+	if exists == 0 {
+		return dberrors.NewDatabaseError("update_last_used", dberrors.ErrNotFound)
+	}
+	return nil
 }
 
 // Delete removes an API key by user ID and key ID.

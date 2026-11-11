@@ -16,6 +16,272 @@
     "host": "localhost:8081",
     "basePath": "/",
     "paths": {
+        "/api/v1/api-keys": {
+            "get": {
+                "description": "Returns one page of the caller's keys, newest first. The key itself is never returned, only its prefix. An admin can pass all=true for the keys of every user, or user_id for one user; for any other role both are 403 (except the caller's own user_id). A request authenticated with an API key is refused (403).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "api-keys"
+                ],
+                "summary": "List API keys",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page, from 1",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 25, at most 100)",
+                        "name": "pageSize",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Admin only: the keys of all users",
+                        "name": "all",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Admin only: the keys of one user",
+                        "name": "user_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIKeyListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Creates a key for the caller. The key has the role of its owner at the time of each request (a demoted owner's keys are demoted). An expiry is required: set expires_at (YYYY-MM-DD or RFC3339) or expires_in_days, not both, at most 365 days ahead by default. The caller can have 25 active keys by default (409 above that). The raw key (sk_ and 64 hex characters) is returned once in raw_key, with Cache-Control no-store, and cannot be retrieved again; only its SHA-256 is stored. A request authenticated with an API key is refused (403): manage keys with a login session. Unknown request fields are refused.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "api-keys"
+                ],
+                "summary": "Create an API key",
+                "parameters": [
+                    {
+                        "description": "Key name and expiry",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CreateAPIKeyRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CreateAPIKeyResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "Request body too large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/api-keys/{id}": {
+            "delete": {
+                "description": "Deletes (revokes) a key at once: it stops authenticating with the next request and the WebSocket connections opened with it close with code 1008. A user can delete their own keys; an admin can delete any key. A key of another user, for a caller who is not an admin, is 404 like a key that does not exist. A request authenticated with an API key is refused (403).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "api-keys"
+                ],
+                "summary": "Delete an API key",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "API key ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/auth/login": {
             "post": {
                 "description": "Authenticate with username and password; returns a JWT access token and the user. With refresh sessions on, the login starts a session: the access token lives ACCESS_TOKEN_EXPIRATION and carries the session ID (sid), and the response sets the httpOnly refresh_token cookie (Path /api/v1/auth, SameSite=Strict, Secure unless SECURE_COOKIES=false) for POST /api/v1/auth/refresh; without them the token lives JWT_EXPIRATION. With refresh sessions on, the request needs the X-Requested-With header (any value) and must not be cross-site (403), and its Content-Type must be application/json (415); both are checked first (login CSRF protection). Every credential failure (unknown user, wrong password, disabled account, SSO-only account) answers the same 401 \"Invalid username or password\". After 5 failed attempts for one username within 15 minutes, every login for that username answers 429 with Retry-After for 15 minutes.",
@@ -1075,6 +1341,65 @@
         }
     },
     "definitions": {
+        "handlers.APIKeyListResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.APIKey"
+                    }
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "pageSize": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.CreateAPIKeyRequest": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "expires_in_days": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.CreateAPIKeyResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "prefix": {
+                    "description": "Prefix is the first 16 hex characters of the key (not secret enough to\nuse alone): it identifies the key in the list.",
+                    "type": "string"
+                },
+                "raw_key": {
+                    "description": "RawKey is \"sk_\" and 64 hex characters, shown once.",
+                    "type": "string"
+                }
+            }
+        },
         "handlers.LoginRequest": {
             "type": "object",
             "required": [
@@ -1169,6 +1494,33 @@
                     "type": "string"
                 },
                 "uptime": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.APIKey": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_used_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "prefix": {
+                    "description": "Prefix is the first APIKeyPrefixLen characters of the raw key.",
+                    "type": "string"
+                },
+                "user_id": {
                     "type": "string"
                 }
             }

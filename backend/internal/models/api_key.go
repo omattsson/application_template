@@ -6,9 +6,22 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
+
+// ErrTooManyAPIKeys: the user already has the maximum number of active (not
+// expired) API keys (APIKeyRepository.CreateLimited).
+var ErrTooManyAPIKeys = errors.New("too many active API keys")
+
+// APIKeyFilter selects API keys for APIKeyRepository.ListPaged. A zero field
+// does not filter.
+type APIKeyFilter struct {
+	// UserID matches the owner exactly.
+	UserID string
+}
 
 // APIKeyPrefixLen is the number of leading characters of a raw API key that
 // are stored in clear (APIKey.Prefix) for display and lookup.
@@ -52,6 +65,18 @@ type APIKeyRepository interface {
 	FindByPrefix(ctx context.Context, prefix string) ([]*APIKey, error)
 	// ListByUser returns the keys of a user, newest first.
 	ListByUser(ctx context.Context, userID string) ([]*APIKey, error)
+	// ListPaged returns one page of the keys that match filter, newest
+	// first, without the hash, and the number of all matches. limit <= 0
+	// returns all matches; offset applies only with a limit.
+	ListPaged(ctx context.Context, filter APIKeyFilter, limit, offset int) ([]*APIKey, int64, error)
+	// CreateLimited is Create with a cap: in one transaction that locks the
+	// owner row it counts the owner's keys that have not expired at now and
+	// returns ErrTooManyAPIKeys when there are already maxActive. An owner
+	// that does not exist is dberrors.ErrNotFound; maxActive < 1 is
+	// dberrors.ErrValidation.
+	CreateLimited(ctx context.Context, key *APIKey, maxActive int, now time.Time) error
+	// UpdateLastUsed sets last_used_at. A key that exists is a success even
+	// when the row did not change; a missing key is dberrors.ErrNotFound.
 	UpdateLastUsed(ctx context.Context, userID, keyID string, t time.Time) error
 	Delete(ctx context.Context, userID, keyID string) error
 	// DeleteAllForUser removes every API key of the user in one statement and
@@ -70,6 +95,32 @@ func GenerateAPIKey() (rawKey, prefix, hash string, err error) {
 	}
 	rawKey = hex.EncodeToString(b)
 	return rawKey, rawKey[:APIKeyPrefixLen], HashAPIKey(rawKey), nil
+}
+
+// APIKeyRawPrefix starts every API key that a client sees ("sk_<64 hex>"). It
+// is not secret: it lets a person and a secret scanner recognise a key. The
+// stored prefix and hash are of the 64 hex characters after it.
+const APIKeyRawPrefix = "sk_"
+
+// FormatAPIKey returns the form of rawKey (from GenerateAPIKey) that a
+// client sends in the X-API-Key header: APIKeyRawPrefix + rawKey.
+func FormatAPIKey(rawKey string) string { return APIKeyRawPrefix + rawKey }
+
+// ParseAPIKey returns the raw key of a client key ("sk_" and exactly 64
+// lower-case hex characters). Any other value is not a key of this
+// application, so it is refused without a database lookup.
+func ParseAPIKey(clientKey string) (rawKey string, ok bool) {
+	raw, found := strings.CutPrefix(clientKey, APIKeyRawPrefix)
+	if !found || len(raw) != apiKeyBytes*2 {
+		return "", false
+	}
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return "", false
+		}
+	}
+	return raw, true
 }
 
 // HashAPIKey returns the SHA-256 hex digest of a raw API key. A key is 32

@@ -1,5 +1,46 @@
 basePath: /
 definitions:
+  handlers.APIKeyListResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/models.APIKey'
+        type: array
+      page:
+        type: integer
+      pageSize:
+        type: integer
+      total:
+        type: integer
+    type: object
+  handlers.CreateAPIKeyRequest:
+    properties:
+      expires_at:
+        type: string
+      expires_in_days:
+        type: integer
+      name:
+        type: string
+    type: object
+  handlers.CreateAPIKeyResponse:
+    properties:
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      prefix:
+        description: |-
+          Prefix is the first 16 hex characters of the key (not secret enough to
+          use alone): it identifies the key in the list.
+        type: string
+      raw_key:
+        description: RawKey is "sk_" and 64 hex characters, shown once.
+        type: string
+    type: object
   handlers.LoginRequest:
     properties:
       password:
@@ -65,6 +106,24 @@ definitions:
       uptime:
         type: string
     type: object
+  models.APIKey:
+    properties:
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      last_used_at:
+        type: string
+      name:
+        type: string
+      prefix:
+        description: Prefix is the first APIKeyPrefixLen characters of the raw key.
+        type: string
+      user_id:
+        type: string
+    type: object
   models.Item:
     properties:
       created_at:
@@ -125,6 +184,197 @@ info:
   title: Backend API
   version: "1.0"
 paths:
+  /api/v1/api-keys:
+    get:
+      description: Returns one page of the caller's keys, newest first. The key itself
+        is never returned, only its prefix. An admin can pass all=true for the keys
+        of every user, or user_id for one user; for any other role both are 403 (except
+        the caller's own user_id). A request authenticated with an API key is refused
+        (403).
+      parameters:
+      - description: Page, from 1
+        in: query
+        name: page
+        type: integer
+      - description: Page size (default 25, at most 100)
+        in: query
+        name: pageSize
+        type: integer
+      - description: 'Admin only: the keys of all users'
+        in: query
+        name: all
+        type: boolean
+      - description: 'Admin only: the keys of one user'
+        in: query
+        name: user_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIKeyListResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "499":
+          description: Client closed request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List API keys
+      tags:
+      - api-keys
+    post:
+      consumes:
+      - application/json
+      description: 'Creates a key for the caller. The key has the role of its owner
+        at the time of each request (a demoted owner''s keys are demoted). An expiry
+        is required: set expires_at (YYYY-MM-DD or RFC3339) or expires_in_days, not
+        both, at most 365 days ahead by default. The caller can have 25 active keys
+        by default (409 above that). The raw key (sk_ and 64 hex characters) is returned
+        once in raw_key, with Cache-Control no-store, and cannot be retrieved again;
+        only its SHA-256 is stored. A request authenticated with an API key is refused
+        (403): manage keys with a login session. Unknown request fields are refused.'
+      parameters:
+      - description: Key name and expiry
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CreateAPIKeyRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.CreateAPIKeyResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Request body too large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "499":
+          description: Client closed request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create an API key
+      tags:
+      - api-keys
+  /api/v1/api-keys/{id}:
+    delete:
+      description: 'Deletes (revokes) a key at once: it stops authenticating with
+        the next request and the WebSocket connections opened with it close with code
+        1008. A user can delete their own keys; an admin can delete any key. A key
+        of another user, for a caller who is not an admin, is 404 like a key that
+        does not exist. A request authenticated with an API key is refused (403).'
+      parameters:
+      - description: API key ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "499":
+          description: Client closed request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete an API key
+      tags:
+      - api-keys
   /api/v1/auth/login:
     post:
       consumes:

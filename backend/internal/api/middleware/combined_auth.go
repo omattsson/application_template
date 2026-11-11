@@ -1,9 +1,6 @@
 package middleware
 
 import (
-	"net/http"
-	"strings"
-
 	"backend/internal/models"
 	"backend/internal/sessionstore"
 
@@ -11,32 +8,41 @@ import (
 )
 
 // APIKeyAuthDeps holds the dependencies for combined JWT + API-key auth.
-//
-// The API-key branch is not implemented yet (the "API keys" task fills it
-// in). APIKeyRepo and UserRepo are already part of the struct so that task
-// does not change the signature of CombinedAuth.
 type APIKeyAuthDeps struct {
 	JWTSecret    string
 	APIKeyRepo   models.APIKeyRepository
 	UserRepo     models.UserRepository
 	SessionStore sessionstore.SessionStore
-	// FailClosedOnStoreError is JWTAuthOptions.FailClosedOnStoreError.
+	// FailClosedOnStoreError is JWTAuthOptions.FailClosedOnStoreError. For the
+	// API-key branch it makes a failing database lookup 500 instead of 401
+	// (a key is never accepted on a failed lookup, in either mode).
 	FailClosedOnStoreError bool
 }
 
 // CombinedAuth returns middleware that accepts:
 //  1. Authorization: Bearer <jwt>: the JWT path (AuthRequiredWithOptions).
-//  2. X-API-Key: <key>: the API-key path. NOT IMPLEMENTED YET: when
-//     APIKeyRepo and UserRepo are both set, a request without a Bearer
-//     header is answered 401 and never authenticated.
+//  2. X-API-Key: sk_<64 hex>: the API-key path (APIKeyAuthenticator). The
+//     header is the only place a key is read: never the query string and
+//     never the Authorization header.
 //
-// When APIKeyRepo or UserRepo is nil the middleware is the JWT middleware.
+// When APIKeyRepo or UserRepo is nil the middleware is the JWT middleware and
+// X-API-Key does not authenticate.
 //
-// Fallthrough rules (kept for the API-key branch):
-//   - A header that starts with "Bearer " is a JWT request and never falls
-//     through to the API key, so a bad token with a good key is refused.
+// Rules of the combination (see APIKeyAuthenticator.middleware):
+//   - A request with an X-API-Key header is authenticated only by that key.
+//     An invalid, expired, deleted or unknown key, a disabled or deleted owner,
+//     an empty value and a repeated header are all 401 with the same body. It
+//     never falls through to the JWT path or to "no authentication".
+//   - A request with a Bearer Authorization header is a JWT request.
+//   - A request with both is refused with 400 before either is checked.
 //   - Any other Authorization scheme ("ApiKey ...", "Basic ...") does not
-//     authenticate; only the X-API-Key header would.
+//     authenticate and does not stop the X-API-Key header from doing so.
+//   - A request with neither is 401.
+//
+// On success the key branch sets the same context values as the JWT path
+// (user ID, username, role: the owner's current role), the auth method
+// AuthMethodAPIKey, the key ID (GetAPIKeyIDFromContext) and the key expiry
+// (GetTokenExpiryFromContext). It sets no jti and no session ID.
 func CombinedAuth(deps APIKeyAuthDeps) gin.HandlerFunc {
 	jwtMW := AuthRequiredWithOptions(JWTAuthOptions{
 		JWTSecret:              deps.JWTSecret,
@@ -47,17 +53,5 @@ func CombinedAuth(deps APIKeyAuthDeps) gin.HandlerFunc {
 		return jwtMW
 	}
 
-	return func(c *gin.Context) {
-		// Prefer JWT Bearer when present.
-		authHeader := c.GetHeader("Authorization")
-		if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
-			jwtMW(c)
-			return
-		}
-
-		// STUB: API-key verification is added by the API keys task (prefix
-		// lookup, constant-time hash compare, expiry, disabled user, rate
-		// limit). Until then no key authenticates, whatever the header says.
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization required"})
-	}
+	return NewAPIKeyAuthenticator(deps).middleware(jwtMW)
 }
