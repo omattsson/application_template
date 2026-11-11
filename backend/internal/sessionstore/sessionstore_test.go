@@ -297,6 +297,33 @@ func TestBlockUserLifecycle(t *testing.T) {
 	})
 }
 
+// The cut of a user block never moves back: a BlockUser whose clock reads an
+// earlier time (a replica that is behind, or a write that commits late) keeps
+// the later cut, so the tokens that the first block revoked stay revoked.
+func TestBlockUserCutNeverMovesBack(t *testing.T) {
+	t.Parallel()
+	eachBackend(t, func(t *testing.T, s sessionstore.SessionStore, clk *fakeClock) {
+		t.Helper()
+		ctx := context.Background()
+		later := clk.Now()
+		require.NoError(t, s.BlockUser(ctx, "u", later.Add(time.Hour)))
+		issued := later.Add(-time.Second) // revoked by the first block
+
+		clk.Advance(-time.Minute) // the second writer's clock is a minute behind
+		require.NoError(t, s.BlockUser(ctx, "u", clk.Now().Add(time.Hour)))
+
+		blocked, err := s.IsUserBlocked(ctx, "u", issued)
+		require.NoError(t, err)
+		assert.True(t, blocked, "an earlier block time must not lower the cut")
+		blocked, err = s.IsUserBlocked(ctx, "u", later)
+		require.NoError(t, err)
+		assert.True(t, blocked, "the cut stays at the later block, inclusive")
+		blocked, err = s.IsUserBlocked(ctx, "u", later.Add(time.Millisecond))
+		require.NoError(t, err)
+		assert.False(t, blocked, "a token issued after the later cut stays valid")
+	})
+}
+
 func TestBlockSession(t *testing.T) {
 	t.Parallel()
 	eachBackend(t, func(t *testing.T, s sessionstore.SessionStore, clk *fakeClock) {

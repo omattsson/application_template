@@ -90,9 +90,14 @@ func (s *memoryStore) BlockUser(ctx context.Context, userID string, until time.T
 	if err := preflight(ctx, userID); err != nil {
 		return err
 	}
-	blockedAt := s.nowMs()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Read the time under the lock and keep the later cut, so the cut never
+	// moves back (a block that read its time earlier but writes later).
+	blockedAt := s.nowMs()
+	if cur, ok := s.users[userID]; ok && cur.blockedAtMs > blockedAt {
+		blockedAt = cur.blockedAtMs
+	}
 	put(s.users, userID, memEntry{expiresMs: expiryMs(until), blockedAtMs: blockedAt})
 	return nil
 }

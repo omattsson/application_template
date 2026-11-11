@@ -71,8 +71,8 @@ type SessionStore interface {
 	// BlockUser revokes every access token of the user that was issued at or
 	// before now, to the millisecond. The block lasts until `until` (the
 	// longest token lifetime). A token issued after the block (for example
-	// after a password reset) stays valid. A second block moves the cut
-	// forward and keeps the later expiry.
+	// after a password reset) stays valid. A second block keeps the later
+	// cut (a block time read earlier never lowers it) and the later expiry.
 	BlockUser(ctx context.Context, userID string, until time.Time) error
 	// IsUserBlocked reports whether a token of the user issued at issuedAt is
 	// revoked. See userBlockApplies for the rule.

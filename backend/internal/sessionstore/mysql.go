@@ -64,16 +64,18 @@ func (s *mysqlStore) write(ctx context.Context, fn func(db *gorm.DB) error) erro
 }
 
 // upsert writes the rows. When a row exists it keeps the later expiry, so a
-// short block never shortens a long one, and sets the extra columns. All rows
-// share one expiry.
-func (s *mysqlStore) upsert(ctx context.Context, rows []SessionEntry, withData bool) error {
-	greatest := "GREATEST"
+// short block never shortens a long one. All rows share one expiry. With
+// blockedAtMs > 0 (a user block) an existing row also keeps the later block
+// time in data, so the cut never moves back; the rows carry it as Data.
+func (s *mysqlStore) upsert(ctx context.Context, rows []SessionEntry, blockedAtMs int64) error {
+	// The SQL fragments are constants chosen by dialect, never input.
+	greatest, intType, textType := "GREATEST", "SIGNED", "CHAR"
 	if s.db.Dialector.Name() == "sqlite" {
-		greatest = "MAX" // the unit tests run on SQLite
+		greatest, intType, textType = "MAX", "INTEGER", "TEXT" // the unit tests run on SQLite
 	}
 	set := map[string]any{"expires_at": gorm.Expr(greatest+"(expires_at, ?)", rows[0].ExpiresAt)}
-	if withData {
-		set["data"] = rows[0].Data
+	if blockedAtMs > 0 {
+		set["data"] = gorm.Expr("CAST("+greatest+"(CAST(data AS "+intType+"), ?) AS "+textType+")", blockedAtMs)
 	}
 	return s.write(ctx, func(db *gorm.DB) error {
 		return db.Clauses(clause.OnConflict{
@@ -99,7 +101,7 @@ func (s *mysqlStore) block(ctx context.Context, key, kind string, until time.Tim
 	if err := preflight(ctx, key); err != nil {
 		return err
 	}
-	if err := s.upsert(ctx, []SessionEntry{{EntryKey: key, Kind: kind, ExpiresAt: expiryMs(until)}}, false); err != nil {
+	if err := s.upsert(ctx, []SessionEntry{{EntryKey: key, Kind: kind, ExpiresAt: expiryMs(until)}}, 0); err != nil {
 		return fmt.Errorf("write %s: %w", kind, err)
 	}
 	return nil
@@ -117,18 +119,20 @@ func (s *mysqlStore) IsTokenBlocked(ctx context.Context, jti string) (bool, erro
 }
 
 // BlockUser writes the block time (now, in milliseconds) in Data. A second
-// block replaces it and keeps the later expiry.
+// block keeps the later block time and the later expiry, so the cut never
+// moves back.
 func (s *mysqlStore) BlockUser(ctx context.Context, userID string, until time.Time) error {
 	if err := preflight(ctx, userID); err != nil {
 		return err
 	}
+	blockedAt := s.nowMs()
 	row := SessionEntry{
 		EntryKey:  userID,
 		Kind:      kindUserBlock,
-		Data:      strconv.FormatInt(s.nowMs(), 10),
+		Data:      strconv.FormatInt(blockedAt, 10),
 		ExpiresAt: expiryMs(until),
 	}
-	if err := s.upsert(ctx, []SessionEntry{row}, true); err != nil {
+	if err := s.upsert(ctx, []SessionEntry{row}, max(blockedAt, 1)); err != nil {
 		return fmt.Errorf("write %s: %w", kindUserBlock, err)
 	}
 	return nil
@@ -196,7 +200,7 @@ func (s *mysqlStore) BlockSessions(ctx context.Context, sessionIDs []string, unt
 		for _, id := range ids[start:min(start+sessionBlockBatch, len(ids))] {
 			batch = append(batch, SessionEntry{EntryKey: id, Kind: kindSessionBlock, ExpiresAt: expires})
 		}
-		if err := s.upsert(ctx, batch, false); err != nil {
+		if err := s.upsert(ctx, batch, 0); err != nil {
 			return fmt.Errorf("blocked %d of %d sessions: %w", start, len(ids), err)
 		}
 	}
