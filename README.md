@@ -145,7 +145,7 @@ Backend:
 - `TRUSTED_PROXIES` - Proxies allowed to set the client IP (default in Compose: the frontend container, see [Behind a proxy](#behind-a-proxy))
 - `RATE_LIMIT` - API requests per minute per client IP (default: 100)
 - `LOGIN_RATE_LIMIT` - Login attempts per minute per client IP (default: 10)
-- `SERVER_SHUTDOWN_TIMEOUT` - Budget of each shutdown step (default: 30s). Compose gives the backend `stop_grace_period: 130s` (4 steps x 30s plus a margin); raise both together.
+- `SERVER_SHUTDOWN_TIMEOUT` - Budget of each shutdown step (default: 30s). Compose gives the backend `stop_grace_period: 170s` (5 steps x 30s plus a margin); raise both together.
 
 Frontend:
 

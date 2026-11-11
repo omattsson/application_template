@@ -20,6 +20,11 @@ const docTemplate = `{
     "paths": {
         "/api/v1/api-keys": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Returns one page of the caller's keys, newest first. The key itself is never returned, only its prefix. An admin can pass all=true for the keys of every user, or user_id for one user; for any other role both are 403 (except the caller's own user_id). A request authenticated with an API key is refused (403).",
                 "produces": [
                     "application/json"
@@ -109,6 +114,11 @@ const docTemplate = `{
                 }
             },
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Creates a key for the caller. The key has the role of its owner at the time of each request (a demoted owner's keys are demoted). An expiry is required: set expires_at (YYYY-MM-DD or RFC3339) or expires_in_days, not both, at most 365 days ahead by default. The caller can have 25 active keys by default (409 above that). The raw key (sk_ and 64 hex characters) is returned once in raw_key, with Cache-Control no-store, and cannot be retrieved again; only its SHA-256 is stored. A request authenticated with an API key is refused (403): manage keys with a login session. Unknown request fields are refused.",
                 "consumes": [
                     "application/json"
@@ -215,6 +225,11 @@ const docTemplate = `{
         },
         "/api/v1/api-keys/{id}": {
             "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Deletes (revokes) a key at once: it stops authenticating with the next request and the WebSocket connections opened with it close with code 1008. A user can delete their own keys; an admin can delete any key. A key of another user, for a caller who is not an admin, is 404 like a key that does not exist. A request authenticated with an API key is refused (403).",
                 "produces": [
                     "application/json"
@@ -565,6 +580,11 @@ const docTemplate = `{
         },
         "/api/v1/auth/logout-all": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Ends every session of the current user: revokes all their refresh tokens, blocks every session that can still hold a live access token, writes a user block that rejects every access token issued up to now, blocks the presented access token, closes all WebSockets of the user and deletes the cookie. A login after the answer works. It is idempotent. When a step fails, the other steps still run and the answer is 500.",
                 "produces": [
                     "application/json"
@@ -592,6 +612,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "An API key cannot end the sessions",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -606,6 +635,14 @@ const docTemplate = `{
         },
         "/api/v1/auth/me": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
                 "description": "Returns the authenticated user. A disabled account answers 401, a deleted one 404.",
                 "produces": [
                     "application/json"
@@ -971,6 +1008,14 @@ const docTemplate = `{
         },
         "/api/v1/items": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
                 "description": "Get a list of all items",
                 "produces": [
                     "application/json"
@@ -991,6 +1036,15 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required (AUTH_ENABLED=true)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1019,6 +1073,14 @@ const docTemplate = `{
                 }
             },
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
                 "description": "Create a new item with the provided information",
                 "consumes": [
                     "application/json"
@@ -1050,6 +1112,15 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required (AUTH_ENABLED=true)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1098,6 +1169,14 @@ const docTemplate = `{
         },
         "/api/v1/items/{id}": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
                 "description": "Get an item by its ID",
                 "produces": [
                     "application/json"
@@ -1124,6 +1203,15 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required (AUTH_ENABLED=true)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1161,6 +1249,14 @@ const docTemplate = `{
                 }
             },
             "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
                 "description": "Update an item's information",
                 "consumes": [
                     "application/json"
@@ -1199,6 +1295,15 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required (AUTH_ENABLED=true)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1254,6 +1359,14 @@ const docTemplate = `{
                 }
             },
             "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
                 "description": "Delete an item by its ID",
                 "produces": [
                     "application/json"
@@ -1277,6 +1390,15 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required (AUTH_ENABLED=true)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1316,6 +1438,14 @@ const docTemplate = `{
         },
         "/api/v1/ping": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
                 "description": "Ping test endpoint",
                 "produces": [
                     "application/json"
@@ -1333,13 +1463,22 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "401": {
+                        "description": "Authentication required (AUTH_ENABLED=true)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
         },
         "/api/v1/ui-config": {
             "get": {
-                "description": "Returns the display values of the web UI: the product title (APP_TITLE) and whether authentication is enabled (AUTH_ENABLED). Public: no authentication, so the login page can use it. Cached for 5 minutes.",
+                "description": "Returns the display values of the web UI: the product title (APP_TITLE), whether authentication is enabled (AUTH_ENABLED), whether the single sign-on login is offered (oidc_enabled: AUTH_ENABLED and OIDC_ENABLED) and whether the password form is shown (local_auth_enabled: AUTH_ENABLED, and OIDC off or OIDC_LOCAL_AUTH). Public in both auth modes: no authentication, so the login page can use it. Cached for 5 minutes.",
                 "produces": [
                     "application/json"
                 ],
@@ -2161,11 +2300,33 @@ const docTemplate = `{
         },
         "/ws": {
             "get": {
-                "description": "Upgrades the HTTP connection to a WebSocket for real-time events.",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Upgrades the HTTP connection to a WebSocket for real-time events. With AUTH_ENABLED=false no credential is needed and any topic can be subscribed. With AUTH_ENABLED=true the upgrade needs one credential: ` + "`" + `Authorization: Bearer \u003cjwt\u003e` + "`" + `, ` + "`" + `X-API-Key: sk_\u003ckey\u003e` + "`" + ` (header only), or ` + "`" + `?token=\u003cjwt\u003e` + "`" + ` for browsers (removed from the URL before any logging). The upgrade runs the checks of the HTTP auth (token, session and user blocklists, a deleted or disabled user, an unknown, deleted or expired key) and counts against the per-IP RATE_LIMIT. A failed blocklist or user lookup refuses the upgrade (500). An open socket is closed with code 1008 on logout, logout-all, a disable, delete, role change or password reset of the user, a deleted key, and when the token or key expires; a periodic re-check closes the sockets that another replica revoked. Subscriptions are authorised: items and item:\u003cid\u003e for every user, user:\u003cid\u003e for that user (and admins), admin:\u003cname\u003e for admins; any other topic is ignored.",
                 "tags": [
                     "websocket"
                 ],
                 "summary": "Open a WebSocket connection",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Access token (AUTH_ENABLED=true, browsers)",
+                        "name": "token",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "API key (AUTH_ENABLED=true, header only)",
+                        "name": "X-API-Key",
+                        "in": "header"
+                    }
+                ],
                 "responses": {
                     "101": {
                         "description": "Switching Protocols"
@@ -2179,8 +2340,35 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2408,6 +2596,16 @@ const docTemplate = `{
                     "type": "boolean",
                     "example": false
                 },
+                "local_auth_enabled": {
+                    "description": "LocalAuthEnabled tells the UI to show the username and password form:\nAUTH_ENABLED, and OIDC off or OIDC_LOCAL_AUTH=true. With OIDC on and\nOIDC_LOCAL_AUTH=false only a service account (the bootstrap admin) can\nstill log in with a password, through the API.",
+                    "type": "boolean",
+                    "example": false
+                },
+                "oidc_enabled": {
+                    "description": "OIDCEnabled tells the UI to offer the single sign-on button\n(AUTH_ENABLED and OIDC_ENABLED).",
+                    "type": "boolean",
+                    "example": false
+                },
                 "title": {
                     "description": "Title is the product name (APP_TITLE).",
                     "type": "string",
@@ -2627,6 +2825,20 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        }
+    },
+    "securityDefinitions": {
+        "ApiKeyAuth": {
+            "description": "With AUTH_ENABLED=true: an API key (sk_ and 64 hex characters) from POST /api/v1/api-keys. Not accepted on the key, user and audit log management routes or on logout-all.",
+            "type": "apiKey",
+            "name": "X-API-Key",
+            "in": "header"
+        },
+        "BearerAuth": {
+            "description": "With AUTH_ENABLED=true: \"Bearer \u003caccess token\u003e\" from POST /api/v1/auth/login or /api/v1/auth/refresh. Not used with AUTH_ENABLED=false.",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
         }
     }
 }`

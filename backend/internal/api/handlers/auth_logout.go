@@ -293,6 +293,8 @@ func (h *AuthHandler) recentSessionsToBlock(ctx context.Context, c *gin.Context,
 // @Success     200 {object} map[string]string
 // @Failure     401 {object} map[string]string
 // @Failure     500 {object} map[string]string
+// @Security    BearerAuth
+// @Failure     403 {object} map[string]string "An API key cannot end the sessions"
 // @Router      /api/v1/auth/logout-all [post]
 func (h *AuthHandler) LogoutAll(c *gin.Context) {
 	noStore(c)

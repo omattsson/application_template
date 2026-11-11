@@ -587,6 +587,8 @@ func (h *AuthHandler) Register(c *gin.Context) {
 // @Failure     401 {object} map[string]string
 // @Failure     404 {object} map[string]string
 // @Failure     500 {object} map[string]string
+// @Security    BearerAuth
+// @Security    ApiKeyAuth
 // @Router      /api/v1/auth/me [get]
 func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 	noStore(c)

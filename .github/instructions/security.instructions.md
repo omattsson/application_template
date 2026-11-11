@@ -55,9 +55,9 @@ The `Recovery()` middleware in `internal/api/middleware/middleware.go` catches p
 
 Shutdown timeouts:
 - The HTTP step gets `SERVER_SHUTDOWN_TIMEOUT` (default 30s; 5s when set to 0).
-- The leader, in-flight and telemetry steps each get their own budget of the same length. These budgets are detached, so a hung request does not starve the later steps.
+- The audit log drain (auth on), leader, in-flight and telemetry steps each get their own budget of the same length. These budgets are detached, so a hung request does not starve the later steps.
 - A server that does not finish in time is closed.
-- The worst case is about 4 x `SERVER_SHUTDOWN_TIMEOUT` (HTTP, leader, in-flight and telemetry steps each use their full budget), so the deploy grace period must be longer: `docker-compose.yml` sets `stop_grace_period: 130s` for the default 30s, and any other deployment's stop grace period follows the same rule; raise it with the timeout.
+- The worst case is about 5 x `SERVER_SHUTDOWN_TIMEOUT` (HTTP, audit log drain, leader, in-flight and telemetry steps each use their full budget), so the deploy grace period must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30s, and any other deployment's stop grace period follows the same rule; raise it with the timeout.
 
 Background work:
 - Periodic work is a `leader.Worker`. Pass it to `leader.NewGroup` in `buildServices` before `workers.Start`, because `Group.Add` takes effect only at the next term.

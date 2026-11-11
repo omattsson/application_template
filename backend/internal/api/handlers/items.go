@@ -63,6 +63,9 @@ func handleDBError(err error) (int, string) {
 // @Failure 413 {object} map[string]string "Request body too large"
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
+// @Security BearerAuth
+// @Security ApiKeyAuth
+// @Failure 401 {object} map[string]string "Authentication required (AUTH_ENABLED=true)"
 // @Router /api/v1/items [post]
 func (h *Handler) CreateItem(c *gin.Context) {
 	var item models.Item
@@ -103,6 +106,9 @@ func (h *Handler) CreateItem(c *gin.Context) {
 // @Failure 400 {object} map[string]string
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
+// @Security BearerAuth
+// @Security ApiKeyAuth
+// @Failure 401 {object} map[string]string "Authentication required (AUTH_ENABLED=true)"
 // @Router /api/v1/items [get]
 func (h *Handler) GetItems(c *gin.Context) {
 	// Parse query parameters
@@ -155,6 +161,9 @@ func (h *Handler) GetItems(c *gin.Context) {
 // @Failure 404 {object} map[string]string
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
+// @Security BearerAuth
+// @Security ApiKeyAuth
+// @Failure 401 {object} map[string]string "Authentication required (AUTH_ENABLED=true)"
 // @Router /api/v1/items/{id} [get]
 func (h *Handler) GetItem(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -188,6 +197,9 @@ func (h *Handler) GetItem(c *gin.Context) {
 // @Failure 413 {object} map[string]string "Request body too large"
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
+// @Security BearerAuth
+// @Security ApiKeyAuth
+// @Failure 401 {object} map[string]string "Authentication required (AUTH_ENABLED=true)"
 // @Router /api/v1/items/{id} [put]
 func (h *Handler) UpdateItem(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -251,6 +263,9 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 // @Failure 404 {object} map[string]string
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
+// @Security BearerAuth
+// @Security ApiKeyAuth
+// @Failure 401 {object} map[string]string "Authentication required (AUTH_ENABLED=true)"
 // @Router /api/v1/items/{id} [delete]
 func (h *Handler) DeleteItem(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)

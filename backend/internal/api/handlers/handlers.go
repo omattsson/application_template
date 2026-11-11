@@ -22,6 +22,9 @@ func HealthCheck(c *gin.Context) {
 // @Tags        ping
 // @Produce     json
 // @Success     200 {object} map[string]string
+// @Security    BearerAuth
+// @Security    ApiKeyAuth
+// @Failure     401 {object} map[string]string "Authentication required (AUTH_ENABLED=true)"
 // @Router      /api/v1/ping [get]
 func Ping(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "pong"})

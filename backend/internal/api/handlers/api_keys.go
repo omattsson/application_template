@@ -217,6 +217,7 @@ func validKeyName(name string) (string, bool) {
 // @Failure      413  {object}  map[string]string "Request body too large"
 // @Failure      499  {object}  map[string]string "Client closed request"
 // @Failure      500  {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/v1/api-keys [post]
 func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 	userID, ok := sessionOnly(c)
@@ -303,6 +304,7 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 // @Failure      403  {object}  map[string]string
 // @Failure      499  {object}  map[string]string "Client closed request"
 // @Failure      500  {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/v1/api-keys [get]
 func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 	callerID, ok := sessionOnly(c)
@@ -362,6 +364,7 @@ func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 // @Failure      404  {object}  map[string]string
 // @Failure      499  {object}  map[string]string "Client closed request"
 // @Failure      500  {object}  map[string]string
+// @Security     BearerAuth
 // @Router       /api/v1/api-keys/{id} [delete]
 func (h *APIKeyHandler) DeleteAPIKey(c *gin.Context) {
 	callerID, ok := sessionOnly(c)
