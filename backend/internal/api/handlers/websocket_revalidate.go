@@ -20,6 +20,17 @@ import (
 // that runs out of time has still finished the chunks before.
 const revalidateChunkSize = 200
 
+// defaultLookupTimeout bounds each lookup of a run (one batch read or one
+// blocklist check), well below websocket.RevalidateTimeout: a hung store or
+// database connection then fails the lookup while the run still has time,
+// which fails closed, instead of using up the run.
+const defaultLookupTimeout = 5 * time.Second
+
+// defaultMaxUnverifiedRuns is the number of revalidation runs in a row in
+// which an identity may stay unverified before the checker closes it (fail
+// closed).
+const defaultMaxUnverifiedRuns = 3
+
 // NewWebSocketRevocationChecker returns the check of the open sockets: the
 // hub runs it every revalidation interval (Hub.StartRevalidation) and the
 // WebSocket handler runs it once on each new socket (SetRecheck). For each
@@ -39,24 +50,65 @@ const revalidateChunkSize = 200
 // all), and one per further issue time only when a block falls between the
 // sockets of the user.
 //
-// A failed lookup is one of two things:
-//   - The run ran out of time or was cancelled (the run context ended): the
-//     identities it did not reach are not checked in this run and stay open.
-//     The next run starts with them (least recently checked first), so a run
-//     that is always too slow still checks every identity in turn.
-//   - The lookup itself failed while the run had time (a store or database
-//     error, also a query timeout of its own): failClosed selects the policy
+// Each lookup has its own timeout (defaultLookupTimeout, 5s, below the 30s
+// websocket.RevalidateTimeout of a run). A failed lookup is one of two
+// things:
+//   - The lookup failed while the run had time (a store or database error,
+//     or its own timeout: a hung connection): failClosed selects the policy
 //     for the identities that need that lookup. true reports them revoked, so
 //     their sockets close (the production wiring, R20: a revocation that
 //     cannot be checked must not keep a revoked socket open); false lets them
-//     pass. The failed dependency is not queried again in the run: a key
-//     batch failure concerns only the API key sockets, a user batch failure
-//     the sockets of a user, a session store failure every later identity.
+//     pass, unverified. The failed dependency is not queried again in the
+//     run: a key batch failure concerns only the API key sockets, a user batch
+//     failure the sockets of a user, a session store failure every later
+//     identity.
+//   - The run ran out of time or was cancelled (the run context ended): the
+//     identities it did not verify stay open in this run.
 //
-// Errors are logged at most once a minute (the rest at debug level); a
-// cancelled run (hub shutdown) logs at debug level. Each dependency may be nil
-// to skip its checks; with all nil it returns nil.
+// Unverified identities, in degraded mode: a revalidation run checks the
+// identities in the order of their last verification, oldest first; an
+// identity the checker has not seen yet counts as verified when it is first
+// seen (the WebSocket handler checked it at registration), so new sockets
+// cannot get ahead of older unverified ones. With failClosed, an identity
+// that stays unverified (not reached, or a lookup failed) in
+// defaultMaxUnverifiedRuns (M = 3) revalidation runs in a row is closed; a
+// verification resets the count, so a healthy run that reaches every
+// identity closes nothing. A cancelled run (hub shutdown) counts for nothing.
+//
+// Worst case, with failClosed and a store that stays slow without failing:
+// a socket revoked at time t closes at the end of the M-th run that starts
+// after t, so within M*P + T of t, with T = websocket.RevalidateTimeout and
+// P = max(revalidation interval, T) the most time between two run starts;
+// with the defaults (1m interval, 30s, M = 3): 3m30s. A store that fails or
+// hangs closes the sockets that need it in the first run: within P + T.
+//
+// The re-check of a new socket neither uses nor changes this state. Errors
+// are logged at most once a minute (the rest at debug level); a cancelled
+// run logs at debug level. Each dependency may be nil to skip its checks;
+// with all nil it returns nil.
 func NewWebSocketRevocationChecker(store sessionstore.SessionStore, users models.UserRepository, keys models.APIKeyRepository, failClosed bool) websocket.IdentityChecker {
+	c := newRevocationChecker(store, users, keys, checkerConfig{
+		failClosed:        failClosed,
+		lookupTimeout:     defaultLookupTimeout,
+		maxUnverifiedRuns: defaultMaxUnverifiedRuns,
+	})
+	if c == nil {
+		return nil
+	}
+	return c.check
+}
+
+// checkerConfig holds the policy of a revocation checker.
+type checkerConfig struct {
+	// lookupTimeout bounds each lookup; <= 0: only the run context.
+	lookupTimeout time.Duration
+	// maxUnverifiedRuns is the number of runs in a row an identity may stay
+	// unverified before it is closed (with failClosed); <= 0: never.
+	maxUnverifiedRuns int
+	failClosed        bool
+}
+
+func newRevocationChecker(store sessionstore.SessionStore, users models.UserRepository, keys models.APIKeyRepository, cfg checkerConfig) *revocationChecker {
 	if isNilDep(store) && isNilDep(users) && isNilDep(keys) {
 		return nil
 	}
@@ -69,13 +121,12 @@ func NewWebSocketRevocationChecker(store sessionstore.SessionStore, users models
 	if isNilDep(keys) {
 		keys = nil
 	}
-	c := &revocationChecker{
-		store: store, users: users, keys: keys, failClosed: failClosed,
-		errLog:      &logLimiter{interval: time.Minute},
-		slowLog:     &logLimiter{interval: time.Minute},
-		lastChecked: map[checkKey]uint64{},
+	return &revocationChecker{
+		store: store, users: users, keys: keys, cfg: cfg,
+		errLog:  &logLimiter{interval: time.Minute},
+		slowLog: &logLimiter{interval: time.Minute},
+		state:   map[checkKey]identityState{},
 	}
-	return c.check
 }
 
 // isNilDep reports whether a dependency interface is nil or holds a nil
@@ -86,6 +137,21 @@ func isNilDep(v any) bool {
 	}
 	rv := reflect.ValueOf(v)
 	return rv.Kind() == reflect.Pointer && rv.IsNil()
+}
+
+// registrationRecheckKey marks the context of the re-check of a new socket.
+type registrationRecheckKey struct{}
+
+// withRegistrationRecheck marks ctx as the re-check of a new socket: the
+// checker then runs without the order and the unverified counts of the
+// revalidation runs.
+func withRegistrationRecheck(ctx context.Context) context.Context {
+	return context.WithValue(ctx, registrationRecheckKey{}, true)
+}
+
+func isRegistrationRecheck(ctx context.Context) bool {
+	v, _ := ctx.Value(registrationRecheckKey{}).(bool)
+	return v
 }
 
 // checkKey is the comparable form of a socket identity.
@@ -117,73 +183,116 @@ func issueTimeOf(ms int64) time.Time {
 	return time.UnixMilli(ms)
 }
 
+// identityState is what the checker keeps of an identity between runs.
+type identityState struct {
+	// stamp orders the next run: 2*run for the run that last verified the
+	// identity, 2*run-1 for the run that first saw it (between the identities
+	// verified in the run before and those verified in that run).
+	stamp uint64
+	// unverified counts the revalidation runs in a row that did not verify it.
+	unverified int
+}
+
+func verifiedStamp(run uint64) uint64  { return 2 * run }
+func firstSeenStamp(run uint64) uint64 { return 2*run - 1 }
+
 type revocationChecker struct {
-	store      sessionstore.SessionStore
-	users      models.UserRepository
-	keys       models.APIKeyRepository
-	errLog     *logLimiter
-	slowLog    *logLimiter
-	failClosed bool
+	store   sessionstore.SessionStore
+	users   models.UserRepository
+	keys    models.APIKeyRepository
+	errLog  *logLimiter
+	slowLog *logLimiter
+	cfg     checkerConfig
 
 	mu sync.Mutex
-	// run counts the multi-identity runs; lastChecked holds the run in which
-	// each identity was last checked (absent: never), for the order of the
-	// next run. Only the identities of the last run are kept.
-	run         uint64
-	lastChecked map[checkKey]uint64
+	// run counts the revalidation runs; state holds the identities of the
+	// last run (the closed sockets drop out), so it is bounded by the open
+	// identities.
+	run   uint64
+	state map[checkKey]identityState
 }
 
 func (r *revocationChecker) check(ctx context.Context, identities []websocket.ClientIdentity) []bool {
 	cr := newCheckRun(r, ctx, identities)
-	cr.process(r.order(identities))
-	r.remember(identities, cr.decided)
+	if isRegistrationRecheck(ctx) {
+		order := make([]int, len(identities))
+		for i := range order {
+			order[i] = i
+		}
+		cr.process(order)
+		return cr.revoked
+	}
+	run, order := r.startRun(identities)
+	cr.process(order)
+	r.finishRun(run, cr)
 	return cr.revoked
 }
 
-// order returns the indices of identities, least recently checked first
-// (never checked first of all); ties keep the given order. A single identity
-// (the re-check of a new socket) does not use the state.
-func (r *revocationChecker) order(identities []websocket.ClientIdentity) []int {
-	idx := make([]int, len(identities))
-	for i := range idx {
-		idx[i] = i
-	}
-	if len(identities) < 2 {
-		return idx
-	}
-	last := make([]uint64, len(identities))
+// startRun numbers a revalidation run and returns the order of its
+// identities: oldest verification first, with an identity seen for the first
+// time counted as verified then; ties keep the given order.
+func (r *revocationChecker) startRun(identities []websocket.ClientIdentity) (uint64, []int) {
+	stamps := make([]uint64, len(identities))
 	r.mu.Lock()
-	for i, id := range identities {
-		last[i] = r.lastChecked[keyOfIdentity(id)]
-	}
-	r.mu.Unlock()
-	sort.SliceStable(idx, func(a, b int) bool { return last[idx[a]] < last[idx[b]] })
-	return idx
-}
-
-// remember records which identities this run checked. It keeps only the
-// identities of this run (the closed sockets drop out). A single-identity
-// call changes nothing.
-func (r *revocationChecker) remember(identities []websocket.ClientIdentity, decided []bool) {
-	if len(identities) < 2 {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.run++
-	next := make(map[checkKey]uint64, len(identities))
+	run := r.run
 	for i, id := range identities {
-		k := keyOfIdentity(id)
-		switch {
-		case decided[i]:
-			next[k] = r.run
-		default:
-			if v, ok := r.lastChecked[k]; ok {
-				next[k] = v
-			}
+		if st, ok := r.state[keyOfIdentity(id)]; ok {
+			stamps[i] = st.stamp
+		} else {
+			stamps[i] = firstSeenStamp(run)
 		}
 	}
-	r.lastChecked = next
+	r.mu.Unlock()
+	order := make([]int, len(identities))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return stamps[order[a]] < stamps[order[b]] })
+	return run, order
+}
+
+// finishRun records the outcome of a revalidation run and closes (fail
+// closed) the identities that stayed unverified for maxUnverifiedRuns runs in
+// a row. It keeps only the identities of this run.
+func (r *revocationChecker) finishRun(run uint64, cr *checkRun) {
+	cancelled := errors.Is(cr.ctx.Err(), context.Canceled)
+	limit := r.cfg.maxUnverifiedRuns
+	escalate := r.cfg.failClosed && limit > 0 && !cancelled
+	closed := 0
+	r.mu.Lock()
+	next := make(map[checkKey]identityState, len(cr.identities))
+	for i, id := range cr.identities {
+		k := keyOfIdentity(id)
+		st, ok := r.state[k]
+		if !ok {
+			st = identityState{stamp: firstSeenStamp(run)}
+		}
+		switch {
+		case cr.verified[i]:
+			st = identityState{stamp: verifiedStamp(run)}
+		case cancelled:
+			// A shutdown is no evidence about the identity.
+		default:
+			st.unverified++
+			if escalate && st.unverified >= limit && !cr.revoked[i] {
+				cr.revoked[i] = true
+				closed++
+			}
+		}
+		next[k] = st
+	}
+	r.state = next
+	r.mu.Unlock()
+	if closed == 0 {
+		return
+	}
+	msg := "WebSocket revalidation: closing sockets that could not be verified in several runs in a row (fail closed)"
+	if r.errLog.allow() {
+		slog.Error(msg, "identities", closed, "runs", limit)
+		return
+	}
+	slog.Debug(msg, "identities", closed, "runs", limit)
 }
 
 // userBlockState caches the user-block lookups of one user in a run.
@@ -201,9 +310,10 @@ type checkRun struct {
 	r          *revocationChecker
 	identities []websocket.ClientIdentity
 	revoked    []bool
-	// decided marks the identities this run checked (or revoked on a failed
-	// lookup); the others were not reached.
-	decided []bool
+	// verified marks the identities whose every check this run completed
+	// (revoked or not). The others were not reached or needed a lookup that
+	// failed.
+	verified []bool
 
 	keys       map[string]*models.APIKey // key ID -> key; a looked-up ID that is missing does not exist
 	keysLooked map[string]bool
@@ -223,7 +333,7 @@ func newCheckRun(r *revocationChecker, ctx context.Context, identities []websock
 	cr := &checkRun{
 		ctx: ctx, r: r, identities: identities,
 		revoked:        make([]bool, len(identities)),
-		decided:        make([]bool, len(identities)),
+		verified:       make([]bool, len(identities)),
 		keys:           map[string]*models.APIKey{},
 		keysLooked:     map[string]bool{},
 		users:          map[string]*models.User{},
@@ -270,9 +380,18 @@ func (cr *checkRun) process(order []int) {
 
 // ended reports whether the run context ended (a cancel or the deadline of
 // the run). A lookup error after that is the end of the run, not a failure of
-// the store: an error of a lookup whose own query timed out while the run
-// still had time is a failure.
+// the store; an error while the run still has time is a failure, also the
+// lookup timeout of lookupCtx.
 func (cr *checkRun) ended() bool { return cr.ctx.Err() != nil }
+
+// lookupCtx returns the context of one lookup: the run context bounded by
+// the lookup timeout.
+func (cr *checkRun) lookupCtx() (context.Context, context.CancelFunc) {
+	if cr.r.cfg.lookupTimeout <= 0 {
+		return cr.ctx, func() { /* the run context is not ours to cancel */ }
+	}
+	return context.WithTimeout(cr.ctx, cr.r.cfg.lookupTimeout)
+}
 
 // ranOut logs the end of a run that did not reach every identity.
 func (cr *checkRun) ranOut(checked int) {
@@ -281,7 +400,7 @@ func (cr *checkRun) ranOut(checked int) {
 		slog.Debug("WebSocket revalidation cancelled", "checked", checked, "identities", len(cr.identities))
 		return
 	}
-	msg := "WebSocket revalidation ran out of time; the next run starts with the unchecked sockets"
+	msg := "WebSocket revalidation ran out of time; the next run starts with the unchecked sockets, which close (fail closed) after several such runs in a row"
 	if cr.r.slowLog.allow() {
 		slog.Warn(msg, "checked", checked, "unchecked", left, "identities", len(cr.identities))
 		return
@@ -291,7 +410,7 @@ func (cr *checkRun) ranOut(checked int) {
 
 // failure logs a lookup that failed while the run still had time.
 func (cr *checkRun) failure(what string, err error, args ...any) {
-	args = append(args, "identities", len(cr.identities), "fail_closed", cr.r.failClosed, "error", err)
+	args = append(args, "identities", len(cr.identities), "fail_closed", cr.r.cfg.failClosed, "error", err)
 	msg := "WebSocket revalidation: " + what + " failed; the next run retries"
 	if cr.r.errLog.allow() {
 		slog.Error(msg, args...)
@@ -316,7 +435,9 @@ func (cr *checkRun) loadKeys(chunk []int) bool {
 	if len(ids) == 0 {
 		return true
 	}
-	found, err := cr.r.keys.FindByIDs(cr.ctx, ids)
+	ctx, cancel := cr.lookupCtx()
+	found, err := cr.r.keys.FindByIDs(ctx, ids)
+	cancel()
 	if err != nil {
 		if cr.ended() {
 			return false
@@ -347,7 +468,9 @@ func (cr *checkRun) loadUsers(chunk []int) bool {
 	if len(ids) == 0 {
 		return true
 	}
-	found, err := cr.r.users.FindByIDs(cr.ctx, ids)
+	ctx, cancel := cr.lookupCtx()
+	found, err := cr.r.users.FindByIDs(ctx, ids)
+	cancel()
 	if err != nil {
 		if cr.ended() {
 			return false
@@ -362,60 +485,100 @@ func (cr *checkRun) loadUsers(chunk []int) bool {
 	return true
 }
 
+// verdict is the outcome of one check of an identity.
+type verdict int
+
+const (
+	verdictPass    verdict = iota // not revoked by this check
+	verdictRevoked                // revoked by this check
+	verdictFailed                 // the lookup of this check failed
+)
+
 // checkOne checks identity i. It returns false when the run ended before
-// the identity was checked (it stays open and undecided).
+// the identity was checked (it stays open and unverified).
 func (cr *checkRun) checkOne(i int) bool {
 	id := cr.identities[i]
-	decide := func(revoked bool) bool {
-		cr.revoked[i] = revoked
-		cr.decided[i] = true
-		return true
+	failed := false
+	for _, v := range []verdict{cr.keyVerdict(id), cr.userVerdict(id)} {
+		switch {
+		case v == verdictRevoked:
+			cr.finish(i, true, true)
+			return true
+		case v == verdictFailed && cr.r.cfg.failClosed:
+			cr.finish(i, true, false)
+			return true
+		case v == verdictFailed:
+			failed = true // fail open: go on with the other checks
+		}
 	}
-	if cr.keyRevoked(id) || cr.userRevoked(id) {
-		return decide(true)
+	v := verdictPass
+	if cr.r.store != nil {
+		var ok bool
+		if v, ok = cr.storeVerdict(id); !ok {
+			return false
+		}
 	}
-	if cr.r.store == nil {
-		return decide(false)
+	switch v {
+	case verdictRevoked:
+		cr.finish(i, true, true)
+	case verdictFailed:
+		cr.finish(i, cr.r.cfg.failClosed, false)
+	case verdictPass:
+		cr.finish(i, false, !failed)
 	}
+	return true
+}
+
+func (cr *checkRun) finish(i int, revoked, verified bool) {
+	cr.revoked[i] = revoked
+	cr.verified[i] = verified
+}
+
+// keyVerdict checks the API key of the identity: deleted, expired or of
+// another user revokes it.
+func (cr *checkRun) keyVerdict(id websocket.ClientIdentity) verdict {
+	switch {
+	case id.APIKeyID == "" || cr.r.keys == nil:
+		return verdictPass
+	case cr.keysFailed:
+		return verdictFailed
+	}
+	key := cr.keys[id.APIKeyID]
+	if key == nil || key.UserID != id.UserID || (key.ExpiresAt != nil && !time.Now().Before(*key.ExpiresAt)) {
+		return verdictRevoked
+	}
+	return verdictPass
+}
+
+// userVerdict checks the user of the identity: deleted or disabled revokes
+// it.
+func (cr *checkRun) userVerdict(id websocket.ClientIdentity) verdict {
+	switch {
+	case id.UserID == "" || cr.r.users == nil:
+		return verdictPass
+	case cr.usersFailed:
+		return verdictFailed
+	}
+	if u := cr.users[id.UserID]; u == nil || u.Disabled {
+		return verdictRevoked
+	}
+	return verdictPass
+}
+
+// storeVerdict runs the blocklist checks of the identity. ok is false when
+// the run ended during a lookup.
+func (cr *checkRun) storeVerdict(id websocket.ClientIdentity) (v verdict, ok bool) {
 	blocked, ok := cr.storeChecks(id)
 	switch {
 	case !ok:
-		return false
-	case cr.storeFailed && !cr.r.failClosed:
-		// Fail open: the identity passes, but it was not checked.
-		return true
+		return verdictPass, false
 	case cr.storeFailed:
-		return decide(true)
+		return verdictFailed, true
+	case blocked:
+		return verdictRevoked, true
 	default:
-		return decide(blocked)
+		return verdictPass, true
 	}
-}
-
-// keyRevoked reports whether the API key of the identity revokes it: deleted,
-// expired or of another user. After a failed key lookup in this run, fail
-// closed revokes and fail open lets the identity go on to the next checks.
-func (cr *checkRun) keyRevoked(id websocket.ClientIdentity) bool {
-	if id.APIKeyID == "" || cr.r.keys == nil {
-		return false
-	}
-	if cr.keysFailed {
-		return cr.r.failClosed
-	}
-	key := cr.keys[id.APIKeyID]
-	return key == nil || key.UserID != id.UserID || (key.ExpiresAt != nil && !time.Now().Before(*key.ExpiresAt))
-}
-
-// userRevoked reports whether the user of the identity is deleted or
-// disabled, with the failure policy of keyRevoked.
-func (cr *checkRun) userRevoked(id websocket.ClientIdentity) bool {
-	if id.UserID == "" || cr.r.users == nil {
-		return false
-	}
-	if cr.usersFailed {
-		return cr.r.failClosed
-	}
-	u := cr.users[id.UserID]
-	return u == nil || u.Disabled
 }
 
 // blockLookup is one blocklist lookup by key, cached for the run.
@@ -432,7 +595,9 @@ func (cr *checkRun) cachedLookup(l blockLookup) (blocked, ok bool) {
 	if v, seen := l.cache[l.key]; seen {
 		return v, true
 	}
-	v, err := l.fn(cr.ctx, l.key)
+	ctx, cancel := cr.lookupCtx()
+	v, err := l.fn(ctx, l.key)
+	cancel()
 	if err != nil {
 		if cr.ended() {
 			return false, false
@@ -476,7 +641,9 @@ func (cr *checkRun) storeChecks(id websocket.ClientIdentity) (blocked, ok bool) 
 func (cr *checkRun) userBlocked(userID string, ms int64) (blocked, ok bool) {
 	st := cr.userBlocks[userID]
 	query := func(at int64) (bool, bool) {
-		v, err := cr.r.store.IsUserBlocked(cr.ctx, userID, issueTimeOf(at))
+		ctx, cancel := cr.lookupCtx()
+		v, err := cr.r.store.IsUserBlocked(ctx, userID, issueTimeOf(at))
+		cancel()
 		if err != nil {
 			if cr.ended() {
 				return false, false

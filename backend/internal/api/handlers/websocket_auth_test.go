@@ -216,7 +216,9 @@ func TestHandleWebSocket_RecheckAfterRegistration(t *testing.T) {
 		})
 		// The re-check runs in the server goroutine.
 		seen := make(chan websocket.ClientIdentity, 4)
-		handler.SetRecheck(func(_ context.Context, ids []websocket.ClientIdentity) []bool {
+		marked := make(chan bool, 4)
+		handler.SetRecheck(func(ctx context.Context, ids []websocket.ClientIdentity) []bool {
+			marked <- isRegistrationRecheck(ctx)
 			for _, id := range ids {
 				seen <- id
 			}
@@ -243,6 +245,7 @@ func TestHandleWebSocket_RecheckAfterRegistration(t *testing.T) {
 			t.Fatal("the re-check did not run")
 		}
 		assert.Empty(t, seen, "one re-check per socket")
+		assert.True(t, <-marked, "the re-check is marked, so it leaves the revalidation state alone")
 		_ = conn.Close()
 		hub.Shutdown()
 	}

@@ -11,9 +11,11 @@ import (
 // that did not handle the revoke request.
 const DefaultRevalidateInterval = time.Minute
 
-// revalidateTimeout bounds one revocation check, so a slow database cannot
-// pile up work.
-const revalidateTimeout = 30 * time.Second
+// RevalidateTimeout bounds one revalidation run, so a slow database cannot
+// pile up work. A checker should bound each of its lookups well below it (see
+// handlers.NewWebSocketRevocationChecker), so a hung lookup fails while the
+// run still has time.
+const RevalidateTimeout = 30 * time.Second
 
 // IdentityChecker reports which socket identities are revoked. The result
 // has one entry per identity: true closes the sockets of that identity. The
@@ -22,9 +24,10 @@ const revalidateTimeout = 30 * time.Second
 // production wiring fails closed, like the HTTP auth; see
 // handlers.NewWebSocketRevocationChecker). When the context ends, either
 // because the hub cancelled it (shutdown) or because the run reached
-// revalidateTimeout, it should return false for the identities it did not
-// check: that is not a store failure. The production checker starts the
-// next run with those identities.
+// RevalidateTimeout, the identities it did not check are not a store
+// failure in that run. The production checker leaves them open, starts the
+// next run with them, and closes an identity that stays unverified for
+// several runs in a row (fail closed).
 type IdentityChecker func(ctx context.Context, identities []ClientIdentity) []bool
 
 // identityKey is the comparable form of a ClientIdentity.
@@ -103,7 +106,7 @@ func (h *Hub) revalidate(check IdentityChecker) (closed int) {
 	}
 	h.mu.RUnlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), revalidateTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), RevalidateTimeout)
 	defer cancel()
 	// Stop the check early on shutdown.
 	go func() {

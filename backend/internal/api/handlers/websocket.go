@@ -100,7 +100,7 @@ func (h *WebSocketHandler) recheckRegistered(ctx context.Context, client *websoc
 	if h.recheck == nil {
 		return
 	}
-	if revoked := h.recheck(ctx, []websocket.ClientIdentity{identity}); len(revoked) == 1 && revoked[0] {
+	if revoked := h.recheck(withRegistrationRecheck(ctx), []websocket.ClientIdentity{identity}); len(revoked) == 1 && revoked[0] {
 		slog.Info("WebSocket closed after registration: credential revoked", "user_id", identity.UserID)
 		h.hub.DisconnectClient(client)
 	}

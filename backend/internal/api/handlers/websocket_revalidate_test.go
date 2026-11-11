@@ -16,19 +16,55 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// countingStore counts the blocklist lookups. With a budget >= 0, the lookups
-// after the first budget ones of a run block until the run context ends and
-// return its error (a run that is too slow, not a failing store). failErr
-// makes every lookup fail while the context is alive (a failing store).
+// runCtx is the context of one revalidation run, ended by the test (end), not
+// by a clock: end(context.DeadlineExceeded) is the run reaching its
+// RevalidateTimeout, end(context.Canceled) the hub shutting down.
+type runCtx struct {
+	context.Context // Background: no deadline, no values
+	done            chan struct{}
+	once            sync.Once
+	mu              sync.Mutex
+	err             error
+}
+
+func newRunCtx() *runCtx {
+	return &runCtx{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *runCtx) Done() <-chan struct{} { return c.done }
+
+func (c *runCtx) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *runCtx) end(err error) {
+	c.once.Do(func() {
+		c.mu.Lock()
+		c.err = err
+		c.mu.Unlock()
+		close(c.done)
+	})
+}
+
+// countingStore counts the blocklist lookups. With a budget >= 0, the lookup
+// after the first budget ones of a run ends the run (the run reached its
+// deadline: the onOver of startRun) and returns the context error, like a
+// query cut by the run deadline. failErr makes every lookup fail at once (a
+// failing store); hangFirst makes the first lookup hang until its own
+// context ends (a hung connection).
 type countingStore struct {
 	sessionstore.SessionStore
-	mu       sync.Mutex
-	calls    int
-	runCalls int
-	budget   int // < 0: no budget
-	failErr  error
-	tokens   []string // jti of every IsTokenBlocked call, in order
-	userBlk  int      // IsUserBlocked calls
+	mu        sync.Mutex
+	calls     int
+	runCalls  int
+	budget    int // < 0: no budget
+	failErr   error
+	hangFirst bool
+	onOver    func()
+	tokens    []string // jti of every IsTokenBlocked call, in order
+	userBlk   int      // IsUserBlocked calls
 }
 
 func newCountingStore(t *testing.T) *countingStore {
@@ -38,11 +74,12 @@ func newCountingStore(t *testing.T) *countingStore {
 	return &countingStore{SessionStore: inner, budget: -1}
 }
 
-// startRun resets the per-run budget.
-func (s *countingStore) startRun() {
+// startRun resets the per-run budget; onOver runs when a lookup exceeds it.
+func (s *countingStore) startRun(onOver func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runCalls = 0
+	s.onOver = onOver
 }
 
 func (s *countingStore) total() int {
@@ -64,6 +101,9 @@ func (s *countingStore) seenTokens() []string {
 }
 
 // enter counts a lookup and returns the error it must give (nil: go on).
+// A lookup that goes on answers at once, whatever its context: a healthy
+// store does not time out, so a short lookup timeout in a test only cuts the
+// hung lookups.
 func (s *countingStore) enter(ctx context.Context, jti string) error {
 	s.mu.Lock()
 	s.calls++
@@ -72,12 +112,16 @@ func (s *countingStore) enter(ctx context.Context, jti string) error {
 		s.tokens = append(s.tokens, jti)
 	}
 	over := s.budget >= 0 && s.runCalls > s.budget
-	failErr := s.failErr
+	hang := s.hangFirst && s.calls == 1
+	failErr, onOver := s.failErr, s.onOver
 	s.mu.Unlock()
 	if failErr != nil {
 		return failErr
 	}
-	if over {
+	if over && onOver != nil {
+		onOver()
+	}
+	if over || hang {
 		<-ctx.Done()
 		return fmt.Errorf("store query: %w", ctx.Err())
 	}
@@ -88,14 +132,14 @@ func (s *countingStore) IsTokenBlocked(ctx context.Context, jti string) (bool, e
 	if err := s.enter(ctx, jti); err != nil {
 		return false, err
 	}
-	return s.SessionStore.IsTokenBlocked(ctx, jti)
+	return s.SessionStore.IsTokenBlocked(context.WithoutCancel(ctx), jti)
 }
 
 func (s *countingStore) IsSessionBlocked(ctx context.Context, id string) (bool, error) {
 	if err := s.enter(ctx, ""); err != nil {
 		return false, err
 	}
-	return s.SessionStore.IsSessionBlocked(ctx, id)
+	return s.SessionStore.IsSessionBlocked(context.WithoutCancel(ctx), id)
 }
 
 func (s *countingStore) IsUserBlocked(ctx context.Context, id string, at time.Time) (bool, error) {
@@ -105,7 +149,15 @@ func (s *countingStore) IsUserBlocked(ctx context.Context, id string, at time.Ti
 	if err := s.enter(ctx, ""); err != nil {
 		return false, err
 	}
-	return s.SessionStore.IsUserBlocked(ctx, id, at)
+	return s.SessionStore.IsUserBlocked(context.WithoutCancel(ctx), id, at)
+}
+
+// runOnce runs check as one revalidation run whose deadline is the budget of
+// store.
+func runOnce(check websocket.IdentityChecker, store *countingStore, ids []websocket.ClientIdentity) []bool {
+	rc := newRunCtx()
+	store.startRun(func() { rc.end(context.DeadlineExceeded) })
+	return check(rc, ids)
 }
 
 // fakeUsers is an in-memory user repository that counts its lookups.
@@ -117,6 +169,7 @@ type fakeUsers struct {
 	byID     int
 	asked    int // user IDs asked for, over all batches
 	batchErr error
+	hang     bool // the batch hangs until its context ends
 }
 
 func newFakeUsers(n int) *fakeUsers {
@@ -128,14 +181,21 @@ func newFakeUsers(n int) *fakeUsers {
 	return f
 }
 
-func (f *fakeUsers) FindByIDs(_ context.Context, ids []string) (map[string]*models.User, error) {
+func (f *fakeUsers) FindByIDs(ctx context.Context, ids []string) (map[string]*models.User, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.byIDs++
 	f.asked += len(ids)
-	if f.batchErr != nil {
-		return nil, f.batchErr
+	hang, batchErr := f.hang, f.batchErr
+	f.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return nil, fmt.Errorf("users query: %w", ctx.Err())
 	}
+	if batchErr != nil {
+		return nil, batchErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := map[string]*models.User{}
 	for _, id := range ids {
 		if u, ok := f.users[id]; ok {
@@ -191,17 +251,32 @@ func (f *fakeKeys) FindByIDs(_ context.Context, ids []string) ([]*models.APIKey,
 }
 
 // jwtIdentities returns n JWT identities, each with its own user, token and
-// session.
-func jwtIdentities(n int) []websocket.ClientIdentity {
+// session, numbered from first.
+func jwtIdentitiesFrom(first, n int) []websocket.ClientIdentity {
 	ids := make([]websocket.ClientIdentity, n)
 	past := time.Now().Add(-time.Minute)
 	for i := range ids {
+		k := first + i
 		ids[i] = websocket.ClientIdentity{
-			UserID: fmt.Sprintf("user-%d", i), TokenID: fmt.Sprintf("jti-%d", i),
-			SessionID: fmt.Sprintf("sid-%d", i), IssuedAt: past,
+			UserID: fmt.Sprintf("user-%d", k), TokenID: fmt.Sprintf("jti-%d", k),
+			SessionID: fmt.Sprintf("sid-%d", k), IssuedAt: past,
 		}
 	}
 	return ids
+}
+
+func jwtIdentities(n int) []websocket.ClientIdentity { return jwtIdentitiesFrom(0, n) }
+
+// orderOnly is a fail-closed checker without the unverified-runs limit, to
+// test the order of the runs alone.
+func orderOnly(store sessionstore.SessionStore, users models.UserRepository) websocket.IdentityChecker {
+	return newRevocationChecker(store, users, nil, checkerConfig{failClosed: true, lookupTimeout: defaultLookupTimeout}).check
+}
+
+func TestRevocationCheckerLookupTimeoutIsBelowTheRunBudget(t *testing.T) {
+	t.Parallel()
+	assert.Less(t, defaultLookupTimeout, websocket.RevalidateTimeout)
+	assert.Positive(t, defaultMaxUnverifiedRuns)
 }
 
 // TestRevocationCheckerDeadlineMidRunRevokesNothing: a run that runs out of
@@ -210,23 +285,21 @@ func jwtIdentities(n int) []websocket.ClientIdentity {
 func TestRevocationCheckerDeadlineMidRunRevokesNothing(t *testing.T) {
 	t.Parallel()
 	store := newCountingStore(t)
-	store.budget = 4 // the run gets slow after 4 lookups
+	store.budget = 4 // the run reaches its deadline at the 5th lookup
 	ids := jwtIdentities(10)
 	require.NoError(t, store.BlockToken(context.Background(), "jti-0", time.Now().Add(time.Hour)))
 
-	check := NewWebSocketRevocationChecker(store, newFakeUsers(10), nil, true)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	got := check(ctx, ids)
+	got := runOnce(NewWebSocketRevocationChecker(store, newFakeUsers(10), nil, true), store, ids)
 
 	want := make([]bool, len(ids))
-	want[0] = true // checked before the run got slow: still revoked
+	want[0] = true // checked before the deadline: still revoked
 	assert.Equal(t, want, got, "the identities the run did not reach stay open")
 }
 
 // TestRevocationCheckerResumesWhereTheLastRunStopped: identities that a slow
 // run did not reach are checked first in the next run, so with a run that is
-// always too slow every identity is still checked, in turn.
+// always too slow every identity is still checked, in turn. The re-check of
+// a new socket between runs does not change that order.
 func TestRevocationCheckerResumesWhereTheLastRunStopped(t *testing.T) {
 	t.Parallel()
 	store := newCountingStore(t)
@@ -235,15 +308,12 @@ func TestRevocationCheckerResumesWhereTheLastRunStopped(t *testing.T) {
 	ids := jwtIdentities(n)
 	require.NoError(t, store.BlockToken(context.Background(), "jti-11", time.Now().Add(time.Hour)))
 
-	check := NewWebSocketRevocationChecker(store, newFakeUsers(n), nil, true)
+	check := orderOnly(store, newFakeUsers(n))
 	revokedSeen := false
 	var firstOfRun []string
 	for run := 0; run < 3*n && len(distinct(store.seenTokens())) < n; run++ {
 		before := len(store.seenTokens())
-		store.startRun()
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		got := check(ctx, ids) // the same order every run: the worst case
-		cancel()
+		got := runOnce(check, store, ids) // the same order every run: the worst case
 		if seen := store.seenTokens(); len(seen) > before {
 			firstOfRun = append(firstOfRun, seen[before])
 		}
@@ -254,12 +324,9 @@ func TestRevocationCheckerResumesWhereTheLastRunStopped(t *testing.T) {
 			}
 		}
 
-		// The re-check of a new socket between runs (SetRecheck) does not
-		// change the order of the next run.
-		store.startRun()
-		rctx, rcancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		check(rctx, ids[:1])
-		rcancel()
+		rc := newRunCtx()
+		store.startRun(func() { rc.end(context.DeadlineExceeded) })
+		check(withRegistrationRecheck(rc), ids[:1])
 	}
 
 	assert.Len(t, distinct(store.seenTokens()), n, "every identity was checked")
@@ -274,6 +341,164 @@ func distinct(s []string) map[string]bool {
 		m[v] = true
 	}
 	return m
+}
+
+// TestRevocationCheckerNewIdentitiesDoNotStarveOldOnes: under a store that
+// lets a run check 2 identities, new identities arrive before the old ones
+// in every run; the revoked old identity at the end is still found within
+// ceil(6/2) = 3 runs (new identities count as checked when first seen).
+func TestRevocationCheckerNewIdentitiesDoNotStarveOldOnes(t *testing.T) {
+	t.Parallel()
+	const old, perRun = 6, 2
+	store := newCountingStore(t)
+	store.budget = 3 * perRun // 3 lookups per identity: token, session, user block
+	require.NoError(t, store.BlockToken(context.Background(), "jti-5", time.Now().Add(time.Hour)))
+
+	check := orderOnly(store, newFakeUsers(1000))
+	ids := jwtIdentities(old)
+	found := 0
+	for run := 1; run <= 10 && found == 0; run++ {
+		if run > 1 { // two new sockets, first in the hub's order
+			ids = append(jwtIdentitiesFrom(100*run, perRun), ids...)
+		}
+		got := runOnce(check, store, ids)
+		for i, r := range got {
+			if r {
+				require.Equal(t, "jti-5", ids[i].TokenID, "only the blocked token is revoked")
+				found = run
+			}
+		}
+	}
+	require.NotZero(t, found, "the revoked old identity was never reached")
+	assert.LessOrEqual(t, found, (old+perRun-1)/perRun)
+}
+
+// TestRevocationCheckerClosesUnverifiedAfterMaxRuns: a store that hangs on
+// every lookup until the run deadline, with a lookup timeout too long to
+// help: no run verifies anything, and every identity closes in the M-th run
+// since it was first seen, none before. A cancelled run (shutdown) does not
+// count; fail open never closes.
+func TestRevocationCheckerClosesUnverifiedAfterMaxRuns(t *testing.T) {
+	t.Parallel()
+	const m = defaultMaxUnverifiedRuns
+
+	t.Run("fail closed", func(t *testing.T) {
+		t.Parallel()
+		store := newCountingStore(t)
+		store.budget = 0
+		check := newRevocationChecker(store, newFakeUsers(1000), nil,
+			checkerConfig{failClosed: true, lookupTimeout: time.Hour, maxUnverifiedRuns: m}).check
+
+		firstSeen := map[string]int{}
+		ids := jwtIdentities(3)
+		for run := 1; run <= 2*m; run++ {
+			if run == 2 { // a shutdown between two runs
+				rc := newRunCtx()
+				rc.end(context.Canceled)
+				assert.Equal(t, make([]bool, len(ids)), check(rc, ids), "a cancelled run closes nothing")
+			}
+			ids = append(ids, jwtIdentitiesFrom(100*run, 1)...) // a new socket every run
+			for _, id := range ids {
+				if _, ok := firstSeen[id.TokenID]; !ok {
+					firstSeen[id.TokenID] = run
+				}
+			}
+			ids = assertClosedInRunM(t, run, m, firstSeen, ids, runOnce(check, store, ids))
+		}
+	})
+
+	t.Run("fail open", func(t *testing.T) {
+		t.Parallel()
+		store := newCountingStore(t)
+		store.budget = 0
+		check := newRevocationChecker(store, newFakeUsers(3), nil,
+			checkerConfig{lookupTimeout: time.Hour, maxUnverifiedRuns: m}).check
+		for run := 1; run <= 2*m; run++ {
+			assert.Equal(t, make([]bool, 3), runOnce(check, store, jwtIdentities(3)))
+		}
+	})
+}
+
+// assertClosedInRunM checks that exactly the identities first seen M or more
+// runs ago are closed, and returns the open ones (the hub closes the rest).
+func assertClosedInRunM(t *testing.T, run, m int, firstSeen map[string]int, ids []websocket.ClientIdentity, got []bool) []websocket.ClientIdentity {
+	t.Helper()
+	var open []websocket.ClientIdentity
+	for i, r := range got {
+		first := firstSeen[ids[i].TokenID]
+		assert.Equal(t, run-first+1 >= m, r, "run %d, %s first seen in run %d", run, ids[i].TokenID, first)
+		if !r {
+			open = append(open, ids[i])
+		}
+	}
+	return open
+}
+
+// TestRevocationCheckerHungLookupFailsClosed: a lookup that hangs until its
+// context ends fails on its own timeout while the run still has time: that is
+// a store failure, so it fails closed in the same run.
+func TestRevocationCheckerHungLookupFailsClosed(t *testing.T) {
+	t.Parallel()
+	cfg := checkerConfig{failClosed: true, lookupTimeout: time.Millisecond, maxUnverifiedRuns: defaultMaxUnverifiedRuns}
+
+	t.Run("blocklist", func(t *testing.T) {
+		t.Parallel()
+		store := newCountingStore(t)
+		store.hangFirst = true
+		check := newRevocationChecker(store, newFakeUsers(3), nil, cfg).check
+		assert.Equal(t, []bool{true, true, true}, check(context.Background(), jwtIdentities(3)))
+		assert.Equal(t, 1, store.total(), "the store is not queried again in the run")
+	})
+
+	t.Run("user batch", func(t *testing.T) {
+		t.Parallel()
+		users := newFakeUsers(2)
+		users.hang = true
+		ids := append(jwtIdentities(2), websocket.ClientIdentity{TokenID: "no-user"})
+		check := newRevocationChecker(newCountingStore(t), users, nil, cfg).check
+		assert.Equal(t, []bool{true, true, false}, check(context.Background(), ids))
+	})
+
+	t.Run("fail open lets them pass", func(t *testing.T) {
+		t.Parallel()
+		store := newCountingStore(t)
+		store.hangFirst = true
+		open := cfg
+		open.failClosed = false
+		check := newRevocationChecker(store, newFakeUsers(3), nil, open).check
+		assert.Equal(t, []bool{false, false, false}, check(context.Background(), jwtIdentities(3)))
+	})
+}
+
+// TestRevocationCheckerFailedLookupIsNotVerified: an identity that needed a
+// lookup that failed was not verified, in both modes, even when its other
+// checks passed.
+func TestRevocationCheckerFailedLookupIsNotVerified(t *testing.T) {
+	t.Parallel()
+	for _, failClosed := range []bool{true, false} {
+		failClosed := failClosed
+		t.Run(fmt.Sprintf("user batch, fail closed %v", failClosed), func(t *testing.T) {
+			t.Parallel()
+			users := newFakeUsers(2)
+			users.batchErr = errors.New("dial tcp: database down")
+			r := newRevocationChecker(newCountingStore(t), users, nil, checkerConfig{failClosed: failClosed})
+			ids := append(jwtIdentities(1), websocket.ClientIdentity{TokenID: "no-user"})
+			cr := newCheckRun(r, context.Background(), ids)
+			cr.process([]int{0, 1})
+			assert.Equal(t, []bool{false, true}, cr.verified, "fail closed %v", failClosed)
+			assert.Equal(t, []bool{failClosed, false}, cr.revoked, "fail closed %v", failClosed)
+		})
+		t.Run(fmt.Sprintf("store, fail closed %v", failClosed), func(t *testing.T) {
+			t.Parallel()
+			store := newCountingStore(t)
+			store.failErr = errors.New("dial tcp: store down")
+			r := newRevocationChecker(store, newFakeUsers(2), nil, checkerConfig{failClosed: failClosed})
+			cr := newCheckRun(r, context.Background(), jwtIdentities(2))
+			cr.process([]int{0, 1})
+			assert.Equal(t, []bool{false, false}, cr.verified, "fail closed %v", failClosed)
+			assert.Equal(t, []bool{failClosed, failClosed}, cr.revoked, "fail closed %v", failClosed)
+		})
+	}
 }
 
 // TestRevocationCheckerGenuineErrors: a lookup that fails while the run still
@@ -329,8 +554,7 @@ func TestRevocationCheckerGenuineErrors(t *testing.T) {
 }
 
 // TestRevocationCheckerUserBlockByIssueTime: the user block covers the
-// sockets issued at or before it, and not the later ones, with at most two
-// lookups per user.
+// sockets issued at or before it, and not the later ones.
 func TestRevocationCheckerUserBlockByIssueTime(t *testing.T) {
 	t.Parallel()
 	store := newCountingStore(t)
@@ -352,7 +576,8 @@ func TestRevocationCheckerUserBlockByIssueTime(t *testing.T) {
 
 // TestRevocationCheckerLargeRunCost: the cost of a run follows the distinct
 // credentials, not sockets x 4: one user batch per chunk, one blocklist
-// lookup per distinct token and session, and one or two per user.
+// lookup per distinct token and session, and one per user without a block.
+// A healthy replica of that size closes nothing, run after run.
 func TestRevocationCheckerLargeRunCost(t *testing.T) {
 	t.Parallel()
 	const (
@@ -374,7 +599,8 @@ func TestRevocationCheckerLargeRunCost(t *testing.T) {
 		}
 	}
 
-	got := NewWebSocketRevocationChecker(store, repo, nil, true)(context.Background(), ids)
+	check := NewWebSocketRevocationChecker(store, repo, nil, true)
+	got := check(context.Background(), ids)
 	assert.Equal(t, make([]bool, sockets), got)
 
 	byIDs, byID := repo.counts()
@@ -384,6 +610,10 @@ func TestRevocationCheckerLargeRunCost(t *testing.T) {
 	assert.Equal(t, users, store.userBlockCalls(), "no user block: one user-block lookup per user, whatever its issue times")
 	assert.Equal(t, tokens+sessions+users, store.total(), "one lookup per distinct credential")
 	t.Logf("store lookups: %d for %d sockets (sockets x 3 = %d)", store.total(), sockets, 3*sockets)
+
+	for run := 2; run <= 2*defaultMaxUnverifiedRuns; run++ {
+		assert.Equal(t, make([]bool, sockets), check(context.Background(), ids), "run %d closes nothing", run)
+	}
 }
 
 // TestRevocationCheckerUserBlockLookups: the user-block lookups of a user
