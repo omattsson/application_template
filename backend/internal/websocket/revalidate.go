@@ -20,8 +20,11 @@ const revalidateTimeout = 30 * time.Second
 // checker owns the policy for a lookup error and logs it: return false for
 // the affected identities to fail open, or true to fail closed (the
 // production wiring fails closed, like the HTTP auth; see
-// handlers.NewWebSocketRevocationChecker). On a context that the hub
-// cancelled (shutdown) it should return false: the sockets close anyway.
+// handlers.NewWebSocketRevocationChecker). When the context ends, either
+// because the hub cancelled it (shutdown) or because the run reached
+// revalidateTimeout, it should return false for the identities it did not
+// check: that is not a store failure. The production checker starts the
+// next run with those identities.
 type IdentityChecker func(ctx context.Context, identities []ClientIdentity) []bool
 
 // identityKey is the comparable form of a ClientIdentity.

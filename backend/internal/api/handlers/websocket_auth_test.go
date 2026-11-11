@@ -104,6 +104,10 @@ func (errUsers) FindByID(context.Context, string) (*models.User, error) {
 	return nil, errors.New("dial tcp: database down")
 }
 
+func (errUsers) FindByIDs(context.Context, []string) (map[string]*models.User, error) {
+	return nil, errors.New("dial tcp: database down")
+}
+
 // errStore fails every blocklist lookup.
 type errStore struct{ sessionstore.SessionStore }
 
