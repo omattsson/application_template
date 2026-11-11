@@ -108,7 +108,11 @@ func TestAuditLogRepositoryList(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantIDs, logIDs(res.Data))
 			assert.Equal(t, tt.wantTotal, res.Total)
-			assert.Empty(t, res.NextCursor)
+			if tt.name == "offset page" {
+				assert.Equal(t, encodeAuditCursor(res.Data[1].Timestamp, res.Data[1].ID), res.NextCursor, "a full page with rows after it has a cursor")
+			} else {
+				assert.Empty(t, res.NextCursor)
+			}
 		})
 	}
 }

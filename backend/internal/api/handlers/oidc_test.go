@@ -648,6 +648,8 @@ func TestOIDCRoleIsSyncedOnEveryLogin(t *testing.T) {
 	_, w = s.signIn(t, oidcClaims("roles", []string{"staff"}))
 	require.Equal(t, http.StatusFound, w.Code)
 	assert.Equal(t, models.RoleUser, s.userBySub(t, "idp-user-1").Role, "a demotion at the provider takes effect at the next login")
+	assert.Contains(t, s.logs.String(), "lowers the role of an admin", "an IdP-driven admin demotion is logged as a warning")
+	assert.Equal(t, 1, strings.Count(s.logs.String(), "lowers the role of an admin"), "once, not on the promotion or an unchanged login")
 
 	_, w = s.signIn(t, oidcClaims("roles", []string{"platform-admins"}))
 	require.Equal(t, http.StatusFound, w.Code)

@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"backend/internal/api/middleware"
+	"backend/internal/config"
 	"backend/internal/models"
+	"backend/internal/sessionstore"
 
 	"github.com/gin-gonic/gin"
 )
@@ -45,7 +47,40 @@ func (h *AuthHandler) sessionLongBlockUntil() time.Time {
 // lifetime (a session token or one issued outside a session) plus
 // sessionBlockSkew.
 func (h *AuthHandler) userBlockUntil() time.Time {
-	return time.Now().Add(max(h.cfg.AccessTokenExpiration, h.cfg.JWTExpiration) + sessionBlockSkew)
+	return userBlockUntil(h.cfg)
+}
+
+// defaultUserBlockLifetime is the token lifetime that userBlockUntil assumes
+// when the configuration sets none (a configuration that LoadConfig
+// validated always sets one).
+const defaultUserBlockLifetime = 24 * time.Hour
+
+// userBlockUntil is the end of a user block for cfg: the longest access-token
+// lifetime plus sessionBlockSkew. Logout-all and the user administration
+// (role change, disable, delete) use it, so a block outlasts every token that
+// it must reject.
+func userBlockUntil(cfg *config.AuthConfig) time.Time {
+	ttl := time.Duration(0)
+	if cfg != nil {
+		ttl = max(cfg.AccessTokenExpiration, cfg.JWTExpiration)
+	}
+	if ttl <= 0 {
+		ttl = defaultUserBlockLifetime
+	}
+	return time.Now().Add(ttl + sessionBlockSkew)
+}
+
+// blockUserNow writes a user block that rejects every access token of the
+// user issued up to now, and answers only after the block millisecond (see
+// waitPastMillisecond), so a login that follows gets a later iat_ms and is
+// not caught by the block. It is the one way that logout-all and the user
+// administration write a user block.
+func blockUserNow(ctx context.Context, store sessionstore.SessionStore, userID string, until time.Time) error {
+	if err := store.BlockUser(ctx, userID, until); err != nil {
+		return err
+	}
+	waitPastMillisecond(time.Now())
+	return nil
 }
 
 // sessionListWindow is how far back the expiry of a refresh-token row can lie
@@ -314,14 +349,12 @@ func (h *AuthHandler) blockUserAndToken(ctx context.Context, c *gin.Context, use
 		return true
 	}
 	ok := true
-	if err := h.sessionStore.BlockUser(ctx, userID, h.userBlockUntil()); err != nil {
+	// R18: the block is inclusive to the millisecond; blockUserNow answers
+	// only after the block millisecond, so a login that follows the answer
+	// gets a later iat_ms and is not caught by it.
+	if err := blockUserNow(ctx, h.sessionStore, userID, h.userBlockUntil()); err != nil {
 		h.log().Error("Failed to block the user on logout-all", "user_id", userID, "error", err)
 		ok = false
-	} else {
-		// R18: the block is inclusive to the millisecond. Answer only after
-		// the block millisecond, so a login that follows the answer gets a
-		// later iat_ms and is not caught by it.
-		waitPastMillisecond(time.Now())
 	}
 	if jti := middleware.GetJTIFromContext(c); jti != "" {
 		expiry, found := middleware.GetTokenExpiryFromContext(c)

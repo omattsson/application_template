@@ -272,6 +272,8 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 		return
 	}
 	slog.InfoContext(ctx, "API key created", "key_id", key.ID, "user_id", userID)
+	// The audit entry names the new key (never its value).
+	middleware.SetAuditEntityID(c, key.ID)
 
 	noStore(c)
 	c.JSON(http.StatusCreated, CreateAPIKeyResponse{
@@ -403,6 +405,9 @@ func (h *APIKeyHandler) DeleteAPIKey(c *gin.Context) {
 		return
 	}
 	slog.InfoContext(ctx, "API key deleted", "key_id", keyID, "user_id", ownerID, "deleted_by", callerID)
+	if ownerID != callerID {
+		middleware.AddAuditDetail(c, "owner_id", ownerID)
+	}
 
 	if h.wsRevoker != nil {
 		if n := h.wsRevoker.DisconnectAPIKey(keyID); n > 0 {

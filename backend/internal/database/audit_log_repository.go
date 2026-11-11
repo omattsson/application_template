@@ -53,7 +53,8 @@ func auditPageSize(limit int) int {
 // List returns audit logs matching the provided filters, newest first.
 // When filters.Cursor is set, keyset (cursor-based) pagination is used for
 // efficient traversal of large datasets and no total is computed. Otherwise
-// OFFSET pagination is used.
+// OFFSET pagination is used; a full page that has rows after it carries the
+// NextCursor that continues with keyset paging.
 func (r *GORMAuditLogRepository) List(ctx context.Context, filters models.AuditLogFilters) (*models.AuditLogResult, error) {
 	query := r.DB.WithContext(ctx).Model(&models.AuditLog{})
 
@@ -101,7 +102,13 @@ func (r *GORMAuditLogRepository) List(ctx context.Context, filters models.AuditL
 		return nil, repoError(ctx, "list", err)
 	}
 
-	return &models.AuditLogResult{Data: logs, Total: total}, nil
+	result := &models.AuditLogResult{Data: logs, Total: total}
+	// A full page with more rows after it gives the cursor of the next page,
+	// so a client can switch to keyset paging from the first page on.
+	if n := len(logs); n == limit && int64(max(filters.Offset, 0)+n) < total {
+		result.NextCursor = encodeAuditCursor(logs[n-1].Timestamp, logs[n-1].ID)
+	}
+	return result, nil
 }
 
 // estimateRows reads the MySQL table statistics estimate (about O(1))

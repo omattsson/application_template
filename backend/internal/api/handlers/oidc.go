@@ -462,6 +462,12 @@ func (h *OIDCHandler) syncUser(ctx context.Context, user *models.User, ident *au
 		changed = true
 	}
 	if ident.Role != user.Role {
+		if user.Role == models.RoleAdmin {
+			// An admin loses the role because of the identity provider: say so
+			// (an admin who set the role here sees it revert at the next login).
+			h.auth.log().Warn("OIDC login lowers the role of an admin to the role from the identity provider",
+				"user_id", user.ID, "old_role", user.Role, "new_role", ident.Role)
+		}
 		user.Role = ident.Role
 		upd.Role = &user.Role
 		changed = true

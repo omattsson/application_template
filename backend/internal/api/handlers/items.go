@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"backend/internal/api/middleware"
 	"backend/internal/models"
 	"backend/internal/websocket"
 
@@ -87,6 +88,8 @@ func (h *Handler) CreateItem(c *gin.Context) {
 		return
 	}
 
+	// The audit entry (when the audit middleware runs) names the new item.
+	middleware.SetAuditEntityID(c, strconv.FormatUint(uint64(item.ID), 10))
 	h.broadcast("item.created", item)
 	c.JSON(http.StatusCreated, item)
 }
