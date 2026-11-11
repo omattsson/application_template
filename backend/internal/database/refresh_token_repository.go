@@ -36,6 +36,11 @@ func (r *GORMRefreshTokenRepository) Create(ctx context.Context, token *models.R
 	if token.ID == "" {
 		token.ID = uuid.New().String()
 	}
+	// A token without a family is its own family: store it, so every family
+	// query matches it by family_id.
+	if token.FamilyID == "" {
+		token.FamilyID = token.ID
+	}
 	if token.CreatedAt.IsZero() {
 		token.CreatedAt = time.Now().UTC()
 	}
@@ -145,12 +150,13 @@ func (r *GORMRefreshTokenRepository) CountActiveInFamily(ctx context.Context, fa
 	return count, nil
 }
 
-// TouchFamily updates last_activity of the active tokens of a family. The
-// "last_activity < ?" guard keeps a late write from moving the time back.
+// TouchFamily updates last_activity of the active tokens of a family (same
+// family match as RevokeFamily). The "last_activity < ?" guard keeps a late
+// write from moving the time back.
 func (r *GORMRefreshTokenRepository) TouchFamily(ctx context.Context, familyID string, at time.Time) error {
 	at = at.UTC()
 	_, err := r.update(ctx, "touch_family", func(db *gorm.DB) *gorm.DB {
-		return db.Where("family_id = ? AND revoked = ? AND expires_at > ? AND last_activity < ?", familyID, false, at, at)
+		return db.Where("(family_id = ? OR id = ?) AND revoked = ? AND expires_at > ? AND last_activity < ?", familyID, familyID, false, at, at)
 	}, map[string]any{"last_activity": at})
 	return err
 }

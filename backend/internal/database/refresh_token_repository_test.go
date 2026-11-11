@@ -303,6 +303,33 @@ func TestRefreshTokenRepositoryTouchFamily(t *testing.T) {
 		"TouchFamily must never move last_activity backwards")
 }
 
+// A token created without a family is its own family: Create stores its ID
+// as family_id, so every family method (TouchFamily included) finds it.
+func TestRefreshTokenRepositoryCreateDefaultsFamilyToID(t *testing.T) {
+	t.Parallel()
+	repo := setupRefreshTokenRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	seedRefreshToken(t, repo, "solo", "", nil)
+	stored := loadRefreshToken(t, repo, "solo")
+	assert.Equal(t, "solo", stored.FamilyID, "Create sets family_id to the ID")
+
+	require.NoError(t, repo.TouchFamily(ctx, "solo", now))
+	assert.WithinDuration(t, now, loadRefreshToken(t, repo, "solo").LastActivity, time.Second, "TouchFamily finds the token")
+
+	n, err := repo.CountActiveInFamily(ctx, "solo")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+
+	// A row written before this rule (empty family_id) is still its own
+	// family for TouchFamily, like for the other family methods.
+	seedRefreshToken(t, repo, "legacy", "x", nil)
+	require.NoError(t, repo.DB.Model(&models.RefreshToken{}).Where("id = ?", "legacy").Update("family_id", "").Error)
+	require.NoError(t, repo.TouchFamily(ctx, "legacy", now))
+	assert.WithinDuration(t, now, loadRefreshToken(t, repo, "legacy").LastActivity, time.Second, "TouchFamily matches a legacy row by ID")
+}
+
 func TestRefreshTokenRepositoryRevokeOldestForUser(t *testing.T) {
 	t.Parallel()
 

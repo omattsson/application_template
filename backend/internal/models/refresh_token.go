@@ -58,8 +58,9 @@ const MaxRecentFamilies = 1000
 // dberrors.ErrNotFound and a duplicate hash dberrors.ErrDuplicateKey.
 type RefreshTokenRepository interface {
 	// Create validates the token (a 64-character hex hash, never a raw
-	// token) and sets ID (when empty), CreatedAt (when zero) and
-	// SessionStartedAt (when zero: CreatedAt, a new session).
+	// token) and sets ID (when empty), FamilyID (when empty: ID, its own
+	// family), CreatedAt (when zero) and SessionStartedAt (when zero:
+	// CreatedAt, a new session).
 	Create(ctx context.Context, token *RefreshToken) error
 	FindByTokenHash(ctx context.Context, hash string) (*RefreshToken, error)
 	RevokeByID(ctx context.Context, id string) error
