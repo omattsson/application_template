@@ -145,6 +145,7 @@ func newAdminEnv(t *testing.T, opts ...adminOpt) *adminEnv {
 	e.handler.SetSessionStore(e.store)
 	e.handler.SetWebSocketRevoker(e.revoker)
 	e.logs = &syncBuffer{}
+	e.handler.blockRetryDelays = []time.Duration{time.Millisecond, time.Millisecond}
 	e.handler.logger = slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	e.auditH = NewAuditLogHandler(audit, users)
 	e.recorder = middleware.NewAuditRecorder(audit)

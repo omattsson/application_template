@@ -700,17 +700,18 @@ func TestChangeUserRole(t *testing.T) {
 		assert.Contains(t, rows[0].Details, `"new_role":"devops"`)
 	})
 
-	t.Run("an unchanged role is a no-op: nothing revoked, no audit row", func(t *testing.T) {
+	t.Run("an unchanged role changes nothing and writes no audit row, but ends the sessions again", func(t *testing.T) {
 		t.Parallel()
 		e := newAdminEnv(t)
 		tok, _ := e.login(t, "user-u")
 		w := e.asAdmin(t, http.MethodPut, "/api/v1/users/"+idUserU+"/role", `{"role":"user"}`)
 		require.Equal(t, http.StatusOK, w.Code)
 		assert.False(t, decodeInto[ChangeRoleResponse](t, w).Changed)
-		assert.Equal(t, http.StatusOK, e.tokenStatus(bearerOf(tok)))
-		assert.EqualValues(t, 1, e.activeRefreshTokens(t, idUserU))
+		assert.Equal(t, models.RoleUser, e.user(t, idUserU).Role)
+		assert.Equal(t, http.StatusUnauthorized, e.tokenStatus(bearerOf(tok)), "the revocation is idempotent and runs again")
+		assert.Zero(t, e.activeRefreshTokens(t, idUserU))
 		users, _ := e.revoker.snapshot()
-		assert.Empty(t, users)
+		assert.Equal(t, []string{idUserU}, users)
 		assert.Empty(t, e.auditRows(t))
 	})
 
@@ -968,7 +969,7 @@ func TestDeleteUser(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, e.asAdmin(t, http.MethodDelete, "/api/v1/users/1", "").Code)
 	})
 
-	t.Run("the last admin cannot be deleted and nothing is revoked", func(t *testing.T) {
+	t.Run("the last admin cannot be deleted; only the pre-delete block applies", func(t *testing.T) {
 		t.Parallel()
 		e := newAdminEnv(t)
 		require.NoError(t, e.db.Model(&models.User{}).Where("id = ?", idAdminB).Update("disabled", true).Error)
@@ -979,8 +980,8 @@ func TestDeleteUser(t *testing.T) {
 		assert.Equal(t, msgLastAdmin, errorOf(t, w))
 		assert.True(t, e.userExists(idAdminA))
 		assert.EqualValues(t, 1, e.keyCount(t, idAdminA))
-		assert.Equal(t, http.StatusOK, e.tokenStatus(bearerOf(tok)))
-		assert.EqualValues(t, 1, e.activeRefreshTokens(t, idAdminA))
+		assert.Equal(t, http.StatusUnauthorized, e.tokenStatus(bearerOf(tok)), "the block is written before the delete, so a refused delete has blocked the tokens issued so far")
+		assert.EqualValues(t, 1, e.activeRefreshTokens(t, idAdminA), "nothing else is revoked")
 		assert.Empty(t, e.auditRows(t))
 	})
 

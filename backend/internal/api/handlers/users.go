@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"backend/internal/api/middleware"
@@ -50,13 +51,21 @@ type UserHandler struct {
 	wsRevoker websocket.ClientRevoker
 	cfg       *config.AuthConfig
 	logger    *slog.Logger // nil uses slog.Default() (tests set it)
+	// blockRetryDelays are the waits between the attempts to write a user
+	// block: len+1 attempts in all. Tests shorten them.
+	blockRetryDelays []time.Duration
 }
+
+// defaultBlockRetryDelays are the waits between the attempts to write a user
+// block (at most 3 retries, 1 s of waiting in all, inside the WriteTimeout
+// budget of the step).
+var defaultBlockRetryDelays = []time.Duration{100 * time.Millisecond, 300 * time.Millisecond, 600 * time.Millisecond}
 
 // NewUserHandler creates a UserHandler. refresh and keys may be nil (no
 // refresh tokens or keys to revoke); cfg gives the lifetime of the user
 // block (a nil cfg uses a safe default).
 func NewUserHandler(users models.UserRepository, refresh models.RefreshTokenRepository, keys models.APIKeyRepository, cfg *config.AuthConfig) *UserHandler {
-	return &UserHandler{users: users, refresh: refresh, keys: keys, cfg: cfg}
+	return &UserHandler{users: users, refresh: refresh, keys: keys, cfg: cfg, blockRetryDelays: defaultBlockRetryDelays}
 }
 
 // SetSessionStore sets the session store that receives the user blocks. nil:
@@ -181,21 +190,67 @@ func (h *UserHandler) respondGuardedChangeError(c *gin.Context, err error, what 
 	}
 }
 
+// blockUser writes the user block with a few bounded retries: the block is
+// the step that ends the access tokens that are already out, and an admin
+// change that committed cannot always be repeated (a delete cannot). Only an
+// error that can be transient is retried (not a cancelled context and not an
+// invalid key); the waits are blockRetryDelays and end with ctx.
+func (h *UserHandler) blockUser(ctx context.Context, userID string) error {
+	for attempt := 0; ; attempt++ {
+		err := blockUserNow(ctx, h.sessions, userID, userBlockUntil(h.cfg))
+		if err == nil || attempt >= len(h.blockRetryDelays) ||
+			errors.Is(err, context.Canceled) || errors.Is(err, sessionstore.ErrInvalidKey) {
+			return err
+		}
+		h.log().Warn("Retrying the user block", "user_id", userID, "attempt", attempt+1, "error", err)
+		timer := time.NewTimer(h.blockRetryDelays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+// blockUserStep runs blockUser with a WriteTimeout budget of its own on a
+// context that the client cannot cancel. Without a session store it does
+// nothing.
+func (h *UserHandler) blockUserStep(ctx context.Context, userID string) error {
+	if h.sessions == nil {
+		return nil
+	}
+	stepCtx, cancel := ctxutil.Detach(ctx, ctxutil.WriteTimeout)
+	defer cancel()
+	return h.blockUser(stepCtx, userID)
+}
+
+// revokeOptions selects the optional behaviour of revokeUserAccess.
+type revokeOptions struct {
+	// deleteKeys deletes all API keys of the user (the user is deleted).
+	deleteKeys bool
+	// blockBestEffort logs a failed block but does not report it: the caller
+	// wrote the block before its change (a delete) and this one only covers
+	// the tokens issued since.
+	blockBestEffort bool
+}
+
 // revokeUserAccess ends the access of a user after an admin change that
 // committed. Steps, all of them run even when one fails:
 //  1. Revoke all refresh tokens (no new access token from a session).
 //  2. Block the user in the session store: every access token issued up to
-//     now gets 401. It runs after the revoke: a refresh that signs a token
-//     after the block must also pass its session re-check after the block,
-//     and that re-check fails once the revoke has run. blockUserNow answers
-//     after the block millisecond, so a login that follows the answer is not
-//     caught by the block. (Enabling a user later does not need a new block
-//     and does not remove this one: a login after the enable has a later
-//     iat_ms, tokens from before stay dead.)
-//  3. With deleteKeys (the user is deleted) delete all API keys of the user.
-//     A disabled user's keys stay: key authentication refuses a disabled
-//     owner, and enabling the user restores them. A key follows the current
-//     role of its owner, so a role change needs no key step.
+//     now gets 401 (retried a few times, see blockUser). It runs after the
+//     revoke: a refresh that signs a token after the block must also pass its
+//     session re-check after the block, and that re-check fails once the
+//     revoke has run. blockUserNow answers after the block millisecond, so a
+//     login that follows the answer is not caught by the block. (Enabling a
+//     user later does not need a new block and does not remove this one: a
+//     login after the enable has a later iat_ms, tokens from before stay
+//     dead.)
+//  3. With opts.deleteKeys (the user is deleted) delete all API keys of the
+//     user. A disabled user's keys stay: key authentication refuses a
+//     disabled owner, and enabling the user restores them. A key follows the
+//     current role of its owner, so a role change needs no key step.
 //  4. Close the user's WebSocket connections on this replica (the others
 //     close theirs at the next revalidation).
 //
@@ -203,34 +258,45 @@ func (h *UserHandler) respondGuardedChangeError(c *gin.Context, err error, what 
 // a failed step 1 does not bring back the old role: a disabled or deleted
 // user is refused, and a new token carries the new role.
 //
+// It is idempotent: the endpoints run it again for a repeated request (an
+// unchanged role, a repeated disable), so a retry after a failed step
+// finishes the revocation.
+//
 // It returns the joined errors of the steps that failed. Each step has a
 // WriteTimeout budget of its own on a context that the client cannot cancel.
-func (h *UserHandler) revokeUserAccess(ctx context.Context, userID string, deleteKeys bool) error {
+func (h *UserHandler) revokeUserAccess(ctx context.Context, userID string, opts revokeOptions) error {
 	var errs []error
-	step := func(what string, fn func(context.Context) error) {
+	step := func(what string, fn func(context.Context) error) error {
 		stepCtx, cancel := ctxutil.Detach(ctx, ctxutil.WriteTimeout)
 		defer cancel()
-		if err := fn(stepCtx); err != nil {
+		err := fn(stepCtx)
+		if err != nil {
 			h.log().Error("Failed to "+what, "user_id", userID, "error", err)
+		}
+		return err
+	}
+	collect := func(err error) {
+		if err != nil {
 			errs = append(errs, err)
 		}
 	}
 
 	if h.refresh != nil {
-		step("revoke the refresh tokens of a user", func(c context.Context) error {
+		collect(step("revoke the refresh tokens of a user", func(c context.Context) error {
 			return h.refresh.RevokeAllForUser(c, userID)
-		})
+		}))
 	}
 	if h.sessions != nil {
-		step("block the user", func(c context.Context) error {
-			return blockUserNow(c, h.sessions, userID, userBlockUntil(h.cfg))
-		})
+		err := step("block the user", func(c context.Context) error { return h.blockUser(c, userID) })
+		if !opts.blockBestEffort {
+			collect(err)
+		}
 	}
-	if deleteKeys && h.keys != nil {
-		step("delete the API keys of a user", func(c context.Context) error {
+	if opts.deleteKeys && h.keys != nil {
+		collect(step("delete the API keys of a user", func(c context.Context) error {
 			_, err := h.keys.DeleteAllForUser(c, userID)
 			return err
-		})
+		}))
 	}
 	if h.wsRevoker != nil {
 		if n := h.wsRevoker.DisconnectUser(userID); n > 0 {
@@ -537,7 +603,7 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 	middleware.SetAuditEntityID(c, target.ID)
 
 	if req.Password != nil {
-		if err := h.revokeUserAccess(ctx, target.ID, false); err != nil {
+		if err := h.revokeUserAccess(ctx, target.ID, revokeOptions{}); err != nil {
 			respondRevocationFailed(c)
 			return
 		}
@@ -575,7 +641,7 @@ type ChangeRoleResponse struct {
 
 // ChangeUserRole godoc
 // @Summary      Change the role of a user
-// @Description  Sets the role of a user. Admin only, with a login session; the caller must still be an enabled admin in the database (403). The last enabled admin cannot be demoted (409); an admin may demote themselves when another enabled admin exists. An unchanged role is a no-op (changed=false, nothing revoked, no audit entry). A change ends every session of the user: access tokens issued before it are rejected (user block), refresh tokens are revoked and the WebSockets are closed, so the next request needs a new login that carries the new role; the user's API keys stay and use the new role at once. The role of an SSO user is set by the identity provider at each login (OIDC_ADMIN_ROLES, OIDC_DEVOPS_ROLES) and can override this change: the response has idp_managed=true. When the change committed but a revocation step failed, the answer is 500 and the change stands. Unknown request fields are refused.
+// @Description  Sets the role of a user. Admin only, with a login session; the caller must still be an enabled admin in the database (403). The last enabled admin cannot be demoted (409); an admin may demote themselves when another enabled admin exists. An unchanged role changes nothing (changed=false, no audit entry) but ends the sessions of the user again, so repeating a request whose answer was 500 finishes the revocation. A change ends every session of the user: access tokens issued before it are rejected (user block), refresh tokens are revoked and the WebSockets are closed, so the next request needs a new login that carries the new role; the user's API keys stay and use the new role at once. The role of an SSO user is set by the identity provider at each login (OIDC_ADMIN_ROLES, OIDC_DEVOPS_ROLES) and can override this change: the response has idp_managed=true. The user block is retried a few times; when the change committed but a revocation step still failed, the answer is 500 and the change stands: repeat the same request to finish the revocation. Unknown request fields are refused.
 // @Tags         users
 // @Accept       json
 // @Produce      json
@@ -628,9 +694,15 @@ func (h *UserHandler) ChangeUserRole(c *gin.Context) {
 		IDPManaged: authProviderOf(target) != models.AuthProviderLocal,
 	}
 	if !changed {
-		// A no-op is not a change: no audit entry, sessions stay valid.
-		resp.Message = "Role unchanged"
+		// A no-op is not a change: no audit entry. The revocation runs again
+		// anyway (it is idempotent), so a retry after a failed revocation of
+		// the same change finishes it, as a repeated disable does.
 		middleware.SkipAudit(c)
+		if err := h.revokeUserAccess(ctx, target.ID, revokeOptions{}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
+			return
+		}
+		resp.Message = "Role unchanged; the sessions of the user were ended again"
 		c.JSON(http.StatusOK, resp)
 		return
 	}
@@ -640,7 +712,7 @@ func (h *UserHandler) ChangeUserRole(c *gin.Context) {
 	h.log().Info("User role changed", "user_id", target.ID, "old_role", oldRole, "new_role", req.Role, "changed_by", callerID, "request_id", c.GetString(requestIDKey))
 	// Tokens carry the role claim: end the sessions so the next request needs
 	// a new login with the new role.
-	if err := h.revokeUserAccess(ctx, target.ID, false); err != nil {
+	if err := h.revokeUserAccess(ctx, target.ID, revokeOptions{}); err != nil {
 		respondRevocationFailed(c)
 		return
 	}
@@ -725,7 +797,7 @@ func (h *UserHandler) SetUserDisabled(c *gin.Context) {
 	// A repeated disable still ends the sessions: it makes a retry after a
 	// failed revocation work. Enabling needs no revocation.
 	if disabled {
-		if err := h.revokeUserAccess(ctx, target.ID, false); err != nil {
+		if err := h.revokeUserAccess(ctx, target.ID, revokeOptions{}); err != nil {
 			respondRevocationFailed(c)
 			return
 		}
@@ -739,7 +811,7 @@ func (h *UserHandler) SetUserDisabled(c *gin.Context) {
 
 // DeleteUser godoc
 // @Summary      Delete a user
-// @Description  Permanently deletes a user. Admin only, with a login session; the caller must still be an enabled admin in the database (403). The last enabled admin cannot be deleted (409); an admin may delete themselves when another enabled admin exists. The user's access ends: access tokens issued before are rejected (user block), refresh tokens are revoked, all their API keys are deleted and the WebSockets are closed. When the delete committed but a revocation step failed, the answer is 500 and the user is gone.
+// @Description  Permanently deletes a user. Admin only, with a login session; the caller must still be an enabled admin in the database (403). The last enabled admin cannot be deleted (409); an admin may delete themselves when another enabled admin exists. The user's access ends: access tokens issued before are rejected (user block), refresh tokens are revoked, all their API keys are deleted and the WebSockets are closed. The user block is written before the delete (a failure answers 500 and deletes nothing, so the request can be repeated; a refused delete, 403 or 409, has still blocked the user's tokens issued so far) and again after it (best effort); when a later step fails the answer is 500 and the user is gone.
 // @Tags         users
 // @Produce      json
 // @Security     BearerAuth
@@ -764,6 +836,16 @@ func (h *UserHandler) DeleteUser(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// Block first: once the row is gone no request can find the user again to
+	// block them, so a block that fails after the delete could not be
+	// repeated. When this block fails nothing is deleted and the request can
+	// be retried. (A refused delete, 403 or 409, has blocked the user's
+	// tokens issued so far: they must sign in again.)
+	if err := h.blockUserStep(ctx, target.ID); err != nil {
+		h.log().Error("Failed to block the user before a delete", "user_id", target.ID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
+		return
+	}
 	if err := h.users.DeleteGuarded(ctx, callerID, target.ID); err != nil {
 		h.respondGuardedChangeError(c, err, "Failed to delete a user")
 		return
@@ -771,7 +853,10 @@ func (h *UserHandler) DeleteUser(c *gin.Context) {
 	middleware.SetAuditEntityID(c, target.ID)
 	h.log().Info("User deleted", "user_id", target.ID, "deleted_by", callerID, "request_id", c.GetString(requestIDKey))
 
-	if err := h.revokeUserAccess(ctx, target.ID, true); err != nil {
+	// The block after the delete covers the tokens issued since the first
+	// one; the first one already ended every older token, so it is best
+	// effort.
+	if err := h.revokeUserAccess(ctx, target.ID, revokeOptions{deleteKeys: true, blockBestEffort: true}); err != nil {
 		respondRevocationFailed(c)
 		return
 	}
