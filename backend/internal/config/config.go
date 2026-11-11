@@ -93,6 +93,16 @@ const (
 	defaultAdminUsername          = "admin"
 )
 
+// Values of SESSION_STORE (AuthConfig.SessionStore).
+const (
+	// SessionStoreMySQL keeps the token blocklist and the OIDC states in the
+	// shared database (the default): every replica sees every revocation.
+	SessionStoreMySQL = "mysql"
+	// SessionStoreMemory keeps them in the process: for one replica and for
+	// development only (a restart forgets every revocation).
+	SessionStoreMemory = "memory"
+)
+
 // MaxRefreshReuseGrace caps REFRESH_REUSE_GRACE. The grace window only has to
 // cover concurrent refresh requests (two browser tabs); a long window weakens
 // replay detection.
@@ -129,6 +139,10 @@ type AuthConfig struct {
 	// required, at least MinJWTSecretLength characters, when Enabled is true.
 	// It is never logged or put in an error.
 	JWTSecret string
+	// SessionStore is SESSION_STORE (default "mysql"): where the token
+	// blocklist and the OIDC states live (SessionStoreMySQL or
+	// SessionStoreMemory). Another value fails Validate.
+	SessionStore string
 	// AdminUsername is ADMIN_USERNAME (default "admin").
 	AdminUsername string
 	// AdminPassword is ADMIN_PASSWORD. It has no default: when it is empty no
@@ -191,6 +205,12 @@ func (c *AuthConfig) Validate() error {
 
 	if c.RefreshReuseGrace < 0 || c.RefreshReuseGrace > MaxRefreshReuseGrace {
 		return fmt.Errorf("refresh_reuse_grace must be between 0s and %s", MaxRefreshReuseGrace)
+	}
+
+	switch c.SessionStore {
+	case "", SessionStoreMySQL, SessionStoreMemory: // empty means the default (mysql)
+	default:
+		return fmt.Errorf("SESSION_STORE must be %s or %s", SessionStoreMySQL, SessionStoreMemory)
 	}
 
 	return nil
@@ -559,6 +579,7 @@ func loadAuthConfig() (AuthConfig, error) {
 		AdminUsername:    getEnv("ADMIN_USERNAME", defaultAdminUsername),
 		AdminPassword:    getEnv("ADMIN_PASSWORD", ""),
 		SelfRegistration: getEnvBool("SELF_REGISTRATION", false),
+		SessionStore:     strings.ToLower(strings.TrimSpace(getEnv("SESSION_STORE", SessionStoreMySQL))),
 		SecureCookies:    true,
 	}
 

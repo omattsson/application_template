@@ -103,6 +103,11 @@ func NewRepositoryWithFilterFields(db *gorm.DB, fields []string) Repository {
 	return &GenericRepository{db: db, allowedFilterFields: allowed}
 }
 
+// DB returns the database handle of the repository. The bootstrap builds the
+// other repositories (users, sessions, audit) on it, so they share one
+// connection pool, which Close closes.
+func (r *GenericRepository) DB() *gorm.DB { return r.db }
+
 // Ping checks if the database is reachable
 func (r *GenericRepository) Ping(ctx context.Context) error {
 	sqlDB, err := r.db.DB()

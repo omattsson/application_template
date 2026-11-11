@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func serveUIConfig(title string, authEnabled bool) *httptest.ResponseRecorder {
+func serveUIConfig(resp UIConfigResponse) *httptest.ResponseRecorder {
 	router := gin.New()
-	router.GET("/api/v1/ui-config", NewUIConfigHandler(title, authEnabled))
+	router.GET("/api/v1/ui-config", NewUIConfigHandler(resp))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui-config", nil)
@@ -25,26 +25,29 @@ func TestUIConfigHandler(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		title       string
-		authEnabled bool
-		wantBody    string
+		name     string
+		resp     UIConfigResponse
+		wantBody string
 	}{
 		{
 			name:     "defaults",
-			title:    "Application Template",
-			wantBody: `{"title":"Application Template","auth_enabled":false}`,
+			resp:     UIConfigResponse{Title: "Application Template"},
+			wantBody: `{"title":"Application Template","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false}`,
 		},
 		{
-			name:        "custom title and auth enabled",
-			title:       "My App",
-			authEnabled: true,
-			wantBody:    `{"title":"My App","auth_enabled":true}`,
+			name:     "custom title and auth enabled",
+			resp:     UIConfigResponse{Title: "My App", AuthEnabled: true, LocalAuthEnabled: true},
+			wantBody: `{"title":"My App","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true}`,
+		},
+		{
+			name:     "oidc only",
+			resp:     UIConfigResponse{Title: "My App", AuthEnabled: true, OIDCEnabled: true},
+			wantBody: `{"title":"My App","auth_enabled":true,"oidc_enabled":true,"local_auth_enabled":false}`,
 		},
 		{
 			name:     "empty title falls back to the default",
-			title:    "",
-			wantBody: `{"title":"Application Template","auth_enabled":false}`,
+			resp:     UIConfigResponse{},
+			wantBody: `{"title":"Application Template","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false}`,
 		},
 	}
 
@@ -53,7 +56,7 @@ func TestUIConfigHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			w := serveUIConfig(tt.title, tt.authEnabled)
+			w := serveUIConfig(tt.resp)
 
 			require.Equal(t, http.StatusOK, w.Code)
 			assert.JSONEq(t, tt.wantBody, w.Body.String())

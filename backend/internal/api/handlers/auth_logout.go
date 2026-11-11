@@ -301,6 +301,13 @@ func (h *AuthHandler) LogoutAll(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": msgAuthRequired})
 		return
 	}
+	// Only a login session (a JWT) can end every session: a stolen API key
+	// must not log its owner out everywhere. The route also has
+	// RequireSessionAuth; this check does not rely on the wiring.
+	if middleware.GetAuthMethodFromContext(c) != middleware.AuthMethodJWT {
+		c.JSON(http.StatusForbidden, gin.H{"error": msgSessionRequired})
+		return
+	}
 	// Detached: a client that leaves is still logged out everywhere.
 	ctx, cancel := detachedCtx(c)
 	defer cancel()

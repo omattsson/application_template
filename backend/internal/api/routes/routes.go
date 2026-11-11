@@ -1,59 +1,173 @@
 package routes
 
 import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"reflect"
+	"time"
+
 	"backend/internal/api/handlers"
 	"backend/internal/api/middleware"
+	"backend/internal/auth"
 	"backend/internal/config"
 	"backend/internal/health"
 	"backend/internal/models"
+	"backend/internal/sessionstore"
 	"backend/internal/websocket"
-	"log/slog"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// RateLimiters groups the rate limiters created by SetupRoutes.
+// ErrAuthDepsMissing is returned by Setup when AUTH_ENABLED is true and an
+// auth dependency is missing. The authenticated router is never built without
+// its session store: every revocation check would be skipped.
+var ErrAuthDepsMissing = errors.New("auth is enabled but an auth dependency is missing")
+
+// RateLimiters groups the rate limiters created by Setup. The auth limiters
+// are nil with AUTH_ENABLED=false.
 type RateLimiters struct {
-	API   *handlers.RateLimiter
+	// API is RATE_LIMIT per client IP on every /api/v1 route (and on the /ws
+	// upgrade with auth on).
+	API *handlers.RateLimiter
+	// Login is LOGIN_RATE_LIMIT per client IP on POST /auth/login.
 	Login *handlers.RateLimiter
+	// Register is LOGIN_RATE_LIMIT per client IP on POST /auth/register.
+	Register *handlers.RateLimiter
+	// Refresh is LOGIN_RATE_LIMIT per client IP on POST /auth/refresh.
+	Refresh *handlers.RateLimiter
+	// OIDC is LOGIN_RATE_LIMIT per client IP on the two OIDC routes (the login
+	// writes one session store row per call, the callback calls the identity
+	// provider).
+	OIDC *handlers.RateLimiter
 }
 
-// Stop terminates the background cleanup goroutines.
+// Stop terminates the background cleanup goroutines. It is idempotent.
 func (r *RateLimiters) Stop() {
 	if r == nil {
 		return
 	}
-	if r.API != nil {
-		r.API.Stop()
-	}
-	if r.Login != nil {
-		r.Login.Stop()
+	for _, l := range []*handlers.RateLimiter{r.API, r.Login, r.Register, r.Refresh, r.OIDC} {
+		if l != nil {
+			l.Stop()
+		}
 	}
 }
 
-// SetupRoutes configures all the routes for our application.
-// healthChecker is injected from main so the readiness endpoint reflects real dependency health.
-// Returns the rate limiters so the caller can stop them during shutdown.
+// AuthDeps are the dependencies of the auth module. Setup needs all of them,
+// except OIDCProvider, when AUTH_ENABLED is true.
+type AuthDeps struct {
+	Users         models.UserRepository
+	RefreshTokens models.RefreshTokenRepository
+	APIKeys       models.APIKeyRepository
+	AuditLogs     models.AuditLogRepository
+	SessionStore  sessionstore.SessionStore
+	// OIDCProvider is the identity provider client. Nil: Setup builds it from
+	// Config.OIDC when OIDC_ENABLED is true (no network at construction).
+	OIDCProvider handlers.OIDCProvider
+	// RevalidateInterval is the time between two revocation checks of the
+	// open sockets; 0 uses websocket.DefaultRevalidateInterval.
+	RevalidateInterval time.Duration
+}
+
+// Deps are the dependencies of Setup.
+type Deps struct {
+	Config        *config.Config
+	Repository    models.Repository
+	HealthChecker *health.HealthChecker
+	Hub           *websocket.Hub
+	// Auth is required when Config.Auth.Enabled and ignored otherwise.
+	Auth *AuthDeps
+}
+
+// Result is what Setup built and what the caller must stop.
+type Result struct {
+	// RateLimiters must be stopped at shutdown.
+	RateLimiters *RateLimiters
+	// AuthHandler runs EnsureAdminUser and CleanupExpiredTokens. Nil with
+	// auth off.
+	AuthHandler *handlers.AuthHandler
+	// AuditRecorder must be shut down before the database closes. Nil with
+	// auth off.
+	AuditRecorder *middleware.AuditRecorder
+}
+
+// isNil reports whether v is nil or a nil pointer in an interface.
+func isNil(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
+}
+
+// checkDeps validates deps before anything is registered or started.
+func checkDeps(deps Deps) error {
+	if deps.Config == nil {
+		return errors.New("routes: no configuration")
+	}
+	if !deps.Config.Auth.Enabled {
+		return nil
+	}
+	a := deps.Auth
+	if a == nil {
+		return fmt.Errorf("%w: no auth dependencies", ErrAuthDepsMissing)
+	}
+	for name, v := range map[string]any{
+		"session store": a.SessionStore, "user repository": a.Users, "refresh token repository": a.RefreshTokens,
+		"API key repository": a.APIKeys, "audit log repository": a.AuditLogs,
+	} {
+		if isNil(v) {
+			return fmt.Errorf("%w: %s", ErrAuthDepsMissing, name)
+		}
+	}
+	return nil
+}
+
+// Setup registers every route on router. It is the production route builder:
+// the bootstrap and the tests use it.
 //
-// Precondition: cfg.Server.RateLimit > 0 and cfg.Server.LoginRateLimit > 0.
-// config.LoadConfig guarantees both (it rejects a value <= 0); a Config built
-// by hand must set them.
-func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker *health.HealthChecker, cfg *config.Config, hub *websocket.Hub) *RateLimiters {
-	// Client IP: only the proxies of TRUSTED_PROXIES may set it with
-	// X-Forwarded-For or X-Real-IP. Gin trusts every peer by default, so a
-	// client could pick a new IP for each request and pass the per-IP rate
-	// limits. A nil list trusts no proxy: the client IP is the TCP peer.
-	// config.ParseTrustedProxies validated the list; on an error, trust no
-	// proxy.
-	trustedProxies := cfg.Server.TrustedProxies
-	if len(trustedProxies) == 0 {
-		trustedProxies = nil
+// With AUTH_ENABLED=false no auth middleware is registered: Items, /ws and
+// ping are open whatever credentials a request carries, and the auth, API
+// key, user and audit log routes do not exist (404).
+//
+// With AUTH_ENABLED=true:
+//   - Public: /health/*, GET /api/v1/ui-config, POST /auth/login (LOGIN_RATE_LIMIT,
+//     same-site check when it sets the cookie), POST /auth/register,
+//     POST /auth/refresh (LOGIN_RATE_LIMIT each), POST /auth/logout (the
+//     handler authenticates itself from the bearer token and the refresh
+//     cookie), GET /auth/oidc/login and /callback (LOGIN_RATE_LIMIT, no
+//     same-site check: they are top-level navigations).
+//   - Every other /api/v1 route: CombinedAuth (JWT or API key, revocation
+//     checks fail closed on a store error), then the audit middleware.
+//     /auth/logout-all and /api-keys also need a login session
+//     (RequireSessionAuth); /users and /audit-logs need the admin role.
+//   - /ws: RATE_LIMIT, a token (header, or ?token= for browsers) or an API
+//     key, an active user, a re-check after the registration, a periodic
+//     revalidation of the open sockets (fail closed), and authorised topic
+//     subscriptions.
+//
+// Setup returns an error, and registers nothing, when the configuration is
+// missing or AUTH_ENABLED is true without all auth dependencies
+// (ErrAuthDepsMissing) or with an OIDC configuration that cannot be used.
+//
+// Precondition: Config.Server.RateLimit > 0 and Config.Server.LoginRateLimit
+// > 0. config.LoadConfig guarantees both (it rejects a value <= 0).
+func Setup(router *gin.Engine, deps Deps) (*Result, error) {
+	if err := checkDeps(deps); err != nil {
+		return nil, err
 	}
-	if err := router.SetTrustedProxies(trustedProxies); err != nil {
-		slog.Error("Invalid TRUSTED_PROXIES; no proxy is trusted", "error", err)
-		_ = router.SetTrustedProxies(nil)
+	cfg := deps.Config
+
+	var a *authWiring
+	if cfg.Auth.Enabled {
+		var err error
+		if a, err = newAuthWiring(cfg, deps.Auth, deps.Hub); err != nil {
+			return nil, err
+		}
 	}
+
+	setTrustedProxies(router, cfg.Server.TrustedProxies)
 
 	// Add middleware. RedactWSToken runs before Logger (and any tracer) so
 	// the WebSocket token in the query string is never recorded.
@@ -65,45 +179,205 @@ func SetupRoutes(router *gin.Engine, repository models.Repository, healthChecker
 	router.Use(middleware.CORS(cfg.CORS.AllowedOrigins))
 	router.Use(middleware.MaxBodySize(1 << 20)) // 1 MB default
 
-	// WebSocket endpoint (top-level, outside rate limiter — connections are long-lived)
-	wsHandler := handlers.NewWebSocketHandler(hub, cfg.CORS.AllowedOrigins)
-	router.GET("/ws", wsHandler.HandleWebSocket)
+	// Rate limiter for API routes: RATE_LIMIT requests per minute per client IP.
+	limiters := &RateLimiters{
+		API:   handlers.NewRateLimiter(int(cfg.Server.RateLimit), time.Minute),
+		Login: handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute),
+	}
+
+	wsHandler := handlers.NewWebSocketHandler(deps.Hub, cfg.CORS.AllowedOrigins)
+	if a == nil {
+		// WebSocket endpoint (top-level, outside the rate limiter: connections
+		// are long-lived).
+		router.GET("/ws", wsHandler.HandleWebSocket)
+	} else {
+		a.registerWebSocket(router, wsHandler, limiters.API)
+	}
 
 	// Health check endpoints
 	healthGroup := router.Group("/health")
 	{
-		healthGroup.GET("/live", handlers.LivenessHandler(healthChecker))
-		healthGroup.GET("/ready", handlers.ReadinessHandler(healthChecker))
+		healthGroup.GET("/live", handlers.LivenessHandler(deps.HealthChecker))
+		healthGroup.GET("/ready", handlers.ReadinessHandler(deps.HealthChecker))
 		healthGroup.GET("", handlers.HealthCheck) // Keep the original health check for backward compatibility
 	}
 
-	// Rate limiter for API routes: RATE_LIMIT requests per minute per client IP.
-	rateLimiter := handlers.NewRateLimiter(int(cfg.Server.RateLimit), time.Minute)
-	// Login limiter: LOGIN_RATE_LIMIT attempts per minute per client IP. The
-	// login route attaches it with Login.RateLimit().
-	loginRateLimiter := handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
-
-	// API v1 routes
 	v1 := router.Group("/api/v1")
-	v1.Use(rateLimiter.RateLimit())
-	{
-		// Ping endpoint
-		v1.GET("/ping", handlers.Ping)
+	v1.Use(limiters.API.RateLimit())
 
-		// Public UI config (no auth, so the login page can read it)
-		v1.GET("/ui-config", handlers.NewUIConfigHandler(cfg.App.Title, cfg.Auth.Enabled))
+	// Public UI config (no auth, so the login page can read it)
+	v1.GET("/ui-config", handlers.NewUIConfigHandler(handlers.UIConfigFromConfig(cfg)))
 
-		// Items endpoints
-		itemsHandler := handlers.NewHandlerWithHub(repository, hub)
-		items := v1.Group("/items")
-		{
-			items.GET("", itemsHandler.GetItems)
-			items.GET("/:id", itemsHandler.GetItem)
-			items.POST("", itemsHandler.CreateItem)
-			items.PUT("/:id", itemsHandler.UpdateItem)
-			items.DELETE("/:id", itemsHandler.DeleteItem)
-		}
+	// The routes of the API: open with auth off, behind CombinedAuth and the
+	// audit middleware with auth on.
+	api := v1
+	result := &Result{RateLimiters: limiters}
+	if a != nil {
+		limiters.Register = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
+		limiters.Refresh = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
+		limiters.OIDC = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
+		a.registerPublicAuth(v1, limiters)
+		api = v1.Group("", a.authenticate, a.recorder.Middleware())
+		a.registerAuthenticated(api)
+		result.AuthHandler = a.authHandler
+		result.AuditRecorder = a.recorder
 	}
 
-	return &RateLimiters{API: rateLimiter, Login: loginRateLimiter}
+	// Ping endpoint
+	api.GET("/ping", handlers.Ping)
+
+	// Items endpoints
+	itemsHandler := handlers.NewHandlerWithHub(deps.Repository, deps.Hub)
+	items := api.Group("/items")
+	{
+		items.GET("", itemsHandler.GetItems)
+		items.GET("/:id", itemsHandler.GetItem)
+		items.POST("", itemsHandler.CreateItem)
+		items.PUT("/:id", itemsHandler.UpdateItem)
+		items.DELETE("/:id", itemsHandler.DeleteItem)
+	}
+
+	return result, nil
+}
+
+// setTrustedProxies sets the proxies that may set the client IP. Only the
+// proxies of TRUSTED_PROXIES may set it with X-Forwarded-For or X-Real-IP.
+// Gin trusts every peer by default, so a client could pick a new IP for each
+// request and pass the per-IP rate limits. A nil list trusts no proxy: the
+// client IP is the TCP peer. config.ParseTrustedProxies validated the list;
+// on an error, trust no proxy.
+func setTrustedProxies(router *gin.Engine, trustedProxies []string) {
+	if len(trustedProxies) == 0 {
+		trustedProxies = nil
+	}
+	if err := router.SetTrustedProxies(trustedProxies); err != nil {
+		slog.Error("Invalid TRUSTED_PROXIES; no proxy is trusted", "error", err)
+		_ = router.SetTrustedProxies(nil)
+	}
+}
+
+// authWiring holds the auth handlers and middleware of an auth-on router.
+type authWiring struct {
+	deps         *AuthDeps
+	hub          *websocket.Hub
+	authHandler  *handlers.AuthHandler
+	oidcHandler  *handlers.OIDCHandler
+	apiKeys      *handlers.APIKeyHandler
+	users        *handlers.UserHandler
+	auditLogs    *handlers.AuditLogHandler
+	recorder     *middleware.AuditRecorder
+	authenticate gin.HandlerFunc
+}
+
+// newAuthWiring builds the auth handlers. It starts nothing, so an error
+// leaves nothing to stop.
+func newAuthWiring(cfg *config.Config, d *AuthDeps, hub *websocket.Hub) (*authWiring, error) {
+	provider := d.OIDCProvider
+	if isNil(provider) && cfg.OIDC.Enabled {
+		p, err := auth.NewProvider(&cfg.OIDC, auth.Options{})
+		if err != nil {
+			return nil, fmt.Errorf("oidc provider: %w", err)
+		}
+		provider = p
+	}
+
+	// The same OIDC config for the password login (OIDC-only refuses a
+	// password login of a non-service account) and the OIDC routes. The
+	// refresh repository is set before the OIDC handler is built: without
+	// it the OIDC routes answer 501.
+	authHandler := handlers.NewAuthHandler(d.Users, &cfg.Auth, &cfg.OIDC)
+	authHandler.SetRefreshTokenRepo(d.RefreshTokens)
+	authHandler.SetSessionStore(d.SessionStore)
+
+	// R20: production fails closed when a revocation lookup fails.
+	keyAuthDeps := middleware.APIKeyAuthDeps{
+		JWTSecret:              cfg.Auth.JWTSecret,
+		APIKeyRepo:             d.APIKeys,
+		UserRepo:               d.Users,
+		SessionStore:           d.SessionStore,
+		FailClosedOnStoreError: true,
+	}
+
+	w := &authWiring{
+		deps:         d,
+		hub:          hub,
+		authHandler:  authHandler,
+		oidcHandler:  handlers.NewOIDCHandler(provider, authHandler, d.Users, d.SessionStore, &cfg.OIDC),
+		apiKeys:      handlers.NewAPIKeyHandler(d.APIKeys, d.Users, handlers.APIKeyOptions{}),
+		users:        handlers.NewUserHandler(d.Users, d.RefreshTokens, d.APIKeys, &cfg.Auth),
+		auditLogs:    handlers.NewAuditLogHandler(d.AuditLogs, d.Users),
+		recorder:     middleware.NewAuditRecorder(d.AuditLogs),
+		authenticate: middleware.CombinedAuth(keyAuthDeps),
+	}
+	w.users.SetSessionStore(d.SessionStore)
+	if hub != nil {
+		// Logout, logout-all, user revocations and key deletes close the
+		// open sockets of this replica.
+		authHandler.SetWebSocketRevoker(hub)
+		w.users.SetWebSocketRevoker(hub)
+		w.apiKeys.SetWebSocketRevoker(hub)
+	}
+	return w, nil
+}
+
+// registerWebSocket registers the authenticated /ws upgrade and starts the
+// revalidation of the open sockets (it stops when the hub shuts down).
+func (a *authWiring) registerWebSocket(router *gin.Engine, ws *handlers.WebSocketHandler, apiLimiter *handlers.RateLimiter) {
+	check := handlers.NewWebSocketRevocationChecker(a.deps.SessionStore, a.deps.Users, a.deps.APIKeys, true)
+	ws.SetIdentityResolver(handlers.WebSocketIdentityFromContext)
+	ws.SetRecheck(check)
+	if a.hub != nil {
+		a.hub.SetTopicAuthorizer(handlers.DefaultTopicAuthorizer)
+		interval := a.deps.RevalidateInterval
+		if interval <= 0 {
+			interval = websocket.DefaultRevalidateInterval
+		}
+		a.hub.StartRevalidation(interval, check)
+	}
+	router.GET("/ws",
+		apiLimiter.RateLimit(),
+		middleware.WebSocketQueryToken(),
+		a.authenticate,
+		middleware.RequireActiveUser(a.deps.Users),
+		ws.HandleWebSocket,
+	)
+}
+
+// registerPublicAuth registers the auth routes that authenticate themselves.
+func (a *authWiring) registerPublicAuth(v1 *gin.RouterGroup, l *RateLimiters) {
+	g := v1.Group("/auth")
+	g.POST("/login", l.Login.RateLimit(), a.authHandler.Login)
+	g.POST("/register", l.Register.RateLimit(), a.authHandler.Register)
+	g.POST("/refresh", l.Refresh.RateLimit(), a.authHandler.Refresh)
+	// Public: a client with an expired access token can still end its session
+	// with the cookie. RequireSessionAuth passes here (no auth middleware ran);
+	// the handler reads only the bearer token and the cookie.
+	g.POST("/logout", middleware.RequireSessionAuth(), a.authHandler.Logout)
+	g.GET("/oidc/login", l.OIDC.RateLimit(), a.oidcHandler.Login)
+	g.GET("/oidc/callback", l.OIDC.RateLimit(), a.oidcHandler.Callback)
+}
+
+// registerAuthenticated registers the routes behind CombinedAuth.
+func (a *authWiring) registerAuthenticated(api *gin.RouterGroup) {
+	g := api.Group("/auth")
+	g.GET("/me", a.authHandler.GetCurrentUser)
+	g.POST("/logout-all", middleware.RequireSessionAuth(), a.authHandler.LogoutAll)
+
+	keys := api.Group("/api-keys", middleware.RequireSessionAuth())
+	keys.POST("", a.apiKeys.CreateAPIKey)
+	keys.GET("", a.apiKeys.ListAPIKeys)
+	keys.DELETE("/:id", a.apiKeys.DeleteAPIKey)
+
+	// The handlers check the admin role and the login session themselves (also
+	// against the database); the route gates are a second layer.
+	users := api.Group("/users", middleware.RequireSessionAuth(), middleware.RequireAdmin())
+	users.GET("", a.users.ListUsers)
+	users.POST("", a.users.CreateUser)
+	users.GET("/:id", a.users.GetUser)
+	users.PUT("/:id", a.users.UpdateUser)
+	users.DELETE("/:id", a.users.DeleteUser)
+	users.PUT("/:id/role", a.users.ChangeUserRole)
+	users.PUT("/:id/disabled", a.users.SetUserDisabled)
+
+	api.GET("/audit-logs", middleware.RequireSessionAuth(), middleware.RequireAdmin(), a.auditLogs.ListAuditLogs)
 }

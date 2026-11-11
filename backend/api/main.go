@@ -21,6 +21,16 @@ import (
 // @schemes         http https
 // @produce         json
 // @consumes        json
+//
+// @securityDefinitions.apikey BearerAuth
+// @in                         header
+// @name                       Authorization
+// @description                With AUTH_ENABLED=true: "Bearer <access token>" from POST /api/v1/auth/login or /api/v1/auth/refresh. Not used with AUTH_ENABLED=false.
+//
+// @securityDefinitions.apikey ApiKeyAuth
+// @in                         header
+// @name                       X-API-Key
+// @description                With AUTH_ENABLED=true: an API key (sk_ and 64 hex characters) from POST /api/v1/api-keys. Not accepted on the key, user and audit log management routes or on logout-all.
 func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -36,7 +46,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	s, router := buildServices(cfg, repo)
+	s, router, err := buildServices(cfg, repo)
+	if err != nil {
+		// No secret in err: the config and auth errors name the variable only.
+		slog.Error("Failed to start the services", "error", err)
+		_ = repo.Close()
+		os.Exit(1)
+	}
 	s.servers = append(s.servers, startHTTPServer(cfg, router))
 
 	quit := make(chan os.Signal, 1)

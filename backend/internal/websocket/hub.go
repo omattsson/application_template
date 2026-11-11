@@ -111,6 +111,9 @@ type Hub struct {
 	revocables map[Revocable]struct{}
 	// accessChecker is the optional access re-check of the revocables.
 	accessChecker atomic.Pointer[RevocableAccessChecker]
+	// topicAuthorizer decides which topics a client may subscribe to. Nil:
+	// every topic (authentication off).
+	topicAuthorizer atomic.Pointer[TopicAuthorizer]
 
 	// revalidateOnce makes StartRevalidation start at most one loop.
 	revalidateOnce sync.Once
@@ -215,14 +218,60 @@ func (h *Hub) ClientCount() int {
 	return len(h.clients)
 }
 
+// TopicAuthorizer reports whether the client with this identity may
+// subscribe to the topic. It runs for every subscribe frame, outside the hub
+// lock: keep it cheap and free of I/O. It must deny what it does not know
+// (deny by default), so a new topic is private until a rule allows it.
+type TopicAuthorizer func(identity ClientIdentity, topic string) bool
+
+// SetTopicAuthorizer sets the check of every subscription. Call it before the
+// traffic starts. A nil authorizer allows every topic (the behaviour with
+// authentication off). A refused subscription is ignored like the other
+// ignored subscriptions (logged at debug level).
+func (h *Hub) SetTopicAuthorizer(authorize TopicAuthorizer) {
+	if authorize == nil {
+		h.topicAuthorizer.Store(nil)
+		return
+	}
+	h.topicAuthorizer.Store(&authorize)
+}
+
+// topicAllowed runs the topic authorizer, if any.
+func (h *Hub) topicAllowed(c *Client, topic string) bool {
+	authorize := h.topicAuthorizer.Load()
+	if authorize == nil {
+		return true
+	}
+	if (*authorize)(c.identity, topic) {
+		return true
+	}
+	slog.Debug("WebSocket subscription refused", "user_id", c.identity.UserID, "topic_len", len(topic))
+	return false
+}
+
+// TopicSubscriberCount returns the number of clients subscribed to the
+// topic. A nil hub has none.
+func (h *Hub) TopicSubscriberCount(topic string) int {
+	if h == nil {
+		return 0
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.topicSubs[topic])
+}
+
 // Subscribe registers a client's interest in the messages of a topic. An
-// empty topic, a topic longer than MaxTopicLength, and a subscription beyond
+// empty topic, a topic longer than MaxTopicLength, a topic that the topic
+// authorizer refuses (SetTopicAuthorizer), and a subscription beyond
 // MaxTopicsPerClient are ignored. A client that is not registered (never
 // registered, or already removed by a revoke, a slow-client drop or an
 // unregister) is ignored too: its send channel may be closed, and a
 // subscription would make BroadcastToTopic send on it.
 func (h *Hub) Subscribe(c *Client, topic string) {
 	if topic == "" || len(topic) > MaxTopicLength {
+		return
+	}
+	if !h.topicAllowed(c, topic) {
 		return
 	}
 	h.mu.Lock()

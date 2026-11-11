@@ -30,8 +30,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// newTestRouter builds a router with SetupRoutes and stops the limiters and
-// the hub when the test ends.
+// newTestRouter builds an auth-off router with Setup and stops the limiters
+// and the hub when the test ends.
 func newTestRouter(t *testing.T, cfg *config.Config) (*gin.Engine, *RateLimiters) {
 	t.Helper()
 
@@ -43,10 +43,13 @@ func newTestRouter(t *testing.T, cfg *config.Config) (*gin.Engine, *RateLimiters
 	go hub.Run()
 	t.Cleanup(hub.Shutdown)
 
-	rls := SetupRoutes(router, handlers.NewMockRepository(), healthChecker, cfg, hub)
-	t.Cleanup(rls.Stop)
+	res, err := Setup(router, Deps{
+		Config: cfg, Repository: handlers.NewMockRepository(), HealthChecker: healthChecker, Hub: hub,
+	})
+	require.NoError(t, err)
+	t.Cleanup(res.RateLimiters.Stop)
 
-	return router, rls
+	return router, res.RateLimiters
 }
 
 func testConfig(rateLimit, loginRateLimit int32, trusted []string) *config.Config {
@@ -347,8 +350,8 @@ func TestUIConfigRoute(t *testing.T) {
 		auth     bool
 		wantBody string
 	}{
-		{name: "defaults", title: "Application Template", wantBody: `{"title":"Application Template","auth_enabled":false}`},
-		{name: "custom", title: "My App", auth: true, wantBody: `{"title":"My App","auth_enabled":true}`},
+		{name: "defaults", title: "Application Template", wantBody: `{"title":"Application Template","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false}`},
+		{name: "custom", title: "My App", auth: true, wantBody: `{"title":"My App","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true}`},
 	}
 
 	for _, tt := range tests {
@@ -356,10 +359,16 @@ func TestUIConfigRoute(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := testConfig(100, 10, nil)
-			cfg.App.Title = tt.title
-			cfg.Auth.Enabled = tt.auth
-			router, _ := newTestRouter(t, cfg)
+			var router *gin.Engine
+			if tt.auth {
+				cfg := authOn()
+				cfg.App.Title = tt.title
+				router = newAuthEnv(t, cfg).router
+			} else {
+				cfg := testConfig(100, 10, nil)
+				cfg.App.Title = tt.title
+				router, _ = newTestRouter(t, cfg)
+			}
 
 			// No credentials of any kind.
 			w := httptest.NewRecorder()
@@ -384,7 +393,7 @@ func TestUIConfigRouteFromEnv(t *testing.T) {
 
 	cfg, err := config.LoadConfig()
 	require.NoError(t, err)
-	router, _ := newTestRouter(t, cfg)
+	router := newAuthEnv(t, cfg).router
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui-config", nil)
@@ -392,7 +401,7 @@ func TestUIConfigRouteFromEnv(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.JSONEq(t, `{"title":"My App","auth_enabled":true}`, w.Body.String())
+	assert.JSONEq(t, `{"title":"My App","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true}`, w.Body.String())
 }
 
 func TestUIConfigRouteIsRateLimited(t *testing.T) {

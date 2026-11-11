@@ -226,16 +226,19 @@ func hasBearerScheme(header string) bool {
 	return strings.EqualFold(scheme, "Bearer")
 }
 
-// RequireSessionAuth refuses (403) a request that was authenticated with an
-// API key. Put it on the endpoints that act on the login session or the
-// credentials themselves (logout, logout of all sessions, key management,
-// password change): a key must not be able to mint another key, which would
-// outlive its own revocation, or end the owner's sessions. A request without
-// an authentication method (no auth middleware ran) passes: that route's own
-// authentication decides.
+// RequireSessionAuth refuses (403) a request that an auth middleware
+// authenticated with anything other than a login session (a JWT): an API key
+// today, and any method added later (an allowlist, not a denylist). Put it on
+// the endpoints that act on the login session or the credentials themselves
+// (logout, logout of all sessions, key management, user administration): a
+// key must not be able to mint another key, which would outlive its own
+// revocation, or end the owner's sessions. A request without an
+// authentication method (no auth middleware ran) passes: that route's own
+// authentication decides (the public logout reads only the bearer token and
+// the refresh cookie).
 func RequireSessionAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if GetAuthMethodFromContext(c) == AuthMethodAPIKey {
+		if m := GetAuthMethodFromContext(c); m != "" && m != AuthMethodJWT {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": msgSessionRequired})
 			return
 		}

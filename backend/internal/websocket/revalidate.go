@@ -16,9 +16,12 @@ const DefaultRevalidateInterval = time.Minute
 const revalidateTimeout = 30 * time.Second
 
 // IdentityChecker reports which socket identities are revoked. The result
-// has one entry per identity: true closes the sockets of that identity. On a
-// lookup error the checker must return false for the affected identities
-// (fail open) and log the error.
+// has one entry per identity: true closes the sockets of that identity. The
+// checker owns the policy for a lookup error and logs it: return false for
+// the affected identities to fail open, or true to fail closed (the
+// production wiring fails closed, like the HTTP auth; see
+// handlers.NewWebSocketRevocationChecker). On a context that the hub
+// cancelled (shutdown) it should return false: the sockets close anyway.
 type IdentityChecker func(ctx context.Context, identities []ClientIdentity) []bool
 
 // identityKey is the comparable form of a ClientIdentity.

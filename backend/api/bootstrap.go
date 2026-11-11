@@ -21,11 +21,13 @@ import (
 	"backend/internal/inflight"
 	"backend/internal/leader"
 	"backend/internal/models"
+	"backend/internal/sessionstore"
 	"backend/internal/websocket"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+	"gorm.io/gorm"
 )
 
 // minStepBudget is the smallest budget of a shutdown step.
@@ -34,6 +36,20 @@ const minStepBudget = 100 * time.Millisecond
 // defaultShutdownTimeout is the shutdown budget when SERVER_SHUTDOWN_TIMEOUT
 // is 0.
 const defaultShutdownTimeout = 5 * time.Second
+
+// Intervals of the leader workers of the auth module.
+const (
+	// refreshTokenCleanupInterval is how often the leader deletes the refresh
+	// tokens that expired (AuthHandler.CleanupExpiredTokens).
+	refreshTokenCleanupInterval = time.Hour
+	// sessionStoreCleanupInterval is how often the leader deletes the expired
+	// session store entries. Each store also cleans up after itself every
+	// minute (its janitor); the worker keeps the table small when that
+	// janitor falls behind, from one replica only.
+	sessionStoreCleanupInterval = 15 * time.Minute
+	// ensureAdminTimeout bounds the admin bootstrap at start.
+	ensureAdminTimeout = 30 * time.Second
+)
 
 // openRepository opens the database and runs the migrations. Tests replace it.
 var openRepository = database.NewRepository
@@ -65,9 +81,15 @@ type hubShutdowner interface {
 	Shutdown()
 }
 
-// stopper is the rate limiters (*routes.RateLimiters).
+// stopper is the rate limiters (*routes.RateLimiters) and the session store
+// (sessionstore.SessionStore, whose Stop ends its cleanup goroutine).
 type stopper interface {
 	Stop()
+}
+
+// auditShutdowner is the audit recorder (*middleware.AuditRecorder).
+type auditShutdowner interface {
+	Shutdown(ctx context.Context) error
 }
 
 // closer is the data layer (models.Repository).
@@ -77,6 +99,10 @@ type closer interface {
 
 // services holds what shutdown stops. A nil field is skipped.
 type services struct {
+	// auditRecorder writes the audit entries of the requests (auth on).
+	auditRecorder auditShutdowner
+	// sessionStore is the token blocklist and OIDC state store (auth on).
+	sessionStore stopper
 	// leader runs the leader-only background workers.
 	leader groupCloser
 	// inFlight is the work that outlives its request or worker run
@@ -123,6 +149,83 @@ type routerDeps struct {
 	// false (shutdown began). Shutdown waits for it before the database
 	// closes.
 	InFlight *inflight.Tracker
+	// Auth holds the auth stores; required with AUTH_ENABLED=true.
+	Auth *routes.AuthDeps
+}
+
+// newSessionStore builds the session store of SESSION_STORE on db. Tests
+// replace it.
+var newSessionStore = defaultSessionStore
+
+// defaultSessionStore returns the MySQL store (the default; it shares the
+// database of the repositories) or the in-memory store. Both start a cleanup
+// goroutine that Stop ends.
+func defaultSessionStore(kind string, db *gorm.DB) (sessionstore.SessionStore, error) {
+	switch kind {
+	case "", config.SessionStoreMySQL:
+		if db == nil {
+			return nil, errors.New("SESSION_STORE=mysql needs the database")
+		}
+		return sessionstore.NewMySQL(db), nil
+	case config.SessionStoreMemory:
+		slog.Warn("SESSION_STORE=memory: revocations are kept in this process only; use it for one replica in development")
+		return sessionstore.NewMemory(), nil
+	default:
+		return nil, fmt.Errorf("SESSION_STORE must be %s or %s", config.SessionStoreMySQL, config.SessionStoreMemory)
+	}
+}
+
+// gormRepository is a repository that exposes its database handle
+// (*models.GenericRepository).
+type gormRepository interface {
+	DB() *gorm.DB
+}
+
+// openAuthStores builds the repositories of the auth module and the session
+// store on the database of repo (one connection pool, which repo.Close
+// closes). The caller stops the session store.
+func openAuthStores(cfg *config.Config, repo models.Repository) (*routes.AuthDeps, error) {
+	g, ok := repo.(gormRepository)
+	if !ok || g.DB() == nil {
+		return nil, errors.New("auth needs the database repository")
+	}
+	db := g.DB()
+	store, err := newSessionStore(cfg.Auth.SessionStore, db)
+	if err != nil {
+		return nil, err
+	}
+	return &routes.AuthDeps{
+		Users:         database.NewGORMUserRepository(db),
+		RefreshTokens: database.NewGORMRefreshTokenRepository(db),
+		APIKeys:       database.NewGORMAPIKeyRepository(db),
+		AuditLogs:     database.NewGORMAuditLogRepository(db),
+		SessionStore:  store,
+	}, nil
+}
+
+// periodicWorker returns a leader worker that runs fn at the start of each
+// leadership term and then every interval, with the worker context (the end
+// of the term stops a running call). An error is logged with the worker name;
+// an error after the context ended (shutdown, lost leadership) is not.
+func periodicWorker(name string, interval time.Duration, fn func(ctx context.Context) error) leader.Worker {
+	run := func(ctx context.Context) {
+		if err := fn(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("Leader worker run failed", "worker", name, "error", err)
+		}
+	}
+	return leader.Worker{Name: name, Run: func(ctx context.Context) {
+		run(ctx)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run(ctx)
+			}
+		}
+	}}
 }
 
 // initDatabase opens the database, runs the migrations and returns the
@@ -132,27 +235,43 @@ func initDatabase(cfg *config.Config) (models.Repository, error) {
 }
 
 // buildRouter sets the Gin mode (Config.GinMode), creates the Gin engine and
-// registers the routes. The Swagger UI is registered only with
-// ENABLE_SWAGGER=true. The caller stops the returned rate limiters on
-// shutdown.
-func buildRouter(cfg *config.Config, deps routerDeps) (*gin.Engine, *routes.RateLimiters) {
+// registers the routes with routes.Setup (with AUTH_ENABLED=true it refuses
+// to build without deps.Auth). The Swagger UI is registered only with
+// ENABLE_SWAGGER=true. The caller stops the returned rate limiters and shuts
+// the audit recorder down on shutdown.
+func buildRouter(cfg *config.Config, deps routerDeps) (*gin.Engine, *routes.Result, error) {
 	gin.SetMode(cfg.GinMode())
-	// gin.New, not gin.Default: SetupRoutes registers its own Logger and
-	// Recovery middleware.
+	// gin.New, not gin.Default: Setup registers its own Logger and Recovery
+	// middleware.
 	router := gin.New()
-	rateLimiters := routes.SetupRoutes(router, deps.Repository, deps.HealthChecker, cfg, deps.Hub)
+	res, err := routes.Setup(router, routes.Deps{
+		Config:        cfg,
+		Repository:    deps.Repository,
+		HealthChecker: deps.HealthChecker,
+		Hub:           deps.Hub,
+		Auth:          deps.Auth,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("build the router: %w", err)
+	}
 	if cfg.Server.EnableSwagger {
 		router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 		slog.Info("Swagger UI enabled", "path", "/swagger/index.html")
 	}
-	return router, rateLimiters
+	return router, res, nil
 }
 
 // buildServices creates the health checker, the WebSocket hub, the router and
 // the leader worker group, and starts the hub and the group. The returned
 // services hold everything that shutdown stops except the HTTP server, which
 // the caller adds after startHTTPServer.
-func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.Engine) {
+//
+// With AUTH_ENABLED=true it also builds the auth stores on the database of
+// repo (SESSION_STORE), creates the admin user (EnsureAdminUser: an invalid
+// ADMIN_PASSWORD or a failed lookup stops the start) and adds the
+// refresh-token-cleanup and session-store-cleanup workers. On an error it
+// stops what it started (not repo: the caller closes it) and returns it.
+func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.Engine, error) {
 	healthChecker := health.New()
 	healthChecker.AddCheck("database", repo.Ping)
 	healthChecker.SetReady(true)
@@ -164,29 +283,72 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 	// leader workers, which receive it when they are built below.
 	tracker := inflight.New()
 
-	router, rateLimiters := buildRouter(cfg, routerDeps{
+	var authDeps *routes.AuthDeps
+	if cfg.Auth.Enabled {
+		var err error
+		if authDeps, err = openAuthStores(cfg, repo); err != nil {
+			hub.Shutdown()
+			return nil, nil, fmt.Errorf("open the auth stores: %w", err)
+		}
+	}
+	// fail stops what was started before an error.
+	fail := func(res *routes.Result, err error) (*services, *gin.Engine, error) {
+		if res != nil {
+			res.RateLimiters.Stop()
+		}
+		if authDeps != nil {
+			authDeps.SessionStore.Stop()
+		}
+		hub.Shutdown()
+		return nil, nil, err
+	}
+
+	router, res, err := buildRouter(cfg, routerDeps{
 		Repository:    repo,
 		HealthChecker: healthChecker,
 		Hub:           hub,
 		InFlight:      tracker,
+		Auth:          authDeps,
 	})
+	if err != nil {
+		return fail(nil, err)
+	}
+
+	s := &services{
+		inFlight:          tracker,
+		hub:               hub,
+		telemetryShutdown: func(context.Context) error { return nil },
+		rateLimiters:      res.RateLimiters,
+		db:                repo,
+	}
 
 	// Leader-only background workers. There is no leader election yet, so
 	// this process is the leader until shutdown. Pass every worker to
 	// NewGroup here (give it tracker when it starts work that outlives its
 	// Run), BEFORE workers.Start: Group.Add only takes effect at the next
 	// term, and without an election there is no next term.
-	workers := leader.NewGroup(leader.DefaultStopTimeout)
+	var leaderWorkers []leader.Worker
+	if cfg.Auth.Enabled {
+		// Two replicas that start at once are safe: EnsureAdminUser never
+		// changes an existing user and treats a duplicate key as success.
+		ctx, cancel := context.WithTimeout(context.Background(), ensureAdminTimeout)
+		err := res.AuthHandler.EnsureAdminUser(ctx)
+		cancel()
+		if err != nil {
+			return fail(res, fmt.Errorf("admin user: %w", err))
+		}
+		leaderWorkers = append(leaderWorkers,
+			periodicWorker("refresh-token-cleanup", refreshTokenCleanupInterval, res.AuthHandler.CleanupExpiredTokens),
+			periodicWorker("session-store-cleanup", sessionStoreCleanupInterval, authDeps.SessionStore.Cleanup),
+		)
+		s.auditRecorder = res.AuditRecorder
+		s.sessionStore = authDeps.SessionStore
+	}
+	workers := leader.NewGroup(leader.DefaultStopTimeout, leaderWorkers...)
 	workers.Start(context.Background())
+	s.leader = workers
 
-	return &services{
-		leader:            workers,
-		inFlight:          tracker,
-		hub:               hub,
-		telemetryShutdown: func(context.Context) error { return nil },
-		rateLimiters:      rateLimiters,
-		db:                repo,
-	}, router
+	return s, router, nil
 }
 
 // startHTTPServer binds the address of cfg and serves handler in a goroutine.
@@ -250,21 +412,27 @@ func stepBudget(ctx context.Context) time.Duration {
 //  1. HTTP servers: no new requests; wait for the open requests. A server
 //     whose Shutdown fails (deadline) is closed, so its handlers do not run
 //     on while the database closes.
-//  2. Leader worker group: no new background work.
-//  3. In-flight work that outlives its request (inflight.Tracker).
-//  4. WebSocket hub: close the client connections.
-//  5. Telemetry: flush after the services stopped, so it covers the shutdown.
-//  6. Rate limiters: stop their cleanup goroutines.
-//  7. Database: close the connection pool last.
+//  2. Audit recorder (auth on): no new entries; wait for the writes of the
+//     finished requests, so a graceful stop loses no entry.
+//  3. Leader worker group: no new background work.
+//  4. In-flight work that outlives its request (inflight.Tracker).
+//  5. WebSocket hub: close the client connections; this also ends the
+//     revalidation loop of the open sockets.
+//  6. Telemetry: flush after the services stopped, so it covers the shutdown.
+//  7. Rate limiters: stop their cleanup goroutines.
+//  8. Session store (auth on): stop its cleanup goroutine, after everything
+//     that reads it (requests, workers, the hub revalidation).
+//  9. Database: close the connection pool last.
 //
-// Budgets: the HTTP step uses ctx. The leader step, the in-flight step and
-// the telemetry step each get their own budget (stepBudget: the time left on
-// ctx when shutdown starts, at least minStepBudget), detached from ctx with
-// ctxutil.Detach. A hung request that uses up ctx therefore does not starve
-// them: the leader workers still get time to stop and the telemetry flush
-// still gets a live context. The worst case is about four budgets (each of
-// the four steps hangs); keep the grace period of the orchestrator above
-// that, or SERVER_SHUTDOWN_TIMEOUT below a quarter of it.
+// Budgets: the HTTP step uses ctx. The audit step, the leader step, the
+// in-flight step and the telemetry step each get their own budget
+// (stepBudget: the time left on ctx when shutdown starts, at least
+// minStepBudget), detached from ctx with ctxutil.Detach. A hung request that
+// uses up ctx therefore does not starve them: the leader workers still get
+// time to stop and the telemetry flush still gets a live context. The worst
+// case is about five budgets (each of the five steps hangs); keep the grace
+// period of the orchestrator above that, or SERVER_SHUTDOWN_TIMEOUT below a
+// fifth of it.
 //
 // Every step runs even when an earlier step failed. shutdown returns the
 // errors of all steps; a step that ran out of time wraps
@@ -279,6 +447,15 @@ func shutdown(ctx context.Context, s *services) error {
 			if cerr := srv.Close(); cerr != nil {
 				errs = append(errs, fmt.Errorf("close http server: %w", cerr))
 			}
+		}
+	}
+
+	if !isNilInterface(s.auditRecorder) {
+		auditCtx, cancel := ctxutil.Detach(ctx, budget)
+		err := s.auditRecorder.Shutdown(auditCtx)
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("audit log writes did not finish: %w", err))
 		}
 	}
 
@@ -310,6 +487,10 @@ func shutdown(ctx context.Context, s *services) error {
 
 	if s.rateLimiters != nil {
 		s.rateLimiters.Stop()
+	}
+
+	if !isNilInterface(s.sessionStore) {
+		s.sessionStore.Stop()
 	}
 
 	if s.db != nil {

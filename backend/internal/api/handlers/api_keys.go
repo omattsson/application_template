@@ -117,15 +117,17 @@ type APIKeyListResponse struct {
 	PageSize int              `json:"pageSize"`
 }
 
-// sessionOnly answers 401 (no identity) or 403 (an API key) and reports false
-// when the request must not go on.
+// sessionOnly answers 401 (no identity) or 403 (anything but a login session)
+// and reports false when the request must not go on. It is an allowlist: only
+// the JWT method passes, so an API key, a request whose route set a user
+// without an auth method, and any method added later are refused.
 func sessionOnly(c *gin.Context) (userID string, ok bool) {
 	userID = middleware.GetUserIDFromContext(c)
 	if userID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": msgAuthRequired})
 		return "", false
 	}
-	if middleware.GetAuthMethodFromContext(c) == middleware.AuthMethodAPIKey {
+	if middleware.GetAuthMethodFromContext(c) != middleware.AuthMethodJWT {
 		c.JSON(http.StatusForbidden, gin.H{"error": msgAPIKeySessionOnly})
 		return "", false
 	}

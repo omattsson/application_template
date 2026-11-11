@@ -57,6 +57,9 @@ const (
 	msgPasswordTooLong      = "Password must be at most 72 bytes"
 	msgInvalidEmail         = "Invalid email address"
 	msgDisplayNameTooLong   = "Display name must be at most 255 characters"
+	// msgSessionRequired is the 403 of an endpoint that only a login session
+	// may use (the text of middleware.RequireSessionAuth).
+	msgSessionRequired = "This action requires a login session"
 	// msgJSONContentTypeRequired is the 415 of a session login without a JSON
 	// Content-Type.
 	msgJSONContentTypeRequired = "Content-Type must be application/json"

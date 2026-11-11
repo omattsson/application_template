@@ -55,6 +55,11 @@ type ClientIdentity struct {
 	TokenID   string // jti claim; empty for an API key
 	SessionID string // session family of the token; empty for an API key or a token without a session
 	APIKeyID  string // ID of the API key; empty for an access token
+	// Role is the role of the user when the socket opened (the token claim,
+	// or the current role of an API key's owner). The topic authorizer uses
+	// it. A role change ends the user's sessions and closes the socket, so
+	// the role stays right for the life of the socket.
+	Role string
 }
 
 // Client is a middleman between the WebSocket connection and the hub.

@@ -397,11 +397,12 @@ func TestSwaggerRouteOnlyWhenEnabled(t *testing.T) {
 			cfg := bootstrapTestConfig()
 			cfg.Server.EnableSwagger = tt.enabled
 
-			router, rateLimiters := buildRouter(cfg, routerDeps{
+			router, res, err := buildRouter(cfg, routerDeps{
 				HealthChecker: health.New(),
 				Hub:           websocket.NewHub(),
 			})
-			t.Cleanup(rateLimiters.Stop)
+			require.NoError(t, err)
+			t.Cleanup(res.RateLimiters.Stop)
 
 			for _, path := range []string{"/swagger/index.html", "/swagger/doc.json"} {
 				w := httptest.NewRecorder()
@@ -433,8 +434,9 @@ func TestBuildRouterSetsGinMode(t *testing.T) {
 			cfg := bootstrapTestConfig()
 			cfg.App.Debug = false
 
-			_, rateLimiters := buildRouter(cfg, routerDeps{HealthChecker: health.New(), Hub: websocket.NewHub()})
-			t.Cleanup(rateLimiters.Stop)
+			_, res, err := buildRouter(cfg, routerDeps{HealthChecker: health.New(), Hub: websocket.NewHub()})
+			require.NoError(t, err)
+			t.Cleanup(res.RateLimiters.Stop)
 
 			assert.Equal(t, tt.want, gin.Mode())
 		})
@@ -549,7 +551,8 @@ func TestBootstrapPipeline(t *testing.T) {
 	cfg := bootstrapTestConfig()
 	repo := &stubRepository{}
 
-	s, router := buildServices(cfg, repo)
+	s, router, err := buildServices(cfg, repo)
+	require.NoError(t, err)
 	require.NotNil(t, s)
 	require.NotNil(t, router)
 	assert.NotNil(t, s.leader)
@@ -571,6 +574,8 @@ func TestBootstrapPipeline(t *testing.T) {
 		Title       string `json:"title"`
 		AuthEnabled bool   `json:"auth_enabled"`
 	}
+	assert.Nil(t, s.auditRecorder, "no audit recorder with auth off")
+	assert.Nil(t, s.sessionStore, "no session store with auth off")
 	require.NoError(t, json.Unmarshal([]byte(httpGet(t, base+"/api/v1/ui-config", http.StatusOK)), &ui))
 	assert.Equal(t, "Smoke Title", ui.Title)
 	assert.False(t, ui.AuthEnabled)
