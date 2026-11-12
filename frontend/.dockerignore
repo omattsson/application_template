@@ -17,7 +17,10 @@ dist/
 coverage/
 test-results/
 playwright-report/
-e2e/
+e2e/*
+# src/__tests__/a11ySkipDecision.test.ts imports it, and tsc (npm run build)
+# type-checks that test.
+!e2e/skipDecision.ts
 
 # Git
 .git/
