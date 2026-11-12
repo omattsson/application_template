@@ -1,4 +1,4 @@
-.PHONY: gosec dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
+.PHONY: test-e2e test-e2e-auth gosec dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
 
 # MySQL service management
 mysql-start:
@@ -100,20 +100,42 @@ test-backend-all: integration-infra-start
 test-frontend:
 	cd frontend && npm test
 
-# Run frontend e2e tests (requires MySQL running, starts backend natively)
-test-e2e: integration-infra-start
-	@echo "Building and starting backend..."
-	@cd backend && go build -o tmp/main ./api
-	@cd backend && DB_HOST=localhost DB_PORT=3306 DB_NAME=$${MYSQL_DATABASE:-app} DB_USER=$${MYSQL_USER:-appuser} DB_PASSWORD=$${MYSQL_PASSWORD:-apppass} PORT=8081 ./tmp/main &
-	@echo "Waiting for backend to be healthy..."
-	@until curl -sf http://localhost:8081/health/live >/dev/null 2>&1; do \
-		sleep 1; \
-	done
-	@echo "Backend is ready, running Playwright tests..."
-	cd frontend && npx playwright test || (kill $$(lsof -ti:8081) 2>/dev/null; $(MAKE) integration-infra-stop; exit 1)
-	@echo "Stopping backend..."
-	@kill $$(lsof -ti:8081) 2>/dev/null || true
-	$(MAKE) integration-infra-stop
+# Frontend e2e tests (Playwright). scripts/e2e.sh starts MySQL in Docker under
+# its own Compose project (E2E_COMPOSE_PROJECT, host port E2E_MYSQL_PORT), builds
+# and starts the backend natively (E2E_BACKEND_PORT), runs Playwright (which
+# starts the Vite dev server on E2E_FRONTEND_PORT) and removes the database and
+# the backend afterwards, also on a failure. A port in use is an error.
+E2E_COMPOSE_PROJECT ?= app-template-e2e
+E2E_MYSQL_PORT ?= 13306
+E2E_BACKEND_PORT ?= 8081
+E2E_FRONTEND_PORT ?= 3000
+E2E_RUN_ENV = E2E_COMPOSE_PROJECT=$(E2E_COMPOSE_PROJECT) E2E_MYSQL_PORT=$(E2E_MYSQL_PORT) \
+	E2E_BACKEND_PORT=$(E2E_BACKEND_PORT) E2E_FRONTEND_PORT=$(E2E_FRONTEND_PORT)
+
+# Auth run: TEST VALUES ONLY, for the throwaway e2e backend. They are not
+# defaults of the application (it has none for JWT_SECRET and ADMIN_PASSWORD)
+# and must never be used anywhere else.
+E2E_JWT_SECRET ?= e2e-only-jwt-secret-not-for-any-real-deployment
+E2E_ADMIN_USERNAME ?= admin
+E2E_ADMIN_PASSWORD ?= e2e-only-admin-password
+# false: the refresh cookie is refresh_token without Secure. true: the
+# production setting, __Host-refresh_token with Secure (Chromium accepts it on
+# http://localhost too).
+E2E_SECURE_COOKIES ?= false
+E2E_AUTH_SPECS ?= e2e/auth.spec.ts e2e/accessibility.spec.ts
+
+# Auth off: every spec. auth.spec.ts skips itself (it needs AUTH_ENABLED=true),
+# and the accessibility spec skips the Login and Admin Users pages.
+test-e2e:
+	$(E2E_RUN_ENV) scripts/e2e.sh off
+
+# Auth on (AUTH_ENABLED=true, test JWT_SECRET and ADMIN_PASSWORD): the sign-in
+# specs and the accessibility spec in strict mode (A11Y_REQUIRE_AUTH=1), so the
+# Login and Admin Users pages are really checked.
+test-e2e-auth:
+	$(E2E_RUN_ENV) E2E_JWT_SECRET=$(E2E_JWT_SECRET) E2E_ADMIN_USERNAME=$(E2E_ADMIN_USERNAME) \
+		E2E_ADMIN_PASSWORD=$(E2E_ADMIN_PASSWORD) E2E_SECURE_COOKIES=$(E2E_SECURE_COOKIES) \
+		scripts/e2e.sh auth $(E2E_AUTH_SPECS)
 
 # Install dependencies
 install:

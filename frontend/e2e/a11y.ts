@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { BROWSER_API } from './authEnv';
 import { decideRun, isStrict } from './skipDecision';
 import type { BackendState, DecisionInput } from './skipDecision';
 
@@ -77,12 +78,16 @@ export interface PageCheck {
  * Never throws.
  */
 export async function probeBackend(page: Page): Promise<BackendState> {
+  // The path the app itself calls: the dev server strips the first /api, so
+  // /api/v1/ui-config on the page origin would reach the backend as
+  // /v1/ui-config (404).
+  const path = `${BROWSER_API}/ui-config`;
   try {
-    const res = await page.request.get('/api/v1/ui-config');
-    if (!res.ok()) return { kind: 'unreachable', reason: `GET /api/v1/ui-config answered ${res.status()}` };
+    const res = await page.request.get(path);
+    if (!res.ok()) return { kind: 'unreachable', reason: `GET ${path} answered ${res.status()}` };
     const config = (await res.json()) as { auth_enabled?: unknown } | null;
     if (!config || typeof config.auth_enabled !== 'boolean') {
-      return { kind: 'unreachable', reason: 'GET /api/v1/ui-config did not answer a UI config' };
+      return { kind: 'unreachable', reason: `GET ${path} did not answer a UI config` };
     }
     return { kind: 'responded', authEnabled: config.auth_enabled };
   } catch (error) {

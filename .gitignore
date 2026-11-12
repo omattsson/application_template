@@ -61,6 +61,8 @@ Thumbs.db
 # Playwright
 /frontend/test-results/
 /frontend/playwright-report/
+# One HTML report per e2e mode (scripts/e2e.sh: playwright-report-off, -auth)
+/frontend/playwright-report-*/
 /frontend/blob-report/
 /frontend/playwright/.cache/
 
