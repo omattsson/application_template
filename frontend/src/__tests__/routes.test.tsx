@@ -26,6 +26,7 @@ function authState(overrides: Partial<AuthContextValue> = {}): AuthContextValue 
 
 vi.mock('../pages/Home', () => ({ default: () => <h1>Home page</h1> }));
 vi.mock('../pages/Health', () => ({ default: () => <h1>Health page</h1> }));
+vi.mock('../pages/Admin/Users', () => ({ default: () => <h1>Admin users page</h1> }));
 const itemsState = { shouldThrow: false };
 vi.mock('../pages/Items', () => ({
   default: () => {
@@ -75,6 +76,34 @@ describe('AppRoutes', () => {
     vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
     renderAt(path);
     expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+  });
+
+  describe('/admin/users', () => {
+    const ALICE = { id: 'u1', username: 'alice', display_name: 'Alice', role: 'admin' as const };
+
+    it('renders for an admin', () => {
+      vi.mocked(useAuth).mockReturnValue(
+        authState({ authEnabled: true, isAuthenticated: true, user: ALICE, role: 'admin' }),
+      );
+      renderAt('/admin/users');
+      expect(screen.getByRole('heading', { name: 'Admin users page' })).toBeInTheDocument();
+    });
+
+    it.each(['user', 'devops'] as const)('shows Access denied (no redirect) to the role %s', (role) => {
+      vi.mocked(useAuth).mockReturnValue(
+        authState({ authEnabled: true, isAuthenticated: true, user: { ...ALICE, role }, role }),
+      );
+      renderAt('/admin/users');
+      expect(screen.getByRole('heading', { name: 'Access denied' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Admin users page' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Login page' })).not.toBeInTheDocument();
+    });
+
+    it('sends an anonymous visitor to the login page', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
+      renderAt('/admin/users');
+      expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+    });
   });
 
   it('renders NotFound for an unknown path', () => {

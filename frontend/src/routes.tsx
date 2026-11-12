@@ -2,6 +2,7 @@ import { Routes, Route, useLocation } from 'react-router-dom';
 import Home from './pages/Home';
 import Health from './pages/Health';
 import Items from './pages/Items';
+import AdminUsers from './pages/Admin/Users';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
 import NotFound from './pages/NotFound';
@@ -21,6 +22,7 @@ const AppRoutes = () => {
         <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
         <Route path="/health" element={<ProtectedRoute><Health /></ProtectedRoute>} />
         <Route path="/items" element={<ProtectedRoute><Items /></ProtectedRoute>} />
+        <Route path="/admin/users" element={<ProtectedRoute roles={['admin']}><AdminUsers /></ProtectedRoute>} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </ErrorBoundary>

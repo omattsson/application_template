@@ -7,7 +7,7 @@ import { getAccessToken, getSession } from './session';
 import { summarizeRequestError } from './errorSummary';
 import type { UIConfig } from '../context/UIConfigContext';
 import { toRole } from '../utils/jwt';
-import type { AuthUser } from '../utils/jwt';
+import type { AuthUser, Role } from '../utils/jwt';
 
 // Marks a request that was already retried after a refresh (no second retry).
 declare module 'axios' {
@@ -209,6 +209,149 @@ export const authService = {
       });
     } catch (error) {
       console.error('Logout failed:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+};
+
+/** A user as the user administration returns it (never with a password hash). */
+export interface User {
+  id: string;
+  username: string;
+  email: string;
+  display_name: string;
+  role: Role;
+  /** `local` for a password account, otherwise the name of the identity provider. */
+  auth_provider: string;
+  disabled: boolean;
+  service_account: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One page of users (GET /api/v1/users). `page` starts at 1. */
+export interface UserListResponse {
+  data: User[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** Body of POST /api/v1/users. An empty display name defaults to the username on the server. */
+export interface CreateUserRequest {
+  username: string;
+  email: string;
+  display_name: string;
+  password: string;
+  role: Role;
+}
+
+/** Answer of PUT /api/v1/users/:id/role. */
+export interface ChangeRoleResult {
+  id: string;
+  old_role: string;
+  new_role: string;
+  message: string;
+  /** False when the user already had the role. */
+  changed: boolean;
+  /** True for an SSO user: the identity provider may override the role at the next login. */
+  idp_managed: boolean;
+}
+
+/** Answer of PUT /api/v1/users/:id/disabled. */
+export interface SetDisabledResult {
+  id: string;
+  message: string;
+  disabled: boolean;
+  /** False when the user already had that state. */
+  changed: boolean;
+}
+
+/**
+ * User administration (admin role and a login session; the API refuses
+ * everything else with 403). A change that would leave no enabled admin is
+ * answered with 409 and a message.
+ */
+export const userService = {
+  /**
+   * List one page of users, ordered by username.
+   * @param page - Page number, from 1
+   * @param pageSize - Users per page (the server default is 25, the maximum 100)
+   * @returns The page and the total number of users
+   * @see GET /api/v1/users
+   */
+  list: async (page: number, pageSize: number): Promise<UserListResponse> => {
+    try {
+      const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      const response = await api.get<UserListResponse>(`/api/v1/users?${query.toString()}`);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to list users:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+
+  /**
+   * Create a local user.
+   * @param user - The new user (the password is sent once and never logged)
+   * @returns The created user
+   * @see POST /api/v1/users
+   */
+  create: async (user: CreateUserRequest): Promise<User> => {
+    try {
+      const response = await api.post<User>('/api/v1/users', user);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to create a user:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+
+  /**
+   * Change the role of a user. Ends the sessions of that user.
+   * @param id - User ID
+   * @param role - The new role
+   * @returns The old and the new role
+   * @see PUT /api/v1/users/:id/role
+   */
+  changeRole: async (id: string, role: Role): Promise<ChangeRoleResult> => {
+    try {
+      const response = await api.put<ChangeRoleResult>(`/api/v1/users/${encodeURIComponent(id)}/role`, { role });
+      return response.data;
+    } catch (error) {
+      console.error('Failed to change the role of a user:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+
+  /**
+   * Disable or enable a user. Disabling ends the sessions of that user.
+   * @param id - User ID
+   * @param disabled - True to disable, false to enable
+   * @returns The new state
+   * @see PUT /api/v1/users/:id/disabled
+   */
+  setDisabled: async (id: string, disabled: boolean): Promise<SetDisabledResult> => {
+    try {
+      const response = await api.put<SetDisabledResult>(`/api/v1/users/${encodeURIComponent(id)}/disabled`, { disabled });
+      return response.data;
+    } catch (error) {
+      console.error('Failed to change the disabled state of a user:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+
+  /**
+   * Delete a user permanently.
+   * @param id - User ID
+   * @returns Nothing
+   * @see DELETE /api/v1/users/:id
+   */
+  delete: async (id: string): Promise<void> => {
+    try {
+      await api.delete(`/api/v1/users/${encodeURIComponent(id)}`);
+    } catch (error) {
+      console.error('Failed to delete a user:', summarizeRequestError(error));
       throw error;
     }
   },

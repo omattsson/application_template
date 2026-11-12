@@ -13,12 +13,14 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { mode, toggleMode } = useThemeMode();
-  const { authEnabled, isLoading, isAuthenticated, user, logout } = useAuth();
+  const { authEnabled, isLoading, isAuthenticated, user, role, logout } = useAuth();
   const navigate = useNavigate();
   const toggleLabel = mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode';
   // Nothing while the UI config and the session load (no flicker). With auth
   // on the navigation is for signed-in users only (the pages would redirect to login).
   const showNavigation = !isLoading && (!authEnabled || isAuthenticated);
+  // User administration exists with auth on only, and the API requires the admin role (a UI hint).
+  const showUsers = showNavigation && authEnabled && role === 'admin';
   const showAccount = !isLoading && authEnabled && isAuthenticated;
 
   const handleLogout = async () => {
@@ -44,6 +46,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               <Button color="inherit" component={RouterLink} to="/items">
                 Items
               </Button>
+              {showUsers && (
+                <Button color="inherit" component={RouterLink} to="/admin/users">
+                  Users
+                </Button>
+              )}
             </>
           )}
           <Tooltip title={toggleLabel}>

@@ -123,6 +123,41 @@ describe('Layout', () => {
       expect(screen.getByText('Full Stack App')).toBeInTheDocument();
     });
 
+    describe('Users link', () => {
+      const ADMIN = { ...ALICE, role: 'admin' as const };
+
+      it('is shown to an admin when auth is enabled', () => {
+        vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: ADMIN, role: 'admin' }));
+        renderLayout();
+        expect(screen.getByRole('link', { name: 'Users' })).toHaveAttribute('href', '/admin/users');
+      });
+
+      it.each(['user', 'devops'] as const)('is hidden from the role %s', (role) => {
+        vi.mocked(useAuth).mockReturnValue(
+          authState({ authEnabled: true, isAuthenticated: true, user: { ...ALICE, role }, role }),
+        );
+        renderLayout();
+        expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
+      });
+
+      it('is hidden when auth is disabled (there are no users to manage)', () => {
+        vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: false, role: 'admin' }));
+        renderLayout();
+        expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
+      });
+
+      it('is hidden from an anonymous visitor and while loading', () => {
+        vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, role: 'admin' }));
+        renderLayout();
+        expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
+        vi.mocked(useAuth).mockReturnValue(
+          authState({ authEnabled: true, isLoading: true, isAuthenticated: true, user: ADMIN, role: 'admin' }),
+        );
+        renderLayout();
+        expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
+      });
+    });
+
     it('Logout calls logout and goes to the login page', async () => {
       const logout = vi.fn().mockResolvedValue(undefined);
       vi.mocked(useAuth).mockReturnValue(
