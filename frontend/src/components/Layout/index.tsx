@@ -13,12 +13,13 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { mode, toggleMode } = useThemeMode();
-  const { authEnabled, isAuthenticated, user, logout } = useAuth();
+  const { authEnabled, isLoading, isAuthenticated, user, logout } = useAuth();
   const navigate = useNavigate();
   const toggleLabel = mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode';
-  // With auth on the navigation is for signed-in users only (the pages would redirect to login).
-  const showNavigation = !authEnabled || isAuthenticated;
-  const showAccount = authEnabled && isAuthenticated;
+  // Nothing while the UI config and the session load (no flicker). With auth
+  // on the navigation is for signed-in users only (the pages would redirect to login).
+  const showNavigation = !isLoading && (!authEnabled || isAuthenticated);
+  const showAccount = !isLoading && authEnabled && isAuthenticated;
 
   const handleLogout = async () => {
     await logout();

@@ -33,8 +33,9 @@ vi.mock('../api/client', () => ({
 describe('App', () => {
   it('renders the layout with navigation', async () => {
     render(<App />);
-    expect(await screen.findByText('Full Stack App')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /home/i })).toBeInTheDocument();
+    expect(screen.getByText('Full Stack App')).toBeInTheDocument();
+    // The links show once the UI config is loaded (hidden while loading, no flicker).
+    expect(await screen.findByRole('link', { name: /home/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /health/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /items/i })).toBeInTheDocument();
   });

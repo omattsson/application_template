@@ -26,7 +26,7 @@ export interface SessionSnapshot {
 }
 
 /** Name of the BroadcastChannel shared by the tabs of this origin. */
-export const SESSION_CHANNEL_NAME = 'auth-session';
+export const SESSION_CHANNEL_NAME = 'app-template:auth-session:v1';
 
 /** Messages on the session channel. */
 type SessionMessage = { type: 'token'; token: string } | { type: 'logout' };

@@ -51,14 +51,20 @@ function newerToken(failed: string | null): string | null {
   return current && current !== failed && isTokenUsable(current) ? current : null;
 }
 
-async function refreshUnderLock(failed: string | null): Promise<string> {
+/**
+ * @param failed - The token that was refused
+ * @param startedIn - {@link sessionEpoch} when the refresh was requested, before the lock wait
+ */
+async function refreshUnderLock(failed: string | null, startedIn: number): Promise<string> {
   // Another tab may have refreshed while this tab waited for the lock and
-  // shared its token on the session channel: use it instead of rotating the
-  // refresh cookie again.
+  // shared its token on the session channel (or a login happened here): use
+  // it instead of rotating the refresh cookie again.
   const adopted = newerToken(failed);
   if (adopted) return adopted;
+  // A logout (here or broadcast by another tab) or a login during the lock
+  // wait: the refresh was for a session that no longer exists. Send nothing.
+  if (sessionEpoch() !== startedIn) throw new SessionChangedError();
 
-  const startedIn = sessionEpoch();
   let token: unknown;
   try {
     const { data } = await authApi.post<{ token?: unknown }>('/api/v1/auth/refresh', {}, { headers: CSRF_HEADERS });
@@ -112,7 +118,9 @@ export function refreshAccessToken(failedToken?: string | null): Promise<string>
   if (newer) return Promise.resolve(newer);
   if (inFlight) return inFlight;
 
-  const run = (): Promise<string> => refreshUnderLock(failed);
+  // Sampled before the lock wait, so a logout while queued cancels the request.
+  const startedIn = sessionEpoch();
+  const run = (): Promise<string> => refreshUnderLock(failed, startedIn);
   const pending = hasWebLocks() ? navigator.locks.request(REFRESH_LOCK_NAME, run) : run();
   const shared = pending.finally(() => {
     if (inFlight === shared) inFlight = null;

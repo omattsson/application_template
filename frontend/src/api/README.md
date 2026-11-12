@@ -178,7 +178,7 @@ login, no `Authorization` header, no refresh calls. With auth on:
   (concurrent 401s share one refresh) and retries; a refused refresh ends
   the session and the app shows `/login`.
 - `refreshAccessToken` (`refresh.ts`) holds the Web Lock `auth-refresh`
-  across tabs and adopts a token another tab shared on the `auth-session`
+  across tabs and adopts a token another tab shared on the `app-template:auth-session:v1`
   BroadcastChannel instead of refreshing again. Refresh requests are never
   aborted (no timeout, no AbortSignal).
 - Login, refresh and logout send `X-Requested-With: XMLHttpRequest` and a

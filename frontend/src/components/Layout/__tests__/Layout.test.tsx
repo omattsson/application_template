@@ -111,6 +111,18 @@ describe('Layout', () => {
       expect(screen.getByText('Full Stack App')).toBeInTheDocument();
     });
 
+    it.each([
+      ['the UI config loads (auth mode unknown)', { isLoading: true, authEnabled: false }],
+      ['the session is restored with auth on', { isLoading: true, authEnabled: true }],
+    ])('hides the navigation while %s (no flicker)', (_name, state) => {
+      vi.mocked(useAuth).mockReturnValue(authState(state));
+      renderLayout();
+      expect(screen.queryByRole('link', { name: /items/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /home/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /log out/i })).not.toBeInTheDocument();
+      expect(screen.getByText('Full Stack App')).toBeInTheDocument();
+    });
+
     it('Logout calls logout and goes to the login page', async () => {
       const logout = vi.fn().mockResolvedValue(undefined);
       vi.mocked(useAuth).mockReturnValue(

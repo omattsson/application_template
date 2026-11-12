@@ -1,12 +1,20 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { waitFor } from '@testing-library/react';
-import { authApi, refreshAccessToken, isAuthRejection, REFRESH_LOCK_NAME, resetRefreshForTesting } from '../refresh';
+import {
+  authApi,
+  refreshAccessToken,
+  isAuthRejection,
+  REFRESH_LOCK_NAME,
+  resetRefreshForTesting,
+  SessionChangedError,
+} from '../refresh';
 import {
   getSession,
   setAuthMode,
   startSession,
   endSession,
   resetSessionForTesting,
+  subscribeSession,
   SESSION_CHANNEL_NAME,
 } from '../session';
 import { deferred, headerOf, installMockBackend, pathOf, tokenFor } from '../../test/mockHttp';
@@ -210,6 +218,40 @@ describe('refreshAccessToken', () => {
     expect(getSession().token).toBeNull();
   });
 
+  it('sends no request when the session ended (logout in another tab) while waiting for the lock', async () => {
+    const { holdByOtherTab } = installFakeLocks();
+    startSession(tokenFor('alice', 'user', -5), null);
+    const adapter = installMockBackend([authApi], () => ({ status: 200, data: { token: tokenFor('alice') } }));
+    const otherTab = new BroadcastChannel(SESSION_CHANNEL_NAME);
+
+    const release = holdByOtherTab();
+    const pending = refreshAccessToken();
+    otherTab.postMessage({ type: 'logout' });
+    await waitFor(() => expect(getSession().token).toBeNull());
+    release();
+
+    await expect(pending).rejects.toBeInstanceOf(SessionChangedError);
+    expect(adapter).not.toHaveBeenCalled();
+    expect(getSession().token).toBeNull();
+    otherTab.close();
+  });
+
+  it('sends no request when a login in this tab happened while waiting for the lock', async () => {
+    const { holdByOtherTab } = installFakeLocks();
+    const adapter = installMockBackend([authApi], () => ({ status: 200, data: { token: tokenFor('alice') } }));
+
+    const release = holdByOtherTab();
+    const pending = refreshAccessToken();
+    const loggedIn = tokenFor('bob');
+    startSession(loggedIn, null);
+    release();
+
+    // The login's token is newer and usable: it is returned, nothing is sent.
+    await expect(pending).resolves.toBe(loggedIn);
+    expect(adapter).not.toHaveBeenCalled();
+    expect(getSession().token).toBe(loggedIn);
+  });
+
   it('does not call the API when auth is disabled', async () => {
     setAuthMode('disabled');
     const adapter = installMockBackend([authApi], () => ({ status: 200, data: { token: tokenFor('alice') } }));
@@ -252,13 +294,28 @@ describe('session broadcast from other tabs', () => {
     setAuthMode('enabled');
     const otherTab = new BroadcastChannel(SESSION_CHANNEL_NAME);
     const marker = tokenFor('dave');
+    const emits: Array<string | null> = [];
+    const unsubscribe = subscribeSession(() => emits.push(getSession().token));
     otherTab.postMessage({ type: 'token', token: 'garbage' });
     otherTab.postMessage({ type: 'token', token: tokenFor('eve', 'user', -5) });
+    otherTab.postMessage({ type: 'token', token: 42 });
     otherTab.postMessage({ type: 'something' });
     otherTab.postMessage('text');
+    otherTab.postMessage(null);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(getSession().token).toBeNull();
+    expect(emits).toEqual([]);
+
+    // Messages arrive in order: the marker is the first (and only) accepted one.
     otherTab.postMessage({ type: 'token', token: marker });
     await waitFor(() => expect(getSession().token).toBe(marker));
+    expect(emits).toEqual([marker]);
+    unsubscribe();
     otherTab.close();
+  });
+
+  it('uses a namespaced channel name', () => {
+    expect(SESSION_CHANNEL_NAME).toBe('app-template:auth-session:v1');
   });
 
   it('ignores broadcasts while auth is disabled', async () => {
