@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -70,6 +71,10 @@ var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]*$`)
 // bcrypt is intentionally CPU-expensive; without a limit, many concurrent
 // logins would starve every other request.
 var bcryptSem = make(chan struct{}, runtime.NumCPU())
+
+// bcryptWaitHook, when set, runs each time a request starts to wait for a
+// slot of bcryptSem. Tests set it; production never does.
+var bcryptWaitHook atomic.Pointer[func()]
 
 // dummyPasswordHash returns the hash that the login compares against when no
 // real hash can be checked (unknown user, no or malformed hash, SSO user,
@@ -138,6 +143,17 @@ func (h *AuthHandler) SetWebSocketRevoker(r websocket.ClientRevoker) {
 func acquireBcrypt(ctx context.Context) (release func(), err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	select {
+	case bcryptSem <- struct{}{}:
+		return func() { <-bcryptSem }, nil
+	default:
+	}
+	// No free slot: the request waits. The hook is nil in production (one
+	// atomic load on this contended path only); tests use it to know that a
+	// request is blocked here.
+	if hook := bcryptWaitHook.Load(); hook != nil {
+		(*hook)()
 	}
 	select {
 	case bcryptSem <- struct{}{}:
@@ -273,12 +289,30 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		}
 		c.JSON(f.httpCode, gin.H{"error": msgInternalServerError})
 	}
+	// answerWaitEnded answers a bcrypt wait that ended with the request (see
+	// acquireBcrypt): 499 for a client that left, 500 for a deadline. It is
+	// not a credential failure and leaves the throttle outcome neutral. Every
+	// branch that waits for a slot (the real compare and the dummy compare of
+	// every anti-enumeration branch) uses it, so whether the name is an
+	// account, unknown, locked or SSO-only never shows in the answer or in the
+	// name key. It returns false for any other error.
+	answerWaitEnded := func(err error, userID string) bool {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			return false
+		}
+		if !respondCancelled(c, err) {
+			fail(loginFailure{reason: loginReasonCompareError, userID: userID, httpCode: http.StatusInternalServerError, err: err})
+		}
+		return true
+	}
 	// failDummy spends one compare on the dummy hash (the time of a real
 	// compare), then fails with a credential failure. The password is cut to
-	// maxPasswordBytes so an over-long one costs the same. A request that ended
-	// while it waited for a slot skips the compare (nobody reads the answer).
+	// maxPasswordBytes so an over-long one costs the same. A wait for a slot
+	// that ends with the request is answered like the one of a real compare.
 	failDummy := func(reason, userID string) {
-		_ = h.comparePassword(c.Request.Context(), dummyPasswordHash(), truncateAtRune(req.Password, maxPasswordBytes))
+		if err := h.comparePassword(c.Request.Context(), dummyPasswordHash(), truncateAtRune(req.Password, maxPasswordBytes)); answerWaitEnded(err, userID) {
+			return
+		}
 		fail(loginFailure{reason: reason, userID: userID, httpCode: http.StatusUnauthorized})
 	}
 
@@ -320,12 +354,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 	if err := h.comparePassword(ctx, []byte(user.PasswordHash), req.Password); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			// The wait for a bcrypt slot ended with the request: 499 for a
-			// client that left, 500 for a deadline. Not a credential failure.
-			if !respondCancelled(c, err) {
-				fail(loginFailure{reason: loginReasonCompareError, userID: user.ID, httpCode: http.StatusInternalServerError, err: err})
-			}
+		if answerWaitEnded(err, user.ID) {
 			return
 		}
 		reason := loginReasonPasswordMismatch

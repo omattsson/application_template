@@ -5,8 +5,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"backend/internal/models"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,11 +31,26 @@ func fillBcryptSem(t *testing.T) {
 	})
 }
 
-// cancelSoon ends the returned context after d, as a client that leaves.
-func cancelSoon(d time.Duration) (context.Context, context.CancelFunc) {
+// cancelWhenWaiting returns a context that is cancelled at the moment a
+// request starts to wait for a bcrypt slot (the hook of acquireBcrypt): a
+// client that leaves while it is queued, without any timing. The test fails
+// when no request ever waited, so it cannot pass by a cancel that came too
+// early. One use per test (the hook is process-wide; these tests are serial).
+func cancelWhenWaiting(t *testing.T) context.Context {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(d, cancel)
-	return ctx, cancel
+	var waited atomic.Int32
+	hook := func() {
+		waited.Add(1)
+		cancel()
+	}
+	bcryptWaitHook.Store(&hook)
+	t.Cleanup(func() {
+		bcryptWaitHook.Store(nil)
+		cancel()
+		assert.Positive(t, waited.Load(), "the request waited for a bcrypt slot before the cancel")
+	})
+	return ctx
 }
 
 // With every bcrypt slot taken, the wait for a slot ends with the context of
@@ -41,8 +59,7 @@ func TestBcryptWaitEndsWithTheContext(t *testing.T) {
 	t.Run("compare, cancelled while it waits", func(t *testing.T) {
 		fillBcryptSem(t)
 		h, _, rc := newTestAuthHandler(newMockUserRepo(), testAuthConfig(), nil)
-		ctx, cancel := cancelSoon(20 * time.Millisecond)
-		defer cancel()
+		ctx := cancelWhenWaiting(t)
 
 		start := time.Now()
 		err := h.comparePassword(ctx, []byte(testPasswordHash()), "x")
@@ -54,8 +71,7 @@ func TestBcryptWaitEndsWithTheContext(t *testing.T) {
 
 	t.Run("hash, cancelled while it waits", func(t *testing.T) {
 		fillBcryptSem(t)
-		ctx, cancel := cancelSoon(20 * time.Millisecond)
-		defer cancel()
+		ctx := cancelWhenWaiting(t)
 
 		hash, err := hashPassword(ctx, "long-enough-1")
 
@@ -110,8 +126,7 @@ func TestBcryptWaitInTheHandlers(t *testing.T) {
 		fillBcryptSem(t)
 		repo := newMockUserRepo(localUser("u1", "alice"))
 		h, logs, _ := newTestAuthHandler(repo, testAuthConfig(), nil)
-		ctx, cancel := cancelSoon(20 * time.Millisecond)
-		defer cancel()
+		ctx := cancelWhenWaiting(t)
 
 		w := post(newAuthRouter(h), ctx, "/api/v1/auth/login", loginBody(t, "alice", testPassword))
 
@@ -133,16 +148,14 @@ func TestBcryptWaitInTheHandlers(t *testing.T) {
 		assert.Contains(t, logs.String(), loginReasonCompareError)
 	})
 
-	t.Run("login with an unknown user: the dummy compare is skipped and the answer is the generic 401", func(t *testing.T) {
+	t.Run("login with an unknown user: the same 499 as a real user (no enumeration)", func(t *testing.T) {
 		fillBcryptSem(t)
 		h, _, rc := newTestAuthHandler(newMockUserRepo(), testAuthConfig(), nil)
-		ctx, cancel := cancelSoon(20 * time.Millisecond)
-		defer cancel()
+		ctx := cancelWhenWaiting(t)
 
 		w := post(newAuthRouter(h), ctx, "/api/v1/auth/login", loginBody(t, "nobody", "whatever-pass"))
 
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
-		assert.JSONEq(t, invalidCredentialsBody, w.Body.String())
+		assert.Equal(t, statusClientClosedRequest, w.Code, w.Body.String())
 		assert.Empty(t, rc.calls())
 	})
 
@@ -150,8 +163,7 @@ func TestBcryptWaitInTheHandlers(t *testing.T) {
 		fillBcryptSem(t)
 		repo := newMockUserRepo()
 		h, _, _ := newTestAuthHandler(repo, selfRegistrationConfig(), nil)
-		ctx, cancel := cancelSoon(20 * time.Millisecond)
-		defer cancel()
+		ctx := cancelWhenWaiting(t)
 
 		w := post(newAuthRouter(h), ctx, "/api/v1/auth/register", `{"username":"newuser","password":"long-enough-1"}`)
 
@@ -165,8 +177,7 @@ func TestBcryptWaitInTheHandlers(t *testing.T) {
 		before, err := e.users.Count(context.Background())
 		require.NoError(t, err)
 		fillBcryptSem(t)
-		ctx, cancel := cancelSoon(20 * time.Millisecond)
-		defer cancel()
+		ctx := cancelWhenWaiting(t)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{"username":"newbie","password":"Correct-Horse-9","role":"user"}`)).WithContext(ctx)
 		req.Header.Set("Authorization", bearer)
 		w := httptest.NewRecorder()
@@ -184,8 +195,7 @@ func TestBcryptWaitInTheHandlers(t *testing.T) {
 		bearer := e.bearer(t, idAdminA)["Authorization"]
 		before := e.user(t, idUserV).PasswordHash
 		fillBcryptSem(t)
-		ctx, cancel := cancelSoon(20 * time.Millisecond)
-		defer cancel()
+		ctx := cancelWhenWaiting(t)
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/users/"+idUserV, strings.NewReader(`{"password":"Brand-New-Pass-1"}`)).WithContext(ctx)
 		req.Header.Set("Authorization", bearer)
 		w := httptest.NewRecorder()
@@ -202,8 +212,7 @@ func TestBcryptWaitInTheHandlers(t *testing.T) {
 		cfg := testAuthConfig()
 		cfg.AdminPassword = "Admin-Pass-123"
 		h, _, _ := newTestAuthHandler(repo, cfg, nil)
-		ctx, cancel := cancelSoon(20 * time.Millisecond)
-		defer cancel()
+		ctx := cancelWhenWaiting(t)
 
 		err := h.EnsureAdminUser(ctx)
 
@@ -212,4 +221,119 @@ func TestBcryptWaitInTheHandlers(t *testing.T) {
 		assert.NotContains(t, err.Error(), cfg.AdminPassword)
 		assert.Equal(t, 0, repo.count())
 	})
+}
+
+// Every login branch that waits for a bcrypt slot (the real compare and the
+// dummy compare of each anti-enumeration branch) treats a wait that ended with
+// the request the same way: the same status and body, no Retry-After, the same
+// log reason, and a neutral throttle (the name key counts nothing). So an
+// attacker who fills the slots and cancels probes cannot tell a real account
+// from an unknown, locked, SSO-only or unusable one, neither by the answer nor
+// by a later 429.
+func TestLoginBcryptWaitEndsIdenticallyOnEveryBranch(t *testing.T) {
+	extID := "sub-1"
+	type branch struct {
+		name     string
+		users    []models.User
+		username string
+		password string
+		// prepare changes the throttle before the probes (a locked account).
+		prepare func(h *AuthHandler)
+	}
+	tooLong := strings.Repeat("a", models.MaxUsernameLen+1)
+	branches := []branch{
+		{name: "real account", users: []models.User{localUser("u1", "alice")}, username: "alice", password: testPassword},
+		{name: "unknown name", username: "nobody", password: testPassword},
+		{name: "username longer than the column", username: tooLong, password: testPassword},
+		{name: "password over 72 bytes", users: []models.User{localUser("u1", "alice")}, username: "alice", password: strings.Repeat("p", maxPasswordBytes+1)},
+		{name: "SSO-only account", users: []models.User{{ID: "u1", Username: "alice", Role: models.RoleUser, AuthProvider: models.AuthProviderOIDC, ExternalID: &extID}},
+			username: "alice", password: testPassword},
+		{name: "account without a password", users: []models.User{{ID: "u1", Username: "alice", Role: models.RoleUser, AuthProvider: models.AuthProviderLocal}},
+			username: "alice", password: testPassword},
+		{name: "account with a malformed hash", users: []models.User{{ID: "u1", Username: "alice", Role: models.RoleUser, AuthProvider: models.AuthProviderLocal, PasswordHash: "not-a-bcrypt-hash"}},
+			username: "alice", password: testPassword},
+		{name: "account key locked or busy", users: []models.User{localUser("u1", "alice")}, username: "alice", password: testPassword,
+			prepare: func(h *AuthHandler) {
+				// Hold every slot of the account key, as attempts in flight.
+				for i := 0; i < loginFailureThreshold; i++ {
+					if _, ok := h.throttle.reserve(accountThrottleKey("u1")); !ok {
+						panic("could not reserve the account key")
+					}
+				}
+			}},
+	}
+	modes := []struct {
+		name     string
+		wantCode int
+		wantBody string
+		// ctx returns the context of one probe.
+		ctx func(t *testing.T) context.Context
+	}{
+		{name: "client leaves while queued", wantCode: statusClientClosedRequest, wantBody: `{"error":"Client closed request"}`,
+			ctx: func(t *testing.T) context.Context { return cancelWhenWaiting(t) }},
+		{name: "deadline while queued", wantCode: http.StatusInternalServerError, wantBody: `{"error":"Internal server error"}`,
+			ctx: func(t *testing.T) context.Context {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				t.Cleanup(cancel)
+				return ctx
+			}},
+	}
+
+	for _, m := range modes {
+		m := m
+		t.Run(m.name, func(t *testing.T) {
+			for _, b := range branches {
+				b := b
+				t.Run(b.name, func(t *testing.T) {
+					h, logs, rc := newTestAuthHandler(newMockUserRepo(b.users...), testAuthConfig(), nil)
+					if b.prepare != nil {
+						b.prepare(h)
+					}
+					router := newAuthRouter(h)
+					baseline := h.throttle.size()
+					probe := func(ctx context.Context, password string) *httptest.ResponseRecorder {
+						req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody(t, b.username, password))).WithContext(ctx)
+						req.Header.Set("Content-Type", "application/json")
+						w := httptest.NewRecorder()
+						router.ServeHTTP(w, req)
+						return w
+					}
+
+					// More cancelled waits than the threshold: if any of them
+					// counted as a failure the name key would be locked.
+					fillBcryptSem(t)
+					for i := 0; i < loginFailureThreshold+2; i++ {
+						// Each probe has its own wait-hook context; the hook of
+						// the previous probe is replaced.
+						ctx := m.ctx(t)
+						w := probe(ctx, b.password)
+						require.Equal(t, m.wantCode, w.Code, "probe %d: %s", i+1, w.Body.String())
+						assert.JSONEq(t, m.wantBody, w.Body.String(), "probe %d", i+1)
+						assert.Empty(t, w.Header().Get("Retry-After"), "probe %d", i+1)
+					}
+					assert.Empty(t, rc.calls(), "no compare ran")
+					assert.Equal(t, baseline, h.throttle.size(), "the throttle holds nothing new: the outcome is neutral")
+					_, locked := h.throttle.check(nameThrottleKey(b.username))
+					assert.False(t, locked, "the name key is not locked")
+					assert.NotContains(t, logs.String(), `"reason":"`+loginReasonPasswordMismatch)
+
+					// Free the slots: a normal probe of the same name is a plain
+					// 401 (never the 429 of a locked name), whatever the branch.
+					for i := 0; i < cap(bcryptSem); i++ {
+						<-bcryptSem
+					}
+					defer func() {
+						for i := 0; i < cap(bcryptSem); i++ {
+							bcryptSem <- struct{}{}
+						}
+					}()
+					bcryptWaitHook.Store(nil)
+					w := probe(context.Background(), "a-wrong-password-1")
+					assert.NotEqual(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+					assert.Equal(t, http.StatusUnauthorized, w.Code, "a normal probe with a wrong password is the generic credential failure")
+					assert.JSONEq(t, invalidCredentialsBody, w.Body.String())
+				})
+			}
+		})
+	}
 }
