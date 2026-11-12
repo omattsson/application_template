@@ -3,6 +3,8 @@ import type { InternalAxiosRequestConfig } from 'axios';
 import { axiosConfig } from './config';
 import { authApi, CSRF_HEADERS, refreshAccessToken } from './refresh';
 import { getAccessToken, getSession } from './session';
+// Every log line uses this summary: an AxiosError carries the password body and the bearer header.
+import { summarizeRequestError } from './errorSummary';
 import type { UIConfig } from '../context/UIConfigContext';
 import { toRole } from '../utils/jwt';
 import type { AuthUser } from '../utils/jwt';
@@ -50,7 +52,7 @@ api.interceptors.response.use(
       config.headers.Authorization = `Bearer ${token}`;
       return api.request(config);
     }
-    console.error('API Error:', error);
+    console.error('API Error:', summarizeRequestError(error));
     return Promise.reject(error);
   }
 );
@@ -74,7 +76,7 @@ export const itemService = {
       const response = await api.get<Item[]>(`/api/v1/items${query}`);
       return response.data;
     } catch (error) {
-      console.error('Failed to fetch items:', error);
+      console.error('Failed to fetch items:', summarizeRequestError(error));
       throw error;
     }
   },
@@ -84,7 +86,7 @@ export const itemService = {
       const response = await api.get<Item>(`/api/v1/items/${id}`);
       return response.data;
     } catch (error) {
-      console.error('Failed to fetch item:', error);
+      console.error('Failed to fetch item:', summarizeRequestError(error));
       throw error;
     }
   },
@@ -94,7 +96,7 @@ export const itemService = {
       const response = await api.post<Item>('/api/v1/items', item);
       return response.data;
     } catch (error) {
-      console.error('Failed to create item:', error);
+      console.error('Failed to create item:', summarizeRequestError(error));
       throw error;
     }
   },
@@ -104,7 +106,7 @@ export const itemService = {
       const response = await api.put<Item>(`/api/v1/items/${id}`, item);
       return response.data;
     } catch (error) {
-      console.error('Failed to update item:', error);
+      console.error('Failed to update item:', summarizeRequestError(error));
       throw error;
     }
   },
@@ -113,7 +115,7 @@ export const itemService = {
     try {
       await api.delete(`/api/v1/items/${id}`);
     } catch (error) {
-      console.error('Failed to delete item:', error);
+      console.error('Failed to delete item:', summarizeRequestError(error));
       throw error;
     }
   },
@@ -125,7 +127,7 @@ export const healthService = {
       const response = await api.get('/health/live');
       return response.data;
     } catch (error) {
-      console.error('Liveness check failed:', error);
+      console.error('Liveness check failed:', summarizeRequestError(error));
       throw error;
     }
   },
@@ -135,7 +137,7 @@ export const healthService = {
       const response = await api.get('/health/ready');
       return response.data;
     } catch (error) {
-      console.error('Readiness check failed:', error);
+      console.error('Readiness check failed:', summarizeRequestError(error));
       throw error;
     }
   },
@@ -189,7 +191,7 @@ export const authService = {
       }
       return { token: data.token, user: toAuthUser(data.user) };
     } catch (error) {
-      console.error('Login failed:', error);
+      console.error('Login failed:', summarizeRequestError(error));
       throw error;
     }
   },
@@ -206,7 +208,7 @@ export const authService = {
         headers: token ? { ...CSRF_HEADERS, Authorization: `Bearer ${token}` } : { ...CSRF_HEADERS },
       });
     } catch (error) {
-      console.error('Logout failed:', error);
+      console.error('Logout failed:', summarizeRequestError(error));
       throw error;
     }
   },
@@ -243,7 +245,7 @@ export const uiConfigService = {
         local_auth_enabled: data.local_auth_enabled,
       };
     } catch (error) {
-      console.error('Failed to load the UI config:', error);
+      console.error('Failed to load the UI config:', summarizeRequestError(error));
       throw error;
     }
   },

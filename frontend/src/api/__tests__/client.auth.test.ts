@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import api, { authService, itemService, uiConfigService } from '../client';
 import { authApi, resetRefreshForTesting } from '../refresh';
 import { getSession, setAuthMode, startSession, resetSessionForTesting } from '../session';
-import { deferred, headerOf, installMockBackend, pathOf, tokenFor } from '../../test/mockHttp';
+import { deferred, headerOf, installMockBackend, pathOf, reachableText, tokenFor } from '../../test/mockHttp';
 import type { MockReply } from '../../test/mockHttp';
 import type { InternalAxiosRequestConfig } from 'axios';
 
@@ -68,18 +68,18 @@ describe('API client with auth', () => {
     setAuthMode('enabled');
     const fresh = tokenFor('alice');
     startSession(fresh, null);
-    let first = true;
-    const adapter = installMockBackend([api, authApi], () => {
-      if (first) {
-        first = false;
-        return { status: 401 };
-      }
-      return { status: 200, data: [] };
+    // The retry reuses the request config object, so record the header when each request is sent.
+    const sentAuth: Array<string | undefined> = [];
+    const adapter = installMockBackend([api, authApi], (config) => {
+      sentAuth.push(headerOf(config, 'Authorization'));
+      return sentAuth.length === 1 ? { status: 401 } : { status: 200, data: [] };
     });
     // The request went out with an older token (set explicitly here).
-    await api.get('/api/v1/items', { headers: { Authorization: `Bearer ${tokenFor('alice', 'user', -5)}` } });
+    const older = tokenFor('alice', 'user', -5);
+    await api.get('/api/v1/items', { headers: { Authorization: `Bearer ${older}` } });
 
     expect(adapter.mock.calls.some(([c]) => isRefresh(c))).toBe(false);
+    expect(sentAuth).toEqual([`Bearer ${older}`, `Bearer ${fresh}`]);
   });
 
   it('failed refresh logs out: the session is cleared and the original error is returned', async () => {
@@ -162,6 +162,76 @@ describe('authService', () => {
     const adapter = installMockBackend([api, authApi], () => ({ status: 200, data: {} }));
     await authService.logout(null);
     expect(headerOf(adapter.mock.calls[0][0], 'Authorization')).toBeUndefined();
+  });
+});
+
+describe('error logging never leaks credentials', () => {
+  afterEach(() => {
+    resetRefreshForTesting();
+    resetSessionForTesting();
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  const PASSWORD = 'pw-Secret-Value-123';
+
+  it('a failed login logs a summary without the password', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    installMockBackend([api, authApi], () => ({ status: 401, data: { error: 'Invalid username or password' } }));
+
+    await expect(authService.login('alice', PASSWORD)).rejects.toBeDefined();
+
+    expect(errorSpy).toHaveBeenCalled();
+    const logged = reachableText(errorSpy.mock.calls.flat());
+    expect(logged).not.toContain(PASSWORD);
+    expect(logged).toContain('401');
+    expect(logged).toContain('/api/v1/auth/login');
+  });
+
+  it('a failed authenticated request logs a summary without the bearer token or the query', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setAuthMode('enabled');
+    const token = tokenFor('alice');
+    startSession(token, null);
+    installMockBackend([api, authApi], () => ({ status: 500, data: { error: 'boom' } }));
+
+    await expect(api.get('/api/v1/items?secret=q1')).rejects.toBeDefined();
+
+    const logged = reachableText(errorSpy.mock.calls.flat());
+    expect(logged).not.toContain(token);
+    expect(logged).not.toContain('secret=q1');
+    expect(logged).toContain('500');
+    expect(logged).toContain('/api/v1/items');
+  });
+
+  it('a failed authenticated request that was retried after a refresh logs no token', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setAuthMode('enabled');
+    const old = tokenFor('alice', 'user', -5);
+    const fresh = tokenFor('alice', 'user', 900, { jti: 'fresh' });
+    startSession(old, null);
+    installMockBackend([api, authApi], (config) =>
+      isRefresh(config) ? { status: 200, data: { token: fresh } } : { status: 401 },
+    );
+
+    await expect(itemService.list()).rejects.toBeDefined();
+
+    const logged = reachableText(errorSpy.mock.calls.flat());
+    expect(logged).not.toContain(old);
+    expect(logged).not.toContain(fresh);
+  });
+
+  it('a failed logout logs a summary without the bearer token', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const token = tokenFor('alice');
+    installMockBackend([api, authApi], () => ({ networkError: true }));
+
+    await expect(authService.logout(token)).rejects.toBeDefined();
+
+    expect(errorSpy).toHaveBeenCalled();
+    const logged = reachableText(errorSpy.mock.calls.flat());
+    expect(logged).not.toContain(token);
+    expect(logged).toContain('ERR_NETWORK');
   });
 });
 

@@ -29,9 +29,25 @@ describe('safeReturnPath', () => {
     ['the login page with a query', '/login?next=/items'],
     ['the OIDC callback page', '/auth/callback'],
     ['very long', `/${'a'.repeat(3000)}`],
+    // Dot segments collapse during URL parsing and can leave a protocol-relative result.
+    ['dot-dot then double slash', '/..//evil.com'],
+    ['dot then double slash', '/.//evil.com'],
+    ['encoded dot-dot then double slash', '/%2e%2e//evil.com'],
+    ['nested dot-dot then double slash', '/items/..//evil.com/x'],
+    ['encoded dot-dot then encoded backslash', '/%2e%2e/%5cevil.com'],
   ])('falls back to / for %s', (_name, input) => {
     expect(safeReturnPath(input as string | null | undefined)).toBe('/');
   });
+
+  it.each(['/..//evil.com', '/.//evil.com', '/%2e%2e//evil.com', '/items/..//evil.com/x', '/a/b/../..//evil.com'])(
+    'never returns a protocol-relative or backslash path (%s)',
+    (input) => {
+      const out = safeReturnPath(input);
+      expect(out.startsWith('//')).toBe(false);
+      expect(out.startsWith('/\\')).toBe(false);
+      expect(new URL(out, 'https://app.example').origin).toBe('https://app.example');
+    },
+  );
 
   it('uses the given fallback', () => {
     expect(safeReturnPath('//evil.example.com', '/home')).toBe('/home');
@@ -44,6 +60,13 @@ describe('loginPathFor', () => {
       `/login?next=${encodeURIComponent('/items?a=1#x')}`,
     );
   });
+
+  it.each(['/..//evil.com', '/.//evil.com', '/%2e%2e//evil.com', '/items/..//evil.com/x'])(
+    'never emits a next that leaves the origin (%s)',
+    (pathname) => {
+      expect(loginPathFor({ pathname, search: '', hash: '' })).toBe('/login');
+    },
+  );
 
   it('omits next for the home page', () => {
     expect(loginPathFor({ pathname: '/', search: '', hash: '' })).toBe('/login');

@@ -79,6 +79,46 @@ export function tokenFor(username: string, role = 'user', ttlSeconds = 900, extr
   });
 }
 
+/**
+ * Flatten everything reachable from logged arguments into one string: every
+ * string value and key of every own property (also non-enumerable ones such
+ * as the message and the trace of an Error), recursively. Handles cycles.
+ * Used to assert that a secret never reaches the console.
+ * @param args - The arguments of console calls
+ * @returns All reachable text
+ */
+export function reachableText(args: unknown[]): string {
+  const seen = new WeakSet<object>();
+  const out: string[] = [];
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 12) return;
+    if (typeof value === 'string') {
+      out.push(value);
+      return;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      out.push(String(value));
+      return;
+    }
+    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return;
+    if (seen.has(value as object)) return;
+    seen.add(value as object);
+    for (const key of Object.getOwnPropertyNames(value)) {
+      out.push(key);
+      let child: unknown;
+      try {
+        child = (value as Record<string, unknown>)[key];
+      } catch {
+        continue;
+      }
+      visit(child, depth + 1);
+    }
+    if (value instanceof Map) value.forEach((v, k) => { visit(k, depth + 1); visit(v, depth + 1); });
+  };
+  args.forEach((arg) => visit(arg, 0));
+  return out.join('\n');
+}
+
 /** A promise with its resolve function exposed. */
 export function deferred<T>() {
   let resolve!: (value: T) => void;
