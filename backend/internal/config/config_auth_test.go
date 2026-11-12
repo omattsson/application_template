@@ -206,6 +206,10 @@ func TestAuthConfigValidate(t *testing.T) {
 	}{
 		{name: "valid", mutate: func(*config.AuthConfig) {}},
 		{name: "empty secret", mutate: func(c *config.AuthConfig) { c.JWTSecret = "" }, wantErr: "jwt_secret is required"},
+		{name: "16 spaces", mutate: func(c *config.AuthConfig) { c.JWTSecret = strings.Repeat(" ", 16) }, wantErr: "jwt_secret is required"},
+		{name: "16 tabs and newlines", mutate: func(c *config.AuthConfig) { c.JWTSecret = "\t\n\t\n\t\n\t\n\t\n\t\n\t\n\t\n" }, wantErr: "jwt_secret is required"},
+		{name: "15 characters padded to 20", mutate: func(c *config.AuthConfig) { c.JWTSecret = "  123456789012345   " }, wantErr: "at least 16 characters"},
+		{name: "16 characters with padding", mutate: func(c *config.AuthConfig) { c.JWTSecret = "  1234567890123456  " }},
 		{name: "short secret", mutate: func(c *config.AuthConfig) { c.JWTSecret = "123456789012345" }, wantErr: "at least 16 characters"},
 		{name: "zero jwt expiration", mutate: func(c *config.AuthConfig) { c.JWTExpiration = 0 }, wantErr: "jwt_expiration must be positive"},
 		{name: "negative access expiration", mutate: func(c *config.AuthConfig) { c.AccessTokenExpiration = -time.Minute }, wantErr: "access_token_expiration must be positive"},
@@ -213,7 +217,9 @@ func TestAuthConfigValidate(t *testing.T) {
 		{name: "zero max lifetime", mutate: func(c *config.AuthConfig) { c.SessionMaxLifetime = 0 }, wantErr: "session_max_lifetime must be positive"},
 		{name: "idle above max lifetime", mutate: func(c *config.AuthConfig) { c.SessionIdleTimeout = 13 * time.Hour }, wantErr: "session_idle_timeout must not exceed session_max_lifetime"},
 		{name: "idle equal to max lifetime", mutate: func(c *config.AuthConfig) { c.SessionIdleTimeout = c.SessionMaxLifetime }},
-		{name: "access above idle", mutate: func(c *config.AuthConfig) { c.AccessTokenExpiration = time.Hour }, wantErr: "access_token_expiration must not exceed session_idle_timeout"},
+		{name: "access above idle", mutate: func(c *config.AuthConfig) { c.AccessTokenExpiration = time.Hour }, wantErr: "access_token_expiration must be shorter than session_idle_timeout"},
+		{name: "access equal to idle", mutate: func(c *config.AuthConfig) { c.AccessTokenExpiration = c.SessionIdleTimeout }, wantErr: "access_token_expiration must be shorter than session_idle_timeout"},
+		{name: "access just below idle", mutate: func(c *config.AuthConfig) { c.AccessTokenExpiration = c.SessionIdleTimeout - time.Nanosecond }},
 		{name: "zero refresh token expiration", mutate: func(c *config.AuthConfig) { c.RefreshTokenExpiration = 0 }, wantErr: "refresh_token_expiration must be positive"},
 		{name: "zero reuse grace turns it off", mutate: func(c *config.AuthConfig) { c.RefreshReuseGrace = 0 }},
 		{name: "reuse grace at the cap", mutate: func(c *config.AuthConfig) { c.RefreshReuseGrace = 5 * time.Minute }},
@@ -233,8 +239,8 @@ func TestAuthConfigValidate(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
-			if c.JWTSecret != "" {
-				assert.NotContains(t, err.Error(), c.JWTSecret)
+			if strings.TrimSpace(c.JWTSecret) != "" {
+				assert.NotContains(t, err.Error(), strings.TrimSpace(c.JWTSecret))
 			}
 		})
 	}

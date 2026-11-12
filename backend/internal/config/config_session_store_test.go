@@ -50,7 +50,7 @@ func TestAuthConfigValidateSessionStore(t *testing.T) {
 	for _, v := range []string{"", config.SessionStoreMySQL, config.SessionStoreMemory, "redis"} {
 		c := config.AuthConfig{
 			Enabled: true, JWTSecret: "1234567890123456", JWTExpiration: 1, AccessTokenExpiration: 1,
-			SessionIdleTimeout: 1, SessionMaxLifetime: 1, RefreshTokenExpiration: 1, SessionStore: v,
+			SessionIdleTimeout: 2, SessionMaxLifetime: 2, RefreshTokenExpiration: 1, SessionStore: v,
 		}
 		err := c.Validate()
 		if v == "redis" {

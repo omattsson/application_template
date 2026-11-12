@@ -155,8 +155,8 @@ type AuthConfig struct {
 	// a local account.
 	SelfRegistration bool
 	// SecureCookies is SECURE_COOKIES (default true): the refresh token
-	// cookie has the Secure attribute, so the browser sends it over HTTPS
-	// only. Set it to false only for plain-HTTP local development on a host
+	// and OIDC binding cookies have the Secure attribute and the __Host-
+	// name prefix, so the browser sends them over HTTPS only. Set it to false only for plain-HTTP local development on a host
 	// other than localhost (browsers accept Secure cookies on
 	// http://localhost).
 	SecureCookies bool
@@ -165,13 +165,16 @@ type AuthConfig struct {
 // Validate checks the auth settings. LoadConfig calls it only when Enabled is
 // true. Error messages never contain the secret.
 func (c *AuthConfig) Validate() error {
-	if c.JWTSecret == "" {
+	// Surrounding whitespace (a stray newline or padding from a secret file)
+	// does not count towards the length: a secret of spaces is no secret.
+	secret := strings.TrimSpace(c.JWTSecret)
+	if secret == "" {
 		return errors.New("jwt_secret is required when AUTH_ENABLED is true")
 	}
 
 	// Count characters, not bytes: a multi-byte character is one character,
 	// so the check is never weaker than the documented minimum.
-	if utf8.RuneCountInString(c.JWTSecret) < MinJWTSecretLength {
+	if utf8.RuneCountInString(secret) < MinJWTSecretLength {
 		return fmt.Errorf("jwt_secret must be at least %d characters", MinJWTSecretLength)
 	}
 
@@ -195,8 +198,10 @@ func (c *AuthConfig) Validate() error {
 		return errors.New("session_idle_timeout must not exceed session_max_lifetime")
 	}
 
-	if c.AccessTokenExpiration > c.SessionIdleTimeout {
-		return errors.New("access_token_expiration must not exceed session_idle_timeout")
+	// An access token that lives as long as the idle timeout would let a
+	// session that never refreshes stay usable for the whole idle window.
+	if c.AccessTokenExpiration >= c.SessionIdleTimeout {
+		return errors.New("access_token_expiration must be shorter than session_idle_timeout")
 	}
 
 	if c.RefreshTokenExpiration <= 0 {
