@@ -19,6 +19,9 @@ var _ models.AuditLogRepository = (*GORMAuditLogRepository)(nil)
 // GORMAuditLogRepository implements models.AuditLogRepository using GORM.
 type GORMAuditLogRepository struct {
 	*BaseRepository
+	// estimate replaces the MySQL table statistics read of estimateRows; a
+	// test sets it. Nil uses the database.
+	estimate func(ctx context.Context, total *int64) bool
 }
 
 // NewGORMAuditLogRepository creates a new GORM-backed audit log repository.
@@ -97,17 +100,23 @@ func (r *GORMAuditLogRepository) List(ctx context.Context, filters models.AuditL
 		}
 	}
 
+	// Read one row more than the page: that row says whether a next page
+	// exists. total may be an estimate (MySQL statistics) and is never used
+	// for the cursor.
 	var logs []models.AuditLog
-	if err := query.Order("timestamp DESC, id DESC").Limit(limit).Offset(max(filters.Offset, 0)).Find(&logs).Error; err != nil {
+	if err := query.Order("timestamp DESC, id DESC").Limit(limit + 1).Offset(max(filters.Offset, 0)).Find(&logs).Error; err != nil {
 		return nil, repoError(ctx, "list", err)
 	}
 
-	result := &models.AuditLogResult{Data: logs, Total: total}
-	// A full page with more rows after it gives the cursor of the next page,
-	// so a client can switch to keyset paging from the first page on.
-	if n := len(logs); n == limit && int64(max(filters.Offset, 0)+n) < total {
-		result.NextCursor = encodeAuditCursor(logs[n-1].Timestamp, logs[n-1].ID)
+	result := &models.AuditLogResult{Total: total}
+	// A page with more rows after it gives the cursor of the next page, so a
+	// client can switch to keyset paging from the first page on.
+	if len(logs) > limit {
+		logs = logs[:limit]
+		last := logs[limit-1]
+		result.NextCursor = encodeAuditCursor(last.Timestamp, last.ID)
 	}
+	result.Data = logs
 	return result, nil
 }
 
@@ -115,6 +124,9 @@ func (r *GORMAuditLogRepository) List(ctx context.Context, filters models.AuditL
 // instead of COUNT(*). It reports false when there is no estimate (SQLite,
 // an empty or unanalyzed table), and the caller counts exactly.
 func (r *GORMAuditLogRepository) estimateRows(ctx context.Context, total *int64) bool {
+	if r.estimate != nil {
+		return r.estimate(ctx, total)
+	}
 	if r.DB.Dialector.Name() != "mysql" {
 		return false
 	}

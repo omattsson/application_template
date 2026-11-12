@@ -117,6 +117,57 @@ func TestAuditLogRepositoryList(t *testing.T) {
 	}
 }
 
+// The next cursor comes from the rows themselves (one row more than the page
+// is read), never from the total: the MySQL table statistics are an estimate
+// that can lie below the real count, and a full page must still get its
+// cursor.
+func TestAuditLogRepositoryListCursorIgnoresTheEstimate(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name       string
+		estimate   int64 // what the table statistics say; <= 0: no estimate
+		n          int   // real rows
+		limit      int
+		offset     int
+		wantLen    int
+		wantCursor bool
+		wantTotal  int64
+	}{
+		{name: "estimate below the real count, full first page", estimate: 2, n: 6, limit: 3, wantLen: 3, wantCursor: true, wantTotal: 2},
+		{name: "estimate of zero rows, full first page", estimate: 1, n: 6, limit: 2, wantLen: 2, wantCursor: true, wantTotal: 1},
+		{name: "estimate above the real count, last page is full", estimate: 100, n: 6, limit: 6, wantLen: 6, wantCursor: false, wantTotal: 100},
+		{name: "estimate above, page of exactly the rest", estimate: 100, n: 6, limit: 3, offset: 3, wantLen: 3, wantCursor: false, wantTotal: 100},
+		{name: "estimate below, second page has more", estimate: 2, n: 7, limit: 3, offset: 3, wantLen: 3, wantCursor: true, wantTotal: 2},
+		{name: "exact count, full page with a row after it", estimate: 0, n: 4, limit: 3, wantLen: 3, wantCursor: true, wantTotal: 4},
+		{name: "exact count, last full page", estimate: 0, n: 3, limit: 3, wantLen: 3, wantCursor: false, wantTotal: 3},
+		{name: "short page", estimate: 0, n: 2, limit: 3, wantLen: 2, wantCursor: false, wantTotal: 2},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			repo := setupAuditLogRepo(t)
+			seedAuditLogs(t, repo, base, tt.n)
+			if tt.estimate > 0 {
+				repo.estimate = func(_ context.Context, total *int64) bool { *total = tt.estimate; return true }
+			}
+
+			res, err := repo.List(context.Background(), models.AuditLogFilters{Limit: tt.limit, Offset: tt.offset})
+
+			require.NoError(t, err)
+			require.Len(t, res.Data, tt.wantLen)
+			assert.Equal(t, tt.wantTotal, res.Total, "Total keeps the estimate")
+			if tt.wantCursor {
+				assert.Equal(t, encodeAuditCursor(res.Data[len(res.Data)-1].Timestamp, res.Data[len(res.Data)-1].ID), res.NextCursor)
+			} else {
+				assert.Empty(t, res.NextCursor)
+			}
+		})
+	}
+}
+
 func TestAuditLogRepositoryListLimits(t *testing.T) {
 	t.Parallel()
 	repo := setupAuditLogRepo(t)

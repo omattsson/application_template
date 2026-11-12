@@ -585,11 +585,16 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 	// halfway or skip its revocation.
 	ctx, cancel := detachedCtx(c)
 	defer cancel()
+	// The profile and the password are separate writes. After the first one
+	// committed, a later failure still leaves a change behind: the entry is
+	// recorded although the answer is an error (AuditCommitted).
 	if req.DisplayName != nil || req.Email != nil {
 		if err := h.users.UpdateProfile(ctx, target.ID, models.UserProfileUpdate{DisplayName: req.DisplayName, Email: req.Email}); err != nil {
 			h.respondError(c, err, "Failed to update a user")
 			return
 		}
+		middleware.SetAuditEntityID(c, target.ID)
+		middleware.AuditCommitted(c)
 	}
 	if req.Password != nil {
 		// Write only the password hash: a full-row save would overwrite a
@@ -598,9 +603,11 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 			h.respondError(c, err, "Failed to set the password of a user")
 			return
 		}
+		middleware.SetAuditEntityID(c, target.ID)
+		middleware.AuditCommitted(c)
 		middleware.AddAuditDetail(c, "password_changed", true)
 	}
-	middleware.SetAuditEntityID(c, target.ID)
+	middleware.SetAuditEntityID(c, target.ID) // also for a request that changed nothing
 
 	if req.Password != nil {
 		if err := h.revokeUserAccess(ctx, target.ID, revokeOptions{}); err != nil {
