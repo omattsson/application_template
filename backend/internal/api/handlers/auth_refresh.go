@@ -21,9 +21,17 @@ import (
 // Refresh session settings.
 const (
 	// refreshTokenCookieName is the httpOnly cookie that carries the raw
-	// refresh token. refreshCookiePath limits it to the auth routes.
+	// refresh token. With SECURE_COOKIES it gets the __Host- prefix (see
+	// cookieName). Its Path is "/": a reverse proxy may mount the API under
+	// a prefix it strips (the bundled nginx and the Vite proxy serve
+	// /api/v1/... to the browser as /api/api/v1/...), so a narrower Path
+	// would never be sent. The __Host- prefix needs Secure, Path=/ and no
+	// Domain, and stops a sibling subdomain from setting the cookie.
 	refreshTokenCookieName = "refresh_token"
-	refreshCookiePath      = "/api/v1/auth"
+	refreshCookiePath      = "/"
+	// hostCookiePrefix makes a browser refuse a cookie that is not Secure,
+	// has a Domain or has a Path other than "/".
+	hostCookiePrefix = "__Host-"
 	// refreshTokenBytes is the randomness of a raw refresh token (256 bits).
 	// The raw token is base64url without padding, refreshTokenEncodedLen
 	// characters. It is opaque (never a JWT) and stored only as its SHA-256.
@@ -116,7 +124,7 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	if !requireSameSiteRequest(c) {
 		return
 	}
-	raw, err := c.Cookie(refreshTokenCookieName)
+	raw, err := c.Cookie(h.refreshCookieName())
 	if err != nil || !wellFormedRefreshToken(raw) {
 		h.refuseRefresh(c, refuseMalformed, "")
 		return
@@ -145,6 +153,9 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		return
 	}
 	if !h.checkSessionNotBlocked(c, stored) {
+		return
+	}
+	if !h.checkUserNotBlocked(c, stored) {
 		return
 	}
 	user, ok := h.refreshUser(c, stored)
@@ -276,6 +287,12 @@ func (h *AuthHandler) tryGraceRefresh(c *gin.Context, stored *models.RefreshToke
 		if blocked {
 			return false
 		}
+		if blocked, err := h.userBlocked(reqCtx, stored); err != nil {
+			h.respondServerError(c, "Failed to check the user block on refresh", err, "user_id", stored.UserID)
+			return true
+		} else if blocked {
+			return false
+		}
 	}
 
 	wctx, cancel := detachedCtx(c)
@@ -346,6 +363,36 @@ func (h *AuthHandler) checkSessionNotBlocked(c *gin.Context, stored *models.Refr
 	if blocked {
 		h.revokeFamilyBestEffort(c, family, stored.UserID)
 		h.refuseRefresh(c, refuseSessionBlocked, stored.UserID)
+		return false
+	}
+	return true
+}
+
+// userBlocked reports whether a user block (logout-all, a role change, a
+// password reset, disabling the user) was written at or after the start of the
+// session of stored. The block revokes the refresh tokens too, but that revoke
+// can fail or lose a race; this check makes the block end the session even
+// then. A session that started after the block is not caught.
+func (h *AuthHandler) userBlocked(ctx context.Context, stored *models.RefreshToken) (bool, error) {
+	return h.sessionStore.IsUserBlocked(ctx, stored.UserID, stored.SessionStart())
+}
+
+// checkUserNotBlocked refuses a refresh for a session that started before a
+// user block: it revokes the session and answers the generic 401. A store
+// error fails closed (500, 499 for a cancelled request). It returns false
+// when it wrote an answer.
+func (h *AuthHandler) checkUserNotBlocked(c *gin.Context, stored *models.RefreshToken) bool {
+	if h.sessionStore == nil {
+		return true
+	}
+	blocked, err := h.userBlocked(c.Request.Context(), stored)
+	if err != nil {
+		h.respondServerError(c, "Failed to check the user block on refresh", err, "user_id", stored.UserID)
+		return false
+	}
+	if blocked {
+		h.revokeFamilyBestEffort(c, stored.SessionFamily(), stored.UserID)
+		h.refuseRefresh(c, refuseSessionRevoked, stored.UserID)
 		return false
 	}
 	return true
@@ -568,14 +615,30 @@ func wellFormedRefreshToken(raw string) bool {
 	return err == nil
 }
 
+// cookieName returns the name of a cookie: base with the __Host- prefix when
+// the cookie is Secure (SECURE_COOKIES), base alone for plain-HTTP development
+// (a browser refuses a __Host- cookie without Secure).
+func cookieName(base string, secure bool) string {
+	if secure {
+		return hostCookiePrefix + base
+	}
+	return base
+}
+
+// refreshCookieName is the name the refresh cookie has with the current
+// SECURE_COOKIES setting.
+func (h *AuthHandler) refreshCookieName() string {
+	return cookieName(refreshTokenCookieName, h.cfg.SecureCookies)
+}
+
 // refreshCookie returns the refresh cookie with value. Every write of the
 // cookie (set and delete) uses the same attributes: httpOnly, Secure from
-// SECURE_COOKIES, SameSite=Strict, host-only, Path limited to the auth
-// routes.
+// SECURE_COOKIES, SameSite=Strict, host-only, Path "/" (so it fits the
+// __Host- prefix and survives a proxy that strips a path prefix).
 func (h *AuthHandler) refreshCookie(value string, maxAge int) *http.Cookie {
 	// #nosec G124 -- HttpOnly and SameSite=Strict are fixed; Secure follows SECURE_COOKIES (default true, false only for plain-HTTP development).
 	return &http.Cookie{
-		Name:     refreshTokenCookieName,
+		Name:     h.refreshCookieName(),
 		Value:    value,
 		Path:     refreshCookiePath,
 		MaxAge:   maxAge,

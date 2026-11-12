@@ -206,7 +206,15 @@ func (f *faultyTokens) WithTx(ctx context.Context, fn func(models.RefreshTokenRe
 type faultyStore struct {
 	sessionstore.SessionStore
 	sessionErr error // IsSessionBlocked
+	userErr    error // IsUserBlocked
 	blockErr   error // every Block* call
+}
+
+func (f *faultyStore) IsUserBlocked(ctx context.Context, userID string, issuedAt time.Time) (bool, error) {
+	if f.userErr != nil {
+		return false, f.userErr
+	}
+	return f.SessionStore.IsUserBlocked(ctx, userID, issuedAt)
 }
 
 func (f *faultyStore) IsSessionBlocked(ctx context.Context, id string) (bool, error) {
@@ -301,7 +309,7 @@ func newSessionHarness(t *testing.T, mutate func(*config.AuthConfig), opts ...ha
 type reqOpt func(*http.Request)
 
 func withCookie(raw string) reqOpt {
-	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: "refresh_token", Value: raw}) }
+	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: hostRefreshCookie, Value: raw}) }
 }
 
 func withBearer(token string) reqOpt {
@@ -398,12 +406,19 @@ func (s *sessionHarness) sessionBlocked(t *testing.T, family string) bool {
 	return blocked
 }
 
+// hostRefreshCookie and hostBindingCookie are the names the harnesses (which
+// run with SECURE_COOKIES=true) see.
+const (
+	hostRefreshCookie = "__Host-" + refreshTokenCookieName
+	hostBindingCookie = "__Host-" + oidcBindingCookieName
+)
+
 // refreshCookieOf returns the refresh_token cookie that w sets, or nil.
 func refreshCookieOf(t *testing.T, w *httptest.ResponseRecorder) *http.Cookie {
 	t.Helper()
 	var found *http.Cookie
 	for _, ck := range w.Result().Cookies() {
-		if ck.Name == "refresh_token" {
+		if ck.Name == hostRefreshCookie {
 			require.Nil(t, found, "one refresh cookie per answer")
 			found = ck
 		}
@@ -424,7 +439,7 @@ func assertCookieCleared(t *testing.T, w *httptest.ResponseRecorder) {
 
 func assertCookieAttributes(t *testing.T, ck *http.Cookie) {
 	t.Helper()
-	assert.Equal(t, "/api/v1/auth", ck.Path)
+	assert.Equal(t, "/", ck.Path, "Path=/ so the __Host- prefix and a proxy that strips /api both work")
 	assert.True(t, ck.HttpOnly)
 	assert.True(t, ck.Secure)
 	assert.Equal(t, http.SameSiteStrictMode, ck.SameSite)
@@ -1280,12 +1295,12 @@ func concurrentRefreshes(t *testing.T, s *sessionHarness, raw string, n int) ([]
 			<-start
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
 			req.Header.Set("X-Requested-With", "XMLHttpRequest")
-			req.AddCookie(&http.Cookie{Name: "refresh_token", Value: raw})
+			req.AddCookie(&http.Cookie{Name: hostRefreshCookie, Value: raw})
 			w := httptest.NewRecorder()
 			s.router.ServeHTTP(w, req)
 			codes[i] = w.Code
 			for _, ck := range w.Result().Cookies() {
-				if ck.Name == "refresh_token" && ck.Value != "" {
+				if ck.Name == hostRefreshCookie && ck.Value != "" {
 					setCookie[i] = true
 				}
 			}

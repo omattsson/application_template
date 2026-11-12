@@ -176,7 +176,7 @@ func (h *AuthHandler) revokeLogoutSessions(ctx context.Context, c *gin.Context, 
 	if h.refreshTokenRepo == nil {
 		return nil, "", false
 	}
-	if raw, err := c.Cookie(refreshTokenCookieName); err == nil && wellFormedRefreshToken(raw) {
+	if raw, err := c.Cookie(h.refreshCookieName()); err == nil && wellFormedRefreshToken(raw) {
 		stored, err := h.refreshTokenRepo.FindByTokenHash(ctx, hashRefreshToken(raw))
 		switch {
 		case err == nil:

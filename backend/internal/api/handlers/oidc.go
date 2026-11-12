@@ -21,9 +21,11 @@ import (
 // OIDC login settings.
 const (
 	// oidcBindingCookieName is the cookie that ties a login to the browser that
-	// started it (login CSRF protection). Its Path limits it to the OIDC routes.
+	// started it (login CSRF protection). Like the refresh cookie it has Path
+	// "/" (a proxy may strip a path prefix) and, with SECURE_COOKIES, the
+	// __Host- prefix (see cookieName).
 	oidcBindingCookieName = "oidc_binding"
-	oidcBindingCookiePath = "/api/v1/auth/oidc"
+	oidcBindingCookiePath = "/"
 	// oidcExchangeTimeout bounds the token exchange and the ID token
 	// validation of one callback (a request to the provider has its own, shorter
 	// timeout).
@@ -100,8 +102,14 @@ func (h *OIDCHandler) enabled() bool {
 	return h != nil && h.cfg != nil && h.cfg.Enabled && h.auth != nil && h.auth.cfg != nil && h.auth.cfg.Enabled
 }
 
+// bindingCookieName is the name of the binding cookie with the current
+// SECURE_COOKIES setting.
+func (h *OIDCHandler) bindingCookieName() string {
+	return cookieName(oidcBindingCookieName, h.auth.cfg.SecureCookies)
+}
+
 // bindingCookie returns the browser binding cookie with value. HttpOnly, host
-// only, limited to the OIDC routes, Secure from SECURE_COOKIES. SameSite is Lax,
+// only, Path "/", Secure from SECURE_COOKIES. SameSite is Lax,
 // not Strict: the callback is a cross-site top-level navigation (the provider
 // redirects the browser back), and a Strict cookie is not sent on it. Lax
 // cookies are sent on top-level GET navigations only, never on cross-site
@@ -109,7 +117,7 @@ func (h *OIDCHandler) enabled() bool {
 func (h *OIDCHandler) bindingCookie(value string, maxAge int) *http.Cookie {
 	// #nosec G124 -- HttpOnly and SameSite=Lax are fixed (Lax is required for the cross-site redirect back from the provider); Secure follows SECURE_COOKIES (default true).
 	return &http.Cookie{
-		Name:     oidcBindingCookieName,
+		Name:     h.bindingCookieName(),
 		Value:    value,
 		Path:     oidcBindingCookiePath,
 		MaxAge:   maxAge,
@@ -153,7 +161,7 @@ func (h *OIDCHandler) guard(c *gin.Context) bool {
 
 // Login godoc
 // @Summary     Start the OIDC login
-// @Description Redirects the browser to the identity provider (authorization code flow with PKCE S256, a random state and a nonce). The state, the PKCE verifier and the nonce are kept on the server for OIDC_STATE_TTL and work once; a short-lived httpOnly cookie (oidc_binding, SameSite=Lax, Path /api/v1/auth/oidc) ties the login to this browser. Answers 404 unless AUTH_ENABLED and OIDC_ENABLED are true. No parameter of the request is used.
+// @Description Redirects the browser to the identity provider (authorization code flow with PKCE S256, a random state and a nonce). The state, the PKCE verifier and the nonce are kept on the server for OIDC_STATE_TTL and work once; a short-lived httpOnly cookie (oidc_binding, with the __Host- prefix unless SECURE_COOKIES=false; SameSite=Lax, Path /) ties the login to this browser. Answers 404 unless AUTH_ENABLED and OIDC_ENABLED are true. No parameter of the request is used.
 // @Tags        auth
 // @Produce     json
 // @Success     302 {string} string "Redirect to the identity provider"
@@ -211,7 +219,7 @@ func (h *OIDCHandler) Login(c *gin.Context) {
 
 // Callback godoc
 // @Summary     OIDC callback
-// @Description The identity provider sends the browser here with a code and the state. The state works once and only from the browser that started the login (the oidc_binding cookie); the code is exchanged with the PKCE verifier; the ID token is validated (signature, issuer, audience, expiry, nonce). The account is found by issuer and sub, or created with auth_provider oidc and the role user (admin when a role of the OIDC_ADMIN_ROLES claim matches exactly); an existing OIDC account gets its role from the claim at every login. An existing local account is never linked or taken over. On success the answer sets the httpOnly refresh_token cookie and redirects (302) to the fixed web UI path OIDC_FRONTEND_PATH, without any token in the URL; the web UI then calls POST /api/v1/auth/refresh for its access token. Every refusal caused by the request or the provider answers 400 {"error":"Login failed"}.
+// @Description The identity provider sends the browser here with a code and the state. The state works once and only from the browser that started the login (the oidc_binding cookie); the code is exchanged with the PKCE verifier; the ID token is validated (signature, issuer, audience, expiry, nonce). The account is found by issuer and sub, or created with auth_provider oidc and the role user (admin when a role of the OIDC_ADMIN_ROLES claim matches exactly); an existing OIDC account gets its role from the claim at every login. An existing local account is never linked or taken over. On success the answer sets the httpOnly refresh_token cookie (named __Host-refresh_token unless SECURE_COOKIES=false) and redirects (302) to the fixed web UI path OIDC_FRONTEND_PATH, without any token in the URL; the web UI then calls POST /api/v1/auth/refresh for its access token. Every refusal caused by the request or the provider answers 400 {"error":"Login failed"}.
 // @Tags        auth
 // @Produce     json
 // @Param       code              query string false "Authorization code from the identity provider"
@@ -284,7 +292,7 @@ func (h *OIDCHandler) acceptCallback(c *gin.Context) (*sessionstore.OIDCStateDat
 		refuse(c)
 		return nil, "", false
 	}
-	if !bindingMatches(c, data) {
+	if !h.bindingMatches(c, data) {
 		log.Warn("OIDC callback from a browser that did not start the login", meta...)
 		refuse(c)
 		return nil, "", false
@@ -342,8 +350,8 @@ func (h *OIDCHandler) completeLogin(c *gin.Context, ident *auth.Identity) {
 
 // bindingMatches reports whether the browser presents the binding value whose
 // hash the state holds.
-func bindingMatches(c *gin.Context, data *sessionstore.OIDCStateData) bool {
-	raw, err := c.Cookie(oidcBindingCookieName)
+func (h *OIDCHandler) bindingMatches(c *gin.Context, data *sessionstore.OIDCStateData) bool {
+	raw, err := c.Cookie(h.bindingCookieName())
 	if err != nil || raw == "" || len(raw) > maxOIDCBindingLen || data.BindingHash == "" {
 		return false
 	}

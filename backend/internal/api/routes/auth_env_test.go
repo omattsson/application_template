@@ -194,7 +194,8 @@ func (e *authEnv) login(t *testing.T, username string) (string, *http.Cookie) {
 			cookie = c
 		}
 	}
-	require.NotNil(t, cookie, "login sets the refresh cookie")
+	require.NotNil(t, cookie, "login sets the refresh cookie (plain name: SecureCookies is off)")
+	require.Equal(t, "/", cookie.Path, "Path=/ so it is sent through a proxy that strips /api")
 	return body.Token, cookie
 }
 

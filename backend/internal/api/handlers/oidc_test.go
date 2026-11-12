@@ -336,7 +336,7 @@ func sha256Hexs(s string) string {
 // refresh token and no cookie that grants anything.
 func assertNoSession(t *testing.T, s *oidcHarness, w *httptest.ResponseRecorder, wantUsers int64) {
 	t.Helper()
-	assert.Nil(t, cookieNamed(w, refreshTokenCookieName), "no refresh cookie")
+	assert.Nil(t, cookieNamed(w, hostRefreshCookie), "no refresh cookie")
 	assert.Zero(t, s.tokenRows(t), "no refresh token row")
 	assert.Equal(t, wantUsers, s.userCount(t))
 }
@@ -404,12 +404,12 @@ func TestOIDCLoginStoresTheStateAndBindsTheBrowser(t *testing.T) {
 	loc, err := url.Parse(w.Header().Get("Location"))
 	require.NoError(t, err)
 	q := loc.Query()
-	binding := cookieNamed(w, "oidc_binding")
+	binding := cookieNamed(w, hostBindingCookie)
 	require.NotNil(t, binding, "the login sets the browser binding cookie")
 	assert.True(t, binding.HttpOnly)
 	assert.True(t, binding.Secure)
 	assert.Equal(t, http.SameSiteLaxMode, binding.SameSite, "Lax: the callback is a cross-site top-level navigation from the provider, which a Strict cookie would not travel with")
-	assert.Equal(t, "/api/v1/auth/oidc", binding.Path, "only the OIDC routes see it")
+	assert.Equal(t, "/", binding.Path, "Path=/: required by the __Host- prefix, and a proxy may strip a path prefix")
 	assert.Empty(t, binding.Domain, "host-only")
 	assert.Equal(t, int((5 * time.Minute).Seconds()), binding.MaxAge, "short lived: as long as the state")
 	raw, err := base64.RawURLEncoding.DecodeString(binding.Value)
@@ -436,7 +436,7 @@ func TestOIDCLoginValuesAreUniquePerLogin(t *testing.T) {
 		w := s.get(newBrowser(), oidcLoginPath)
 		loc, err := url.Parse(w.Header().Get("Location"))
 		require.NoError(t, err)
-		for _, v := range []string{loc.Query().Get("state"), loc.Query().Get("nonce"), loc.Query().Get("code_challenge"), cookieNamed(w, "oidc_binding").Value} {
+		for _, v := range []string{loc.Query().Get("state"), loc.Query().Get("nonce"), loc.Query().Get("code_challenge"), cookieNamed(w, hostBindingCookie).Value} {
 			assert.False(t, seen[v], "no value repeats between logins")
 			seen[v] = true
 		}
@@ -450,7 +450,11 @@ func TestOIDCBindingCookieSecureFollowsTheSetting(t *testing.T) {
 	w := s.get(newBrowser(), oidcLoginPath)
 
 	require.Equal(t, http.StatusFound, w.Code)
-	assert.False(t, cookieNamed(w, "oidc_binding").Secure)
+	ck := cookieNamed(w, oidcBindingCookieName)
+	require.NotNil(t, ck, "without Secure the cookie has no __Host- prefix")
+	assert.False(t, ck.Secure)
+	assert.Equal(t, "/", ck.Path)
+	assert.Nil(t, cookieNamed(w, hostBindingCookie))
 }
 
 func TestOIDCLoginIgnoresRequestParameters(t *testing.T) {
@@ -550,7 +554,7 @@ func TestOIDCCallbackProvisionsAUserAndStartsASession(t *testing.T) {
 	assert.NotContains(t, *u.ExternalID, "idp-user-1", "the stored identity is a digest")
 
 	// The session is the one a password login starts: the refresh cookie.
-	ck := cookieNamed(w, refreshTokenCookieName)
+	ck := cookieNamed(w, hostRefreshCookie)
 	require.NotNil(t, ck)
 	assertCookieAttributes(t, ck)
 	assert.Equal(t, int64(1), s.tokenRows(t))
@@ -561,17 +565,50 @@ func TestOIDCCallbackClearsTheBindingCookie(t *testing.T) {
 	s := newOIDCHarness(t)
 	b := newBrowser()
 	authURL := s.start(t, b)
-	require.Contains(t, b.cookies, "oidc_binding")
+	require.Contains(t, b.cookies, hostBindingCookie)
 
 	w := s.finish(t, b, authURL, oidcClaims())
 
 	require.Equal(t, http.StatusFound, w.Code)
-	cleared := cookieNamed(w, "oidc_binding")
+	cleared := cookieNamed(w, hostBindingCookie)
 	require.NotNil(t, cleared)
 	assert.Empty(t, cleared.Value)
 	assert.Equal(t, -1, cleared.MaxAge)
-	assert.Equal(t, "/api/v1/auth/oidc", cleared.Path)
-	assert.NotContains(t, b.cookies, "oidc_binding")
+	assert.Equal(t, "/", cleared.Path)
+	assert.NotContains(t, b.cookies, hostBindingCookie)
+	assert.True(t, cleared.Secure, "cleared with the attributes it was set with")
+	assert.True(t, cleared.HttpOnly)
+	assert.Equal(t, http.SameSiteLaxMode, cleared.SameSite)
+	assert.Empty(t, cleared.Domain)
+}
+
+// Without SECURE_COOKIES the cookies have no __Host- prefix (a browser would
+// drop it without Secure): the whole login works under the plain names, and
+// the binding cookie is cleared with the attributes it was set with.
+func TestOIDCLoginWithPlainCookieNames(t *testing.T) {
+	t.Parallel()
+	s := newOIDCHarness(t, func(o *oidcSetup) { o.auth = func(c *config.AuthConfig) { c.SecureCookies = false } })
+	b := newBrowser()
+	authURL := s.start(t, b)
+	set := b.cookies[oidcBindingCookieName]
+	require.NotNil(t, set)
+
+	w := s.finish(t, b, authURL, oidcClaims())
+
+	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
+	refresh := cookieNamed(w, refreshTokenCookieName)
+	require.NotNil(t, refresh, "the session cookie has the plain name")
+	assert.Equal(t, "/", refresh.Path)
+	assert.False(t, refresh.Secure)
+	cleared := cookieNamed(w, oidcBindingCookieName)
+	require.NotNil(t, cleared)
+	assert.Equal(t, -1, cleared.MaxAge)
+	assert.Equal(t, set.Path, cleared.Path)
+	assert.Equal(t, set.Secure, cleared.Secure)
+	assert.Equal(t, set.HttpOnly, cleared.HttpOnly)
+	assert.Equal(t, set.SameSite, cleared.SameSite)
+	assert.Nil(t, cookieNamed(w, hostBindingCookie))
+	assert.Nil(t, cookieNamed(w, hostRefreshCookie))
 }
 
 // After the redirect the web UI has no token yet. It asks for one with the
@@ -581,7 +618,7 @@ func TestOIDCSessionWorksWithRefreshAndMe(t *testing.T) {
 	s := newOIDCHarness(t)
 	b, w := s.signIn(t, oidcClaims())
 	require.Equal(t, http.StatusFound, w.Code)
-	require.Contains(t, b.cookies, refreshTokenCookieName)
+	require.Contains(t, b.cookies, hostRefreshCookie)
 
 	refresh := func(opts ...reqOpt) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
@@ -698,9 +735,9 @@ func TestOIDCSyncFailureRefusesTheLogin(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.JSONEq(t, bodyInternal, w.Body.String())
-	assert.Nil(t, cookieNamed(w, refreshTokenCookieName), "no session with an unsynced (still elevated) role")
+	assert.Nil(t, cookieNamed(w, hostRefreshCookie), "no session with an unsynced (still elevated) role")
 	assert.Equal(t, rows, s.tokenRows(t))
-	assert.NotContains(t, b.cookies, refreshTokenCookieName)
+	assert.NotContains(t, b.cookies, hostRefreshCookie)
 }
 
 func TestOIDCDisabledUserIsRefused(t *testing.T) {
@@ -716,7 +753,7 @@ func TestOIDCDisabledUserIsRefused(t *testing.T) {
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.JSONEq(t, bodyNotPermitted, w.Body.String())
-	assert.Nil(t, cookieNamed(w, refreshTokenCookieName))
+	assert.Nil(t, cookieNamed(w, hostRefreshCookie))
 	assert.Equal(t, rows, s.tokenRows(t))
 	assert.Equal(t, models.RoleUser, s.userBySub(t, "idp-user-1").Role, "a disabled account is not changed by a login")
 }
@@ -736,7 +773,7 @@ func TestOIDCUserDisabledWhileTheLoginRuns(t *testing.T) {
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.JSONEq(t, bodyNotPermitted, w.Body.String())
-	assert.Nil(t, cookieNamed(w, refreshTokenCookieName))
+	assert.Nil(t, cookieNamed(w, hostRefreshCookie))
 	assert.Equal(t, rows, s.tokenRows(t))
 }
 
@@ -990,12 +1027,12 @@ func TestOIDCCallbackStateWorksOnce(t *testing.T) {
 	authURL := s.start(t, b)
 	cb, err := url.Parse(s.idp.Authorize(t, authURL, oidcClaims()))
 	require.NoError(t, err)
-	binding := b.cookies["oidc_binding"]
+	binding := b.cookies[hostBindingCookie]
 
 	first := s.get(b, cb.RequestURI())
 	require.Equal(t, http.StatusFound, first.Code)
 	replay := newBrowser()
-	replay.cookies["oidc_binding"] = binding // the replaying browser even has the cookie
+	replay.cookies[hostBindingCookie] = binding // the replaying browser even has the cookie
 	second := s.get(replay, cb.RequestURI())
 
 	assert.Equal(t, http.StatusBadRequest, second.Code, "a reused state is refused")
@@ -1031,17 +1068,17 @@ func TestOIDCCallbackRefusesABrowserThatDidNotStartTheLogin(t *testing.T) {
 		{name: "the binding cookie of another login", cookie: func(a, v *browser) {
 			// The victim has an unrelated login in progress.
 			w := httptest.NewRecorder()
-			http.SetCookie(w, &http.Cookie{Name: "oidc_binding", Value: strings.Repeat("v", 43), Path: "/api/v1/auth/oidc", MaxAge: 300})
+			http.SetCookie(w, &http.Cookie{Name: hostBindingCookie, Value: strings.Repeat("v", 43), Path: "/", MaxAge: 300})
 			v.store(w)
 		}},
 		{name: "an empty binding cookie", cookie: func(a, v *browser) {
-			v.cookies["oidc_binding"] = &http.Cookie{Name: "oidc_binding", Value: "", Path: "/api/v1/auth/oidc"}
+			v.cookies[hostBindingCookie] = &http.Cookie{Name: hostBindingCookie, Value: "", Path: "/"}
 		}},
 		{name: "the hash of the binding value instead of the value", cookie: func(a, v *browser) {
-			v.cookies["oidc_binding"] = &http.Cookie{Name: "oidc_binding", Value: sha256Hexs(a.cookies["oidc_binding"].Value), Path: "/api/v1/auth/oidc"}
+			v.cookies[hostBindingCookie] = &http.Cookie{Name: hostBindingCookie, Value: sha256Hexs(a.cookies[hostBindingCookie].Value), Path: "/"}
 		}},
 		{name: "a binding cookie scoped to another path is not sent", cookie: func(a, v *browser) {
-			v.cookies["oidc_binding"] = &http.Cookie{Name: "oidc_binding", Value: a.cookies["oidc_binding"].Value, Path: "/elsewhere"}
+			v.cookies[hostBindingCookie] = &http.Cookie{Name: hostBindingCookie, Value: a.cookies[hostBindingCookie].Value, Path: "/elsewhere"}
 		}},
 	}
 	for _, tt := range tests {
@@ -1061,7 +1098,7 @@ func TestOIDCCallbackRefusesABrowserThatDidNotStartTheLogin(t *testing.T) {
 			assert.JSONEq(t, bodyLoginFailed, w.Body.String(), "the same answer as every other refusal")
 			assert.Zero(t, s.idp.Hits("token"), "the code is not exchanged")
 			assertNoSession(t, s, w, 0)
-			assert.NotContains(t, victim.cookies, refreshTokenCookieName)
+			assert.NotContains(t, victim.cookies, hostRefreshCookie)
 
 			// The state is burnt: the real browser cannot complete it either, so
 			// a failed attack leaves nothing to retry.
@@ -1077,7 +1114,7 @@ func TestOIDCCallbackRefusesAStateStoredWithoutABinding(t *testing.T) {
 	state := strings.Repeat("S", 43)
 	require.NoError(t, s.store.SaveOIDCState(context.Background(), state, sessionstore.OIDCStateData{CodeVerifier: "v", Nonce: "n"}, time.Minute))
 	b := newBrowser()
-	b.cookies["oidc_binding"] = &http.Cookie{Name: "oidc_binding", Value: "", Path: "/api/v1/auth/oidc"}
+	b.cookies[hostBindingCookie] = &http.Cookie{Name: hostBindingCookie, Value: "", Path: "/"}
 
 	w := s.get(b, oidcCallbackPath+"?state="+state+"&code=abc")
 
@@ -1302,7 +1339,7 @@ func TestOIDCCallbackInternalErrors(t *testing.T) {
 
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 		assert.JSONEq(t, bodyInternal, w.Body.String())
-		assert.Nil(t, cookieNamed(w, refreshTokenCookieName))
+		assert.Nil(t, cookieNamed(w, hostRefreshCookie))
 	})
 	t.Run("the session was revoked before the answer", func(t *testing.T) {
 		t.Parallel()
@@ -1316,7 +1353,7 @@ func TestOIDCCallbackInternalErrors(t *testing.T) {
 
 		assert.Equal(t, http.StatusForbidden, w.Code)
 		assert.JSONEq(t, bodyNotPermitted, w.Body.String())
-		assert.Nil(t, cookieNamed(w, refreshTokenCookieName), "no cookie for a revoked session")
+		assert.Nil(t, cookieNamed(w, hostRefreshCookie), "no cookie for a revoked session")
 	})
 }
 
@@ -1357,7 +1394,7 @@ func TestOIDCNoTokensInTheRedirectOrTheLogs(t *testing.T) {
 	loc, err := url.Parse(authURL)
 	require.NoError(t, err)
 	state := loc.Query().Get("state")
-	binding := b.cookies["oidc_binding"].Value
+	binding := b.cookies[hostBindingCookie].Value
 	cbURL := s.idp.Authorize(t, authURL, oidcClaims())
 	cb, err := url.Parse(cbURL)
 	require.NoError(t, err)
@@ -1366,7 +1403,7 @@ func TestOIDCNoTokensInTheRedirectOrTheLogs(t *testing.T) {
 	w := s.get(b, cb.RequestURI())
 
 	require.Equal(t, http.StatusFound, w.Code)
-	refresh := b.cookies[refreshTokenCookieName]
+	refresh := b.cookies[hostRefreshCookie]
 	require.NotNil(t, refresh)
 	assert.Equal(t, "/auth/callback", w.Header().Get("Location"))
 	for _, h := range w.Result().Header.Values("Location") {
