@@ -169,7 +169,8 @@ check-workflows:
 	scripts/check-workflows.sh --self-test
 	scripts/check-workflows.sh
 
-# Markdown lint (config: .markdownlint.yml, ignores: .markdownlintignore).
+# Markdown lint (rules: .markdownlint.yml, ignores: .markdownlint-cli2.jsonc;
+# markdownlint-cli2 does not read .markdownlintignore).
 # The version is pinned for reproducible runs; bump it on purpose.
 MARKDOWNLINT_CLI2_VERSION ?= 0.24.1
 lint-docs:

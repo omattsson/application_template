@@ -15,10 +15,14 @@
 #   4. No `golint` (deprecated) and no `@latest` in a command.
 #   5. No floating toolchain version (latest, stable, oldstable, >=, ^, ~, *)
 #      for go-version, node-version and python-version.
-#   6. A top-level `permissions:` key.
-#   7. Every job has `timeout-minutes`.
-#   8. No `${{ github.event.* }}` or `${{ github.head_ref }}` inside a `run:`
-#      script: pass it through `env:` instead (script injection).
+#   6. A top-level `permissions:` key without write access (no `write-all`,
+#      no `<scope>: write`). A job may raise a specific scope itself.
+#   7. Every job that has steps has `timeout-minutes` (a job that calls a
+#      reusable workflow with `uses:` takes its limits from the callee).
+#   8. No `${{ github.event.* }}`, `github.head_ref`, `github.base_ref`,
+#      `github.ref_name` or `inputs.*` inside a `run:` script or an
+#      actions/github-script `script:` block: pass it through `env:` instead
+#      (script injection).
 #
 # Usage:
 #   scripts/check-workflows.sh                 check .github/workflows/*.yml
@@ -40,6 +44,19 @@ check_one() {
   out="$(awk -v file="$file" -v base="$base" '
     function err(msg) { printf "%s: %s\n", file, msg; bad = 1 }
     function indent_of(s) { match(s, /^ */); return RLENGTH }
+    # has_main(V): V is an inline branch list ([main, "release"]) or a scalar;
+    # true only for an item that is exactly main.
+    function has_main(v,   n, parts, i, t) {
+      sub(/^\[/, "", v); sub(/\][[:space:]]*$/, "", v)
+      n = split(v, parts, ",")
+      for (i = 1; i <= n; i++) {
+        t = parts[i]
+        sub(/^[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t)
+        gsub(/["\047]/, "", t)
+        if (t == "main") return 1
+      }
+      return 0
+    }
     /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
     {
       ind = indent_of($0)
@@ -72,7 +89,7 @@ check_one() {
         in_branches = 0
         val = line; sub(/^branches:[ ]*/, "", val); sub(/[ ]*#.*$/, "", val)
         if (val == "") { in_branches = 1 }
-        else if (val ~ /(^|[^A-Za-z0-9_-])main([^A-Za-z0-9_-]|$)/ || val ~ /^\[?[ ]*.?main.?[ ]*\]?$/) main[sec] = 1
+        else if (has_main(val)) main[sec] = 1
         next
       }
       if (in_branches && line ~ /^-/) {
@@ -156,16 +173,33 @@ check_one() {
   ' "$file")" || rc=1
   [ -n "$out" ] && echo "$out"
 
-  # Rule 6: top-level permissions.
+  # Rule 6: top-level permissions, read only.
   if ! grep -Eq '^permissions:' "$file"; then
     echo "$file: no top-level permissions: key (use contents: read)"
     rc=1
+  else
+    out="$(awk -v file="$file" '
+      /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+      /^[^[:space:]]/ {
+        in_perm = ($0 ~ /^permissions:/)
+        if (in_perm && $0 ~ /^permissions:[[:space:]]*write-all/) {
+          printf "%s:%d: top-level permissions: write-all; use contents: read and raise scopes per job\n", file, NR; bad = 1
+        }
+        next
+      }
+      in_perm && /^[[:space:]]+[A-Za-z-]+:[[:space:]]*["\047]?write/ {
+        line = $0; sub(/^[[:space:]]+/, "", line); sub(/:.*$/, "", line)
+        printf "%s:%d: top-level permissions %s: write; raise it in the job that needs it\n", file, NR, line; bad = 1
+      }
+      END { exit bad }
+    ' "$file")" || rc=1
+    [ -n "$out" ] && echo "$out"
   fi
 
   # Rule 7: timeout-minutes in every job.
   out="$(awk -v file="$file" '
     function flush() {
-      if (job != "" && !has_timeout) { printf "%s:%d: job %s has no timeout-minutes\n", file, job_line, job; bad = 1 }
+      if (job != "" && !has_timeout && !is_call) { printf "%s:%d: job %s has no timeout-minutes\n", file, job_line, job; bad = 1 }
     }
     /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
     /^[^[:space:]]/ {
@@ -177,10 +211,11 @@ check_one() {
     /^  [^[:space:]]/ {
       flush()
       job = $0; sub(/^  /, "", job); sub(/:.*$/, "", job)
-      job_line = NR; has_timeout = 0
+      job_line = NR; has_timeout = 0; is_call = 0
       next
     }
     /^    timeout-minutes:/ { has_timeout = 1 }
+    /^    uses:/ { is_call = 1 }
     END { flush(); exit bad }
   ' "$file")" || rc=1
   [ -n "$out" ] && echo "$out"
@@ -189,8 +224,8 @@ check_one() {
   out="$(awk -v file="$file" '
     function indent_of(s) { match(s, /^ */); return RLENGTH }
     function scan(n, s) {
-      if (s ~ /\$\{\{[^}]*github\.(event\.|head_ref)/) {
-        printf "%s:%d: github.event/head_ref in a run script; pass it through env:\n", file, n
+      if (s ~ /\$\{\{[^}]*github\.(event\.|head_ref|base_ref|ref_name)/ || s ~ /\$\{\{([^}]*[^A-Za-z0-9_.])?inputs\./) {
+        printf "%s:%d: event, ref or input data in a run/script block; pass it through env:\n", file, n
         bad = 1
       }
     }
@@ -201,11 +236,11 @@ check_one() {
         if (indent_of($0) > run_ind) { scan(NR, $0); next }
         in_run = 0
       }
-      if ($0 ~ /^[[:space:]-]*run:/) {
-        key = $0; sub(/^[[:space:]-]*run:[[:space:]]*/, "", key)
+      if ($0 ~ /^[[:space:]-]*(run|script):/) {
+        key = $0; sub(/^[[:space:]-]*(run|script):[[:space:]]*/, "", key)
         run_ind = indent_of($0)
         # "- run:" puts the key two columns right of the dash.
-        if ($0 ~ /^[[:space:]]*-[[:space:]]+run:/) run_ind += 2
+        if ($0 ~ /^[[:space:]]*-[[:space:]]+(run|script):/) run_ind += 2
         if (key ~ /^[|>]/) in_run = 1
         else scan(NR, key)
       }
@@ -260,6 +295,7 @@ self_test() {
       printf '%b\n' '        env:'
       printf '%b\n' '          TITLE: ${{ github.event.pull_request.title }}'
       printf '%b\n' "${RUN_STEP-        run: |\n          echo \"\$TITLE\"}"
+      printf '%b\n' "${EXTRA_JOB-}"
     } >"$tmp/$1/pull-request.yml"
   }
   expect() { # NAME pass|fail
@@ -372,6 +408,114 @@ self_test() {
   EXTRA_STEPS='      - run: echo ${{ github.head_ref }}' wf head-ref
   expect head-ref fail
   expect_msg head-ref "pass it through env"
+
+  # Rule 8: more tainted contexts, and github-script blocks.
+  RUN_STEP='        run: echo "${{ github.ref_name }}"' wf ref-name
+  expect ref-name fail
+  expect_msg ref-name "pass it through env"
+
+  EXTRA_STEPS='      - run: echo ${{ github.base_ref }}' wf base-ref
+  expect base-ref fail
+  expect_msg base-ref "pass it through env"
+
+  EXTRA_STEPS='      - run: echo ${{ inputs.name }}' wf inputs-spaced
+  expect inputs-spaced fail
+  expect_msg inputs-spaced "pass it through env"
+
+  EXTRA_STEPS='      - run: echo ${{inputs.name}}' wf inputs-compact
+  expect inputs-compact fail
+
+  EXTRA_STEPS='      - run: echo ${{ format(inputs.name) }}' wf inputs-in-call
+  expect inputs-in-call fail
+
+  EXTRA_STEPS='      - run: echo ${{ github.sha }} ${{ github.event_name }} ${{ steps.inputs.outputs.x }}' wf safe-contexts
+  expect safe-contexts pass
+
+  script_uses="      - uses: actions/github-script@$sha_a # v7.0.0"
+  EXTRA_STEPS="$script_uses"'\n        with:\n          script: |\n            core.info("${{ github.event.pull_request.title }}")' wf script-block
+  expect script-block fail
+  expect_msg script-block "pass it through env"
+
+  EXTRA_STEPS="$script_uses"'\n        with:\n          script: core.info("${{ github.head_ref }}")' wf script-inline
+  expect script-inline fail
+
+  EXTRA_STEPS="$script_uses"'\n        env:\n          TITLE: ${{ github.event.pull_request.title }}\n        with:\n          script: |\n            core.info(process.env.TITLE)' wf script-env
+  expect script-env pass
+
+  # Rule 6: top-level permissions stay read only.
+  PERM_BLOCK='permissions: write-all' wf perm-write-all
+  expect perm-write-all fail
+  expect_msg perm-write-all "write-all"
+
+  PERM_BLOCK='permissions:\n  contents: read\n  pull-requests: write' wf perm-scope-write
+  expect perm-scope-write fail
+  expect_msg perm-scope-write "pull-requests: write"
+
+  PERM_BLOCK='permissions:\n  contents: write' wf perm-contents-write
+  expect perm-contents-write fail
+
+  TIMEOUT_LINE='    timeout-minutes: 10\n    permissions:\n      pull-requests: write' wf perm-job-elevated
+  expect perm-job-elevated pass
+
+  # Rule 1: main must be an exact branch name.
+  PR_BLOCK='  pull_request:\n    branches: [feature/main]' wf feature-main-inline
+  expect feature-main-inline fail
+  expect_msg feature-main-inline "must list main"
+
+  PR_BLOCK="  pull_request:\n    branches: ['feature/main', release]" wf feature-main-quoted
+  expect feature-main-quoted fail
+
+  PR_BLOCK='  pull_request:\n    branches:\n      - feature/main' wf feature-main-block
+  expect feature-main-block fail
+
+  PR_BLOCK='  pull_request:\n    branches: [main-old]' wf main-prefix
+  expect main-prefix fail
+
+  PR_BLOCK='  pull_request:\n    branches: [ "main", release ]' wf main-in-list
+  expect main-in-list pass
+
+  PR_BLOCK="  pull_request:\n    branches: ['main']" wf main-quoted
+  expect main-quoted pass
+
+  PR_BLOCK='  pull_request:\n    branches: main' wf main-scalar
+  expect main-scalar pass
+
+  # Rule 7: a reusable-workflow job needs no timeout-minutes.
+  EXTRA_JOB="  call:\n    uses: org/repo/.github/workflows/x.yml@$sha_a # v1.2.3" wf reusable-call
+  expect reusable-call pass
+
+  EXTRA_JOB='  call:\n    uses: org/repo/.github/workflows/x.yml@v1' wf reusable-call-unpinned
+  expect reusable-call-unpinned fail
+  expect_msg reusable-call-unpinned "old major"
+
+  EXTRA_JOB='  other:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi' wf second-job-no-timeout
+  expect second-job-no-timeout fail
+  expect_msg second-job-no-timeout "job other has no timeout-minutes"
+
+  # Rule 3: docker:// actions and SHA length.
+  EXTRA_STEPS='      - uses: docker://alpine:3.20' wf docker-tag
+  expect docker-tag fail
+  expect_msg docker-tag "@sha256"
+
+  EXTRA_STEPS="      - uses: docker://alpine@sha256:$sha_a$sha_a$(printf '%024d' 0)" wf docker-digest
+  expect docker-digest pass
+
+  CHECKOUT_USES="actions/checkout@${sha_a%?} # v7.0.1" wf sha-39
+  expect sha-39 fail
+  expect_msg sha-39 "not a full commit SHA"
+
+  CHECKOUT_USES="actions/checkout@${sha_a}0 # v7.0.1" wf sha-41
+  expect sha-41 fail
+  expect_msg sha-41 "not a full commit SHA"
+
+  # Rule 2: inline pull_request_target.
+  ON_HEADER='on: pull_request_target' PR_BLOCK='' PUSH_BLOCK='' wf inline-target
+  expect inline-target fail
+  expect_msg inline-target "pull_request_target is not allowed"
+
+  ON_HEADER='on: [push, pull_request_target]' PR_BLOCK='' PUSH_BLOCK='' wf inline-target-list
+  expect inline-target-list fail
+  expect_msg inline-target-list "pull_request_target is not allowed"
 
   # A workflow without a pull_request trigger (schedule only) is fine.
   mkdir -p "$tmp/sched"
