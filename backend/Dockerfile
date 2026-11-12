@@ -4,7 +4,7 @@
 # never runs the Go compiler under QEMU emulation.
 
 # For development mode (hot reload with air)
-FROM golang:1.27.3 AS development
+FROM golang:1.27.4 AS development
 WORKDIR /app
 RUN go install github.com/cosmtrek/air@v1.49.0
 CMD ["air"]
@@ -13,7 +13,7 @@ CMD ["air"]
 # the target platform, so one cached layer serves all platforms. The modules
 # stay in the image layer (not in a cache mount): the GitHub Actions cache
 # stores layers, but not cache mounts.
-FROM --platform=$BUILDPLATFORM golang:1.27.3 AS build-prod
+FROM --platform=$BUILDPLATFORM golang:1.27.4 AS build-prod
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download

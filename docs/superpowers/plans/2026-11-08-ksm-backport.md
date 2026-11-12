@@ -24,7 +24,7 @@
 
 - Template has no `k8s.io/*` module in `backend/go.mod`, and no cluster, helm, kubeconfig, deployer, gitprovider or quota concept in code, config or docs.
 - MySQL only. SQLite only in unit tests.
-- Go version is the one in KSM `backend/go.mod` (1.27.3); Dockerfiles use matching images and run non-root.
+- Go version is the one in KSM `backend/go.mod` (1.27.4); Dockerfiles use matching images and run non-root.
 - Auth is off by default (`AUTH_ENABLED=false`). With `AUTH_ENABLED=true` startup fails unless `JWT_SECRET` is set and at least 16 characters. No default admin password. `SELF_REGISTRATION` defaults to false.
 - Roles are exactly `admin`, `devops`, `user`.
 - A 500 returns `"Internal server error"`. A cancelled request context returns 499. `context.DeadlineExceeded` stays 500. Oversized body returns 413. `ctxutil.WriteTimeout` is 30 s. No bare `context.WithoutCancel`.
@@ -84,7 +84,7 @@ Backend additions: `internal/ctxutil/`, `internal/leader/` (group, then lease), 
 **Produces:** `make gosec` runs `scripts/gosec.sh` (pinned gosec built with the local Go, run inside `backend/`); `make lint` runs `go vet` and the frontend lint.
 
 - [ ] **Step 1:** Add `scripts/check-dockerfiles.sh` that fails if a Dockerfile has no `USER` other than root in its production stage or uses an image older than the pinned versions. Run it (FAIL on current files).
-- [ ] **Step 2:** Set `go 1.27.3` (no `toolchain` line) and `golang:1.27.3` images; production stage `alpine` with a non-root user for the backend; copy KSM `backend/Dockerfile` dev/build/prod stage structure without the `helm` stage. `.dockerignore` files copied from KSM.
+- [ ] **Step 2:** Set `go 1.27.4` (no `toolchain` line) and `golang:1.27.4` images; production stage `alpine` with a non-root user for the backend; copy KSM `backend/Dockerfile` dev/build/prod stage structure without the `helm` stage. `.dockerignore` files copied from KSM.
 - [ ] **Step 3:** Port `$KSM/scripts/gosec.sh`; add the Make targets; remove `golint` usage.
 - [ ] **Step 4:** Run `scripts/check-dockerfiles.sh` (PASS), `docker build -t tpl-backend ./backend`, `make gosec`, `make lint`. Fix findings or add narrowly scoped `#nosec` with a reason.
 - [ ] **Step 5:** Commit `build: Go 1.27, non-root images, gosec`.

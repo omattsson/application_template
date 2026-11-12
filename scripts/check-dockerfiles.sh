@@ -102,7 +102,7 @@ self_test() {
 
   mkfix() { # NAME -> creates fixture dir with go.mod, content on stdin
     mkdir -p "$tmp/$1"
-    printf 'module x\n\ngo 1.27.3\n' >"$tmp/$1/go.mod"
+    printf 'module x\n\ngo 1.27.4\n' >"$tmp/$1/go.mod"
     cat >"$tmp/$1/Dockerfile"
   }
   expect() { # NAME pass|fail
@@ -116,7 +116,7 @@ self_test() {
   }
 
   mkfix good <<'EOF'
-FROM --platform=$BUILDPLATFORM golang:1.27.3 AS build-prod
+FROM --platform=$BUILDPLATFORM golang:1.27.4 AS build-prod
 RUN true
 FROM alpine:3.24 AS production
 COPY --from=build-prod /x /x
@@ -124,29 +124,29 @@ USER 65532:65532
 CMD ["/x"]
 EOF
   mkfix root-user <<'EOF'
-FROM golang:1.27.3 AS build
+FROM golang:1.27.4 AS build
 FROM alpine:3.24 AS production
 USER root
 CMD ["/x"]
 EOF
   mkfix no-user <<'EOF'
-FROM golang:1.27.3 AS build
+FROM golang:1.27.4 AS build
 FROM alpine:3.24 AS production
 CMD ["/x"]
 EOF
   mkfix no-cmd <<'EOF'
-FROM golang:1.27.3 AS build
+FROM golang:1.27.4 AS build
 FROM alpine:3.24 AS production
 USER 65532
 EOF
   mkfix latest-tag <<'EOF'
-FROM golang:1.27.3 AS build
+FROM golang:1.27.4 AS build
 FROM alpine:latest AS production
 USER 65532
 CMD ["/x"]
 EOF
   mkfix untagged <<'EOF'
-FROM golang:1.27.3 AS build
+FROM golang:1.27.4 AS build
 FROM alpine AS production
 USER 65532
 CMD ["/x"]
@@ -158,7 +158,7 @@ USER 65532
 CMD ["/x"]
 EOF
   mkfix stage-ref <<'EOF'
-FROM golang:1.27.3-alpine AS build
+FROM golang:1.27.4-alpine AS build
 FROM build AS production
 USER nobody
 ENTRYPOINT ["/x"]
