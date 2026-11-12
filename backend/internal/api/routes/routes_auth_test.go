@@ -608,6 +608,62 @@ func TestAuthOnEveryV1RouteIsAuthenticated(t *testing.T) {
 	}
 }
 
+// TestAuthOnEveryRouteIsAuthenticatedOrListed walks the whole route table, not
+// only /api/v1. Every route is either in the explicit allowlist of public
+// routes or answers 401 without credentials. A new route outside the
+// allowlist (a debug endpoint, a second /ws, a route registered on the
+// engine instead of the authenticated group) fails this test until someone
+// decides that it is public.
+func TestAuthOnEveryRouteIsAuthenticatedOrListed(t *testing.T) {
+	t.Parallel()
+	env := newAuthEnv(t, nil)
+	public := map[string]bool{
+		"GET /health":                    true,
+		"GET /health/live":               true,
+		"GET /health/ready":              true,
+		"GET /api/v1/ui-config":          true,
+		"POST /api/v1/auth/login":        true,
+		"POST /api/v1/auth/register":     true,
+		"POST /api/v1/auth/refresh":      true,
+		"POST /api/v1/auth/logout":       true,
+		"GET /api/v1/auth/oidc/login":    true,
+		"GET /api/v1/auth/oidc/callback": true,
+		// Authenticates itself (token in the query or the header), checked
+		// separately below.
+		"GET /ws": true,
+	}
+	// Swagger is registered by the bootstrap when ENABLE_SWAGGER is true, not
+	// by Setup; a route with this prefix would be that one.
+	const swaggerPrefix = "/swagger/"
+
+	walked := 0
+	for _, r := range env.router.Routes() {
+		if public[r.Method+" "+r.Path] || strings.HasPrefix(r.Path, swaggerPrefix) {
+			continue
+		}
+		walked++
+		path := strings.ReplaceAll(r.Path, ":id", "00000000-0000-4000-8000-000000000001")
+		w := env.do(t, r.Method, path, `{}`, map[string]string{"X-Requested-With": "x"})
+		assert.Equal(t, http.StatusUnauthorized, w.Code, "%s %s is not in the allowlist and must answer 401 without credentials", r.Method, r.Path)
+	}
+	assert.GreaterOrEqual(t, walked, 15, "the table has the items, API key, user and audit log routes")
+
+	// Every allowlisted route exists (a stale entry would hide a removal).
+	registered := map[string]bool{}
+	for _, r := range env.router.Routes() {
+		registered[r.Method+" "+r.Path] = true
+	}
+	for key := range public {
+		assert.True(t, registered[key], "allowlisted route %s is not registered", key)
+	}
+
+	// The socket needs a token before the upgrade: no token, no header, 401.
+	w := env.do(t, http.MethodGet, "/ws", "", nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code, "GET /ws without a token")
+	w = env.do(t, http.MethodGet, "/ws?token=not-a-token", "", nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code, "GET /ws with a bad token")
+}
+
 // TestSetupBuildsTheOIDCProviderFromTheConfig: without an injected client,
 // Setup builds the identity provider from OIDC_* (no network at
 // construction); a configuration it cannot use is an error and nothing is
