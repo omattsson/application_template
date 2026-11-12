@@ -257,7 +257,7 @@ https://github.com/username/application_template/compare/main...your-branch?temp
 
 - **Default Template**: Used automatically when creating a PR
 - **Bug Fix Template**: For PRs that fix bugs (`?template=bugfix.md`)
-- **Feature Template**: For PRs that add new features (`?template=feature.md`) 
+- **Feature Template**: For PRs that add new features (`?template=feature.md`)
 - **Documentation Template**: For PRs that update docs (`?template=documentation.md`)
 
 To use a specialized template, add the query parameter to the PR URL:

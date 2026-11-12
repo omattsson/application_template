@@ -1,4 +1,4 @@
-.PHONY: test-e2e test-e2e-auth gosec dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
+.PHONY: test-e2e test-e2e-auth gosec lint-backend lint-frontend lint-docs check-workflows test-backend-unit dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
 
 # MySQL service management
 mysql-start:
@@ -70,6 +70,10 @@ test: test-backend test-frontend
 # Run backend unit tests only (no external dependencies needed)
 test-backend:
 	cd backend && go test ./... -v
+
+# Backend unit tests with the race detector, as CI runs them (no database)
+test-backend-unit:
+	cd backend && go test -race -short ./...
 
 # Start infrastructure for integration tests
 integration-infra-start:
@@ -151,9 +155,25 @@ fmt:
 	cd backend && go fmt ./...
 	cd frontend && npm run format
 
-lint:
+lint: lint-backend lint-frontend check-workflows
+
+lint-backend:
 	cd backend && go vet ./...
+
+lint-frontend:
 	cd frontend && npm run lint
+
+# Workflow hygiene (pinned actions, permissions, timeouts, main trigger), with
+# the checker's own fixture tests first. CI runs it too.
+check-workflows:
+	scripts/check-workflows.sh --self-test
+	scripts/check-workflows.sh
+
+# Markdown lint (config: .markdownlint.yml, ignores: .markdownlintignore).
+# The version is pinned for reproducible runs; bump it on purpose.
+MARKDOWNLINT_CLI2_VERSION ?= 0.24.1
+lint-docs:
+	npx --yes markdownlint-cli2@$(MARKDOWNLINT_CLI2_VERSION) "**/*.md"
 
 # gosec security scan of the backend (pinned gosec built with the local Go).
 gosec:

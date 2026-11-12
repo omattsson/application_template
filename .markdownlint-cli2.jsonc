@@ -1,0 +1,16 @@
+{
+  // markdownlint-cli2 options (make lint-docs, CI job "docs"). The rules are in
+  // .markdownlint.yml. markdownlint-cli2 does not read .markdownlintignore.
+  "ignores": [
+    // Dependencies and generated output
+    "**/node_modules/**",
+    "backend/vendor/**",
+    "frontend/dist/**",
+    "frontend/playwright-report*/**",
+    "frontend/test-results/**",
+    "coverage/**",
+    // Agent worktrees and planning scratch space
+    ".claude/**",
+    ".superpowers/**"
+  ]
+}

@@ -1,0 +1,51 @@
+# markdownlint-cli2 configuration (make lint-docs, CI job "docs").
+# Relaxed on purpose: the rules below are disabled because the existing docs
+# rely on them. Add a rule back only together with the fix of the docs.
+default: true
+
+# MD013 - Line length (many docs have long lines and tables)
+MD013: false
+
+# MD024 - Multiple headings with the same content (common in changelogs)
+MD024: false
+
+# MD033 - Inline HTML (used in READMEs for badges and images)
+MD033: false
+
+# MD041 - First line should be a top-level heading (front matter, badges)
+MD041: false
+
+# MD034 - Bare URLs
+MD034: false
+
+# MD040 - Fenced code blocks should have a language specified
+MD040: false
+
+# MD036 - Emphasis used instead of a heading
+MD036: false
+
+# MD046 - Code block style
+MD046: false
+
+# MD047 - Files should end with a single newline character
+MD047: false
+
+# MD022 - Headings should be surrounded by blank lines
+MD022: false
+
+# MD031 - Fenced code blocks should be surrounded by blank lines
+MD031: false
+
+# MD032 - Lists should be surrounded by blank lines
+MD032: false
+
+# MD037 - Spaces inside emphasis markers
+MD037: false
+
+# MD058 - Tables should be surrounded by blank lines (same family as MD022,
+# MD031 and MD032 above)
+MD058: false
+
+# MD060 - Table column style: the docs use tables with compact separator rows
+# (|---|---|), for example the generated specs and plans under docs/superpowers
+MD060: false

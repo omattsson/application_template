@@ -1,0 +1,124 @@
+name: E2E Tests
+
+# Playwright end-to-end tests (frontend/e2e) against the backend built from this
+# checkout and a fresh MySQL. scripts/e2e.sh (called by make test-e2e and make
+# test-e2e-auth) starts MySQL itself with Docker Compose under its own project
+# on host port 13306, so the job needs no service container, and no port clash
+# is possible. One job runs three passes in a row, each with its own database:
+#   1. auth off                      make test-e2e
+#   2. auth on, strict accessibility make test-e2e-auth
+#   3. auth on, production cookies   make test-e2e-auth E2E_SECURE_COOKIES=true
+#      (the __Host- refresh cookie with Secure)
+# The auth passes run without retries (E2E_RETRIES=0) and with one worker, so a
+# flaky sign-in spec fails the run. Reports and traces are uploaded on failure.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+      - 'docker-compose.yml'
+      - 'Makefile'
+      - 'scripts/e2e.sh'
+      - '.github/workflows/e2e.yml'
+  push:
+    branches: [main]
+  schedule:
+    - cron: '30 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  playwright:
+    name: Playwright (auth off, auth on, secure cookies)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browser
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E, auth off
+        id: e2e_off
+        run: make test-e2e
+
+      - name: Upload report (auth off)
+        if: ${{ !cancelled() && steps.e2e_off.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-auth-off
+          path: |
+            frontend/playwright-report-off/
+            frontend/test-results/
+            backend/tmp/e2e-backend-off.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: E2E, auth on (strict accessibility)
+        id: e2e_auth
+        if: ${{ !cancelled() }}
+        env:
+          E2E_RETRIES: '0'
+        run: make test-e2e-auth
+
+      - name: Upload report (auth on)
+        if: ${{ !cancelled() && steps.e2e_auth.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-auth-on
+          path: |
+            frontend/playwright-report-auth/
+            frontend/test-results/
+            backend/tmp/e2e-backend-auth.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: E2E, auth on with production cookies
+        id: e2e_secure
+        if: ${{ !cancelled() }}
+        env:
+          E2E_RETRIES: '0'
+        run: make test-e2e-auth E2E_SECURE_COOKIES=true
+
+      - name: Upload report (secure cookies)
+        if: ${{ !cancelled() && steps.e2e_secure.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-auth-secure-cookies
+          path: |
+            frontend/playwright-report-auth/
+            frontend/test-results/
+            backend/tmp/e2e-backend-auth.log
+          retention-days: 14
+          if-no-files-found: ignore

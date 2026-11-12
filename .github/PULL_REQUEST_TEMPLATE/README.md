@@ -25,7 +25,7 @@ Simply create a new PR, and the default template will be used automatically.
    ```
    https://github.com/your-username/application_template/compare/main...your-branch?template=feature.md
    ```
-   
+
 ## Example
 For a bug fix PR:
 ```

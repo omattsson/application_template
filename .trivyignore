@@ -1,0 +1,6 @@
+# Trivy ignore list for the image scans (.github/workflows/security-scan.yml).
+# Entries are global by CVE ID. Every entry needs
+#   - a "#" comment on the line above that names the reason, and
+#   - an expiry date in the same line, at most 90 days ahead: CVE-YYYY-NNNNN exp:YYYY-MM-DD
+# scripts/check-trivyignore.sh enforces both. Remove an entry as soon as a fix
+# is available. Keep the file free of entries when there is nothing to accept.

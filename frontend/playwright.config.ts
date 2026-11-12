@@ -8,21 +8,30 @@ import { defineConfig, devices } from '@playwright/test';
 //                      (default http://localhost:8081, vite.config.ts).
 //   E2E_REUSE_SERVER=0 Never reuse a server that already listens on the port
 //                      (it could proxy to another backend).
+//   E2E_RETRIES        Retries of a failed test. Default: 2 on CI (CI=true), 0
+//                      elsewhere. The CI auth runs set 0 so that a flaky sign-in
+//                      spec fails the run instead of passing on the second try.
 const port = Number(process.env.E2E_FRONTEND_PORT || 3000);
 const baseURL = `http://localhost:${port}`;
+const retriesEnv = process.env.E2E_RETRIES;
+const retries = retriesEnv !== undefined && retriesEnv !== '' ? Number(retriesEnv) : process.env.CI ? 2 : 0;
+if (!Number.isInteger(retries) || retries < 0) {
+  throw new Error(`E2E_RETRIES must be a whole number >= 0, got "${retriesEnv}"`);
+}
 
 export default defineConfig({
   testDir: './e2e',
   globalSetup: './e2e/global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries,
   workers: process.env.CI ? 1 : undefined,
   // The HTML report goes to PLAYWRIGHT_HTML_OUTPUT_DIR when it is set (one per mode).
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL,
-    trace: 'on-first-retry',
+    // With retries off a trace on the first retry never exists: keep the trace of a failure.
+    trace: retries > 0 ? 'on-first-retry' : 'retain-on-failure',
   },
   projects: [
     {
