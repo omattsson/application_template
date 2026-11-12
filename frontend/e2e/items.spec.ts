@@ -53,5 +53,24 @@ test.describe('Items Page', () => {
     await expect(page.getByRole('columnheader', { name: 'Description' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Created At' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Updated At' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Actions' })).toBeVisible();
+  });
+
+  test('asks for confirmation before deleting an item', async ({ page }) => {
+    await page.goto('/items');
+
+    const deleteButton = page.getByRole('button', { name: /^Delete / }).first();
+    await expect(deleteButton).toBeVisible({ timeout: 10_000 });
+    await deleteButton.click();
+
+    // The delete does not happen until the dialog is confirmed.
+    const dialog = page.getByRole('dialog', { name: 'Delete item' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Delete' })).toBeVisible();
+
+    // Cancelling closes the dialog and leaves the row in place.
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(deleteButton).toBeVisible();
   });
 });

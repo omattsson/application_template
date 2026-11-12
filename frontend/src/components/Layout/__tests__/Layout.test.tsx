@@ -1,17 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import Layout from '../index';
+import { ThemeModeProvider } from '../../../context/ThemeContext';
 
 function renderLayout(children: React.ReactNode = <div>Test Content</div>) {
   return render(
-    <MemoryRouter>
-      <Layout>{children}</Layout>
-    </MemoryRouter>
+    <ThemeModeProvider>
+      <MemoryRouter>
+        <Layout>{children}</Layout>
+      </MemoryRouter>
+    </ThemeModeProvider>
   );
 }
 
 describe('Layout', () => {
+  afterEach(() => {
+    localStorage.clear();
+  });
+
   it('renders the app title', () => {
     renderLayout();
     expect(screen.getByText('Full Stack App')).toBeInTheDocument();
@@ -33,5 +41,18 @@ describe('Layout', () => {
     renderLayout();
     const year = new Date().getFullYear();
     expect(screen.getByText(new RegExp(`© ${year}`))).toBeInTheDocument();
+  });
+
+  it('has a theme toggle that switches between light and dark and is persisted', async () => {
+    const user = userEvent.setup();
+    renderLayout();
+
+    await user.click(screen.getByRole('button', { name: 'Switch to dark mode' }));
+    expect(screen.getByRole('button', { name: 'Switch to light mode' })).toBeInTheDocument();
+    expect(localStorage.getItem('theme-mode')).toBe('dark');
+
+    await user.click(screen.getByRole('button', { name: 'Switch to light mode' }));
+    expect(screen.getByRole('button', { name: 'Switch to dark mode' })).toBeInTheDocument();
+    expect(localStorage.getItem('theme-mode')).toBe('light');
   });
 });

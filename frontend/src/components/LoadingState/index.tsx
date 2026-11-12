@@ -1,0 +1,22 @@
+import { Box, CircularProgress, Typography } from '@mui/material';
+
+interface LoadingStateProps {
+  label?: string;
+}
+
+const LoadingState = ({ label }: LoadingStateProps) => (
+  <Box
+    sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '200px' }}
+    aria-live="polite"
+    role="status"
+  >
+    <CircularProgress aria-label={label ?? 'Loading'} />
+    {label && (
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+        {label}
+      </Typography>
+    )}
+  </Box>
+);
+
+export default LoadingState;

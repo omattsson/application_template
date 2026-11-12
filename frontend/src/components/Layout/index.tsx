@@ -1,12 +1,18 @@
 import React from 'react';
-import { Box, AppBar, Toolbar, Typography, Container, Button } from '@mui/material';
+import { Box, AppBar, Toolbar, Typography, Container, Button, IconButton, Tooltip } from '@mui/material';
+import DarkModeIcon from '@mui/icons-material/DarkMode';
+import LightModeIcon from '@mui/icons-material/LightMode';
 import { Link as RouterLink } from 'react-router-dom';
+import { useThemeMode } from '../../context/ThemeContext';
 
 interface LayoutProps {
   children: React.ReactNode;
 }
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
+  const { mode, toggleMode } = useThemeMode();
+  const toggleLabel = mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode';
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       <AppBar position="static">
@@ -23,12 +29,20 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           <Button color="inherit" component={RouterLink} to="/items">
             Items
           </Button>
+          <Tooltip title={toggleLabel}>
+            <IconButton color="inherit" onClick={toggleMode} aria-label={toggleLabel} sx={{ ml: 1 }}>
+              {mode === 'light' ? <DarkModeIcon /> : <LightModeIcon />}
+            </IconButton>
+          </Tooltip>
         </Toolbar>
       </AppBar>
       <Container component="main" sx={{ mt: 4, mb: 4, flex: '1 0 auto' }}>
         {children}
       </Container>
-      <Box component="footer" sx={{ py: 3, px: 2, mt: 'auto', backgroundColor: 'grey.200' }}>
+      <Box
+        component="footer"
+        sx={{ py: 3, px: 2, mt: 'auto', backgroundColor: 'background.paper', borderTop: 1, borderColor: 'divider' }}
+      >
         <Container maxWidth="sm">
           <Typography variant="body2" color="text.secondary" align="center">
             © {new Date().getFullYear()} Full Stack Application

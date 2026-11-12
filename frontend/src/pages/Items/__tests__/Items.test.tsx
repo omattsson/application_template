@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { AxiosError, AxiosHeaders } from 'axios';
+import type { InternalAxiosRequestConfig } from 'axios';
 import Items from '../index';
 import { itemService } from '../../../api/client';
 import { useWebSocketContext } from '../../../context/WebSocketContext';
@@ -12,6 +15,7 @@ vi.mock('../../../context/WebSocketContext', () => ({
 vi.mock('../../../api/client', () => ({
   itemService: {
     list: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -155,14 +159,14 @@ describe('Items Page', () => {
     });
   });
 
-  it('shows no-items empty state alert when list is empty', async () => {
+  it('shows the no-items empty state when list is empty', async () => {
     setupSubscribeMock();
     (itemService.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     render(<Items />);
 
     await waitFor(() => {
-      expect(screen.getByText('No items found.')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'No items found' })).toBeInTheDocument();
     });
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
@@ -520,5 +524,94 @@ describe('Items Page', () => {
     // Component must not crash; latest mocked data (mockItems) should be shown
     expect(screen.getByText('Widget')).toBeInTheDocument();
     expect(screen.getByText('Gadget')).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Delete asks for confirmation first
+  // ---------------------------------------------------------------------------
+
+  describe('delete', () => {
+    async function renderLoaded() {
+      const utils = setupSubscribeMock();
+      (itemService.list as ReturnType<typeof vi.fn>).mockResolvedValue(mockItems);
+      const user = userEvent.setup();
+      render(<Items />);
+      await waitFor(() => {
+        expect(screen.getByText('Widget')).toBeInTheDocument();
+      });
+      return { user, ...utils };
+    }
+
+    it('renders an accessible delete button per item', async () => {
+      await renderLoaded();
+      expect(screen.getByRole('button', { name: 'Delete Widget' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Delete Gadget' })).toBeInTheDocument();
+    });
+
+    it('asks for confirmation and does not delete yet', async () => {
+      const { user } = await renderLoaded();
+
+      await user.click(screen.getByRole('button', { name: 'Delete Widget' }));
+
+      const dialog = await screen.findByRole('dialog', { name: 'Delete item' });
+      expect(within(dialog).getByText(/Widget/)).toBeInTheDocument();
+      expect(itemService.delete).not.toHaveBeenCalled();
+    });
+
+    it('does not delete when the dialog is cancelled', async () => {
+      const { user } = await renderLoaded();
+
+      await user.click(screen.getByRole('button', { name: 'Delete Widget' }));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+      expect(itemService.delete).not.toHaveBeenCalled();
+      expect(screen.getByText('Widget')).toBeInTheDocument();
+    });
+
+    it('deletes the item, refreshes the list and confirms with a toast when confirmed', async () => {
+      const { user } = await renderLoaded();
+      (itemService.delete as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      (itemService.list as ReturnType<typeof vi.fn>).mockResolvedValue([mockItems[1]]);
+
+      await user.click(screen.getByRole('button', { name: 'Delete Widget' }));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+      await waitFor(() => {
+        expect(itemService.delete).toHaveBeenCalledWith(1);
+      });
+      await waitFor(() => {
+        expect(screen.queryByText('Widget')).not.toBeInTheDocument();
+      });
+      expect(screen.getByText('Gadget')).toBeInTheDocument();
+      expect(screen.getByText('Item deleted')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+    });
+
+    it('shows the server error and keeps the item when the delete fails', async () => {
+      const { user } = await renderLoaded();
+      const config = { headers: new AxiosHeaders() } as InternalAxiosRequestConfig;
+      const error = new AxiosError('Request failed', 'ERR_BAD_REQUEST', config, undefined, {
+        status: 404,
+        statusText: '',
+        data: { error: 'item not found' },
+        headers: {},
+        config,
+      });
+      (itemService.delete as ReturnType<typeof vi.fn>).mockRejectedValue(error);
+
+      await user.click(screen.getByRole('button', { name: 'Delete Widget' }));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+      expect(await screen.findByText('item not found')).toBeInTheDocument();
+      expect(screen.getByText('Widget')).toBeInTheDocument();
+    });
   });
 });
