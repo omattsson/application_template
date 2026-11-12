@@ -15,6 +15,27 @@ export interface UseWebSocketOptions {
   onMessage?: (message: WebSocketMessage) => void;
   /** URL path, e.g. '/ws'. Defaults to '/ws'. */
   path?: string;
+  /**
+   * Access token for an authenticated socket, sent as `?token=` (browsers
+   * cannot set headers on a WebSocket; the backend strips it before logging).
+   * A new token closes the socket and opens a new one, so the socket always
+   * carries the current identity (the server closes it at token expiry).
+   */
+  token?: string | null;
+  /** False: no socket (for example auth on but nobody signed in). Defaults to true. */
+  enabled?: boolean;
+}
+
+/**
+ * Build the socket URL.
+ * @param path - URL path (may have a query)
+ * @param token - Access token, or null/undefined for none
+ * @returns The absolute ws:// or wss:// URL
+ */
+export function webSocketUrl(path: string, token?: string | null): string {
+  const base = `${WS_BASE_URL}${path}`;
+  if (!token) return base;
+  return `${base}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
 }
 
 export interface UseWebSocketResult {
@@ -24,7 +45,7 @@ export interface UseWebSocketResult {
 }
 
 export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketResult {
-  const { onMessage, path = '/ws' } = options;
+  const { onMessage, path = '/ws', token = null, enabled = true } = options;
   const wsRef = useRef<ReconnectingWebSocket | null>(null);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
@@ -35,10 +56,15 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
     onMessageRef.current = onMessage;
   }, [onMessage]);
 
+  // One socket per (path, token): a refreshed token reconnects, a logout closes.
   useEffect(() => {
-    const url = `${WS_BASE_URL}${path}`;
-    const rws = new ReconnectingWebSocket(url);
+    if (!enabled) {
+      wsRef.current = null;
+      return;
+    }
+    const rws = new ReconnectingWebSocket(webSocketUrl(path, token));
     wsRef.current = rws;
+    setConnectionStatus('connecting');
 
     const handleOpen = () => setConnectionStatus('open');
     const handleClose = () => setConnectionStatus('closed');
@@ -61,12 +87,13 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
       rws.removeEventListener('close', handleClose);
       rws.removeEventListener('message', handleMessage);
       rws.close();
+      if (wsRef.current === rws) wsRef.current = null;
     };
-  }, [path]);
+  }, [path, token, enabled]);
 
   const sendMessage = useCallback((data: unknown) => {
     wsRef.current?.send(JSON.stringify(data));
   }, []);
 
-  return { lastMessage, connectionStatus, sendMessage };
+  return { lastMessage, connectionStatus: enabled ? connectionStatus : 'closed', sendMessage };
 }

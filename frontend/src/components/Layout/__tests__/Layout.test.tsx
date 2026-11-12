@@ -1,23 +1,56 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Layout from '../index';
 import { ThemeModeProvider } from '../../../context/ThemeContext';
+import { useAuth } from '../../../context/AuthContext';
+import type { AuthContextValue } from '../../../context/AuthContext';
 
-function renderLayout(children: React.ReactNode = <div>Test Content</div>) {
+vi.mock('../../../context/AuthContext', () => ({ useAuth: vi.fn() }));
+
+function authState(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
+  return {
+    authEnabled: false,
+    isLoading: false,
+    isAuthenticated: false,
+    user: null,
+    role: null,
+    login: vi.fn(),
+    logout: vi.fn().mockResolvedValue(undefined),
+    loginWithOIDC: vi.fn(),
+    ...overrides,
+  };
+}
+
+const ALICE = {
+  id: 'u1',
+  username: 'alice',
+  display_name: 'Alice Person',
+  role: 'user' as const,
+};
+
+function renderLayout(children: React.ReactNode = <div>Test Content</div>, path = '/') {
   return render(
     <ThemeModeProvider>
-      <MemoryRouter>
-        <Layout>{children}</Layout>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/login" element={<p>login page</p>} />
+          <Route path="*" element={<Layout>{children}</Layout>} />
+        </Routes>
       </MemoryRouter>
     </ThemeModeProvider>
   );
 }
 
 describe('Layout', () => {
+  beforeEach(() => {
+    vi.mocked(useAuth).mockReturnValue(authState());
+  });
+
   afterEach(() => {
     localStorage.clear();
+    vi.clearAllMocks();
   });
 
   it('renders the app title', () => {
@@ -54,5 +87,39 @@ describe('Layout', () => {
     await user.click(screen.getByRole('button', { name: 'Switch to light mode' }));
     expect(screen.getByRole('button', { name: 'Switch to dark mode' })).toBeInTheDocument();
     expect(localStorage.getItem('theme-mode')).toBe('light');
+  });
+
+  describe('auth', () => {
+    it('shows no user name and no Logout button when auth is disabled', () => {
+      renderLayout();
+      expect(screen.queryByRole('button', { name: /log out/i })).not.toBeInTheDocument();
+      expect(screen.queryByText('Alice Person')).not.toBeInTheDocument();
+    });
+
+    it('shows the user name and a Logout button when auth is enabled and the user is signed in', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: ALICE, role: 'user' }));
+      renderLayout();
+      expect(screen.getByText('Alice Person')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /log out/i })).toBeInTheDocument();
+    });
+
+    it('hides Logout and the navigation for an anonymous user when auth is enabled', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
+      renderLayout();
+      expect(screen.queryByRole('button', { name: /log out/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /items/i })).not.toBeInTheDocument();
+      expect(screen.getByText('Full Stack App')).toBeInTheDocument();
+    });
+
+    it('Logout calls logout and goes to the login page', async () => {
+      const logout = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(useAuth).mockReturnValue(
+        authState({ authEnabled: true, isAuthenticated: true, user: ALICE, role: 'user', logout }),
+      );
+      renderLayout(<div>Test Content</div>, '/items');
+      await userEvent.setup().click(screen.getByRole('button', { name: /log out/i }));
+      expect(logout).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText('login page')).toBeInTheDocument();
+    });
   });
 });

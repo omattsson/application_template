@@ -17,6 +17,16 @@ vi.mock('../api/client', () => ({
   itemService: {
     list: vi.fn().mockResolvedValue([]),
   },
+  // Auth off (the backend default).
+  uiConfigService: {
+    get: vi.fn().mockResolvedValue({
+      title: 'Application Template',
+      auth_enabled: false,
+      oidc_enabled: false,
+      local_auth_enabled: false,
+    }),
+  },
+  authService: { login: vi.fn(), logout: vi.fn() },
 }));
 
 // Smoke test for the toolchain and UI library: the whole app (theme provider,

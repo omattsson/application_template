@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import React from 'react';
 
@@ -30,13 +30,20 @@ const { MockRWS, getInstance } = vi.hoisted(() => {
 vi.mock('reconnecting-websocket', () => ({ default: MockRWS }));
 
 import { WebSocketProvider, useWebSocketContext } from '../context/WebSocketContext';
+import { setAuthMode, resetSessionForTesting } from '../api/session';
 
 function wrapper({ children }: { children: React.ReactNode }) {
   return React.createElement(WebSocketProvider, null, children);
 }
 
 describe('WebSocketContext', () => {
+  beforeEach(() => {
+    // Auth off (the default of the backend): the socket connects without a token.
+    setAuthMode('disabled');
+  });
+
   afterEach(() => {
+    resetSessionForTesting();
     vi.clearAllMocks();
     vi.restoreAllMocks();
   });

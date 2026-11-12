@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useCallback, useRef, useSyncExternalStore } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import type { WebSocketMessage, ConnectionStatus } from '../hooks/useWebSocket';
+import { getSession, subscribeSession } from '../api/session';
 
 interface WebSocketContextValue {
   lastMessage: WebSocketMessage | null;
@@ -17,7 +18,14 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     handlersRef.current.get(msg.type)?.forEach((h) => h(msg));
   }, []);
 
-  const { lastMessage, connectionStatus } = useWebSocket({ onMessage: handleMessage });
+  // The socket follows the session: none until the auth mode is known, none
+  // for an anonymous visitor with auth on, and a new socket for every new
+  // access token (login, refresh, a token from another tab).
+  const session = useSyncExternalStore(subscribeSession, getSession);
+  const token = session.mode === 'enabled' ? session.token : null;
+  const enabled = session.mode === 'disabled' || (session.mode === 'enabled' && token !== null);
+
+  const { lastMessage, connectionStatus } = useWebSocket({ onMessage: handleMessage, token, enabled });
 
   const subscribe = useCallback(
     (type: string, handler: (msg: WebSocketMessage) => void) => {

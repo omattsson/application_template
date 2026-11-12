@@ -1,8 +1,28 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Link, MemoryRouter } from 'react-router-dom';
 import AppRoutes from '../routes';
+import { useAuth } from '../context/AuthContext';
+import type { AuthContextValue } from '../context/AuthContext';
+
+vi.mock('../context/AuthContext', () => ({ useAuth: vi.fn() }));
+vi.mock('../pages/Login', () => ({ default: () => <h1>Login page</h1> }));
+vi.mock('../pages/AuthCallback', () => ({ default: () => <h1>Callback page</h1> }));
+
+function authState(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
+  return {
+    authEnabled: false,
+    isLoading: false,
+    isAuthenticated: false,
+    user: null,
+    role: null,
+    login: vi.fn(),
+    logout: vi.fn(),
+    loginWithOIDC: vi.fn(),
+    ...overrides,
+  };
+}
 
 vi.mock('../pages/Home', () => ({ default: () => <h1>Home page</h1> }));
 vi.mock('../pages/Health', () => ({ default: () => <h1>Health page</h1> }));
@@ -23,6 +43,10 @@ function renderAt(path: string) {
 }
 
 describe('AppRoutes', () => {
+  beforeEach(() => {
+    vi.mocked(useAuth).mockReturnValue(authState());
+  });
+
   afterEach(() => {
     itemsState.shouldThrow = false;
     vi.clearAllMocks();
@@ -36,6 +60,21 @@ describe('AppRoutes', () => {
   ])('renders %s', (path, heading) => {
     renderAt(path);
     expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['/login', 'Login page'],
+    ['/auth/callback', 'Callback page'],
+  ])('renders the public auth route %s', (path, heading) => {
+    vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
+    renderAt(path);
+    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+  });
+
+  it.each(['/', '/health', '/items'])('protects %s when auth is enabled', (path) => {
+    vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
+    renderAt(path);
+    expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
   });
 
   it('renders NotFound for an unknown path', () => {

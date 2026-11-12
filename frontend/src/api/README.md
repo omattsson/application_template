@@ -19,17 +19,19 @@ The API layer provides:
 api/
 ├── client.ts   # Axios client setup and interceptors
 ├── config.ts   # API configuration and endpoints
+├── refresh.ts  # Access token refresh (single flight, cross-tab Web Lock, never aborted)
+├── session.ts  # In-memory session (auth mode, access token) shared across tabs
 └── README.md   # This documentation
 ```
 
 ## Configuration
 
-The API configuration is managed in `config.ts`:
+The API configuration is managed in `config.ts`. The API is always called
+same-origin: the Vite dev proxy and nginx forward `/api/*` to the backend and
+strip the `/api` prefix.
 
 ```typescript
-export const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? '/api' 
-  : 'http://localhost:8081';
+export const API_BASE_URL = '/api';
 
 export const endpoints = {
   health: {
@@ -159,9 +161,25 @@ When adding a new service:
 
 ## Environment Configuration
 
-The API layer supports different environments through environment variables:
+The browser code has no backend address: it always calls `/api` on its own
+origin. Only the Vite dev proxy has a target, `VITE_API_URL` (default
+`http://localhost:8081`; Compose sets `http://backend:8081`). In production
+nginx proxies `/api/` and `/ws`.
 
-- Development: `VITE_API_URL=http://localhost:8081`
-- Production: `VITE_API_URL=/api`
+## Authentication (optional)
 
-Configure these in your `.env` files or deployment environment.
+With `AUTH_ENABLED=false` on the backend (the default) nothing changes: no
+login, no `Authorization` header, no refresh calls. With auth on:
+
+- The access token lives in memory only (`session.ts`), never in
+  localStorage or sessionStorage. The refresh token is an httpOnly cookie
+  the SPA cannot read.
+- The API client adds `Authorization: Bearer <token>`. A 401 refreshes once
+  (concurrent 401s share one refresh) and retries; a refused refresh ends
+  the session and the app shows `/login`.
+- `refreshAccessToken` (`refresh.ts`) holds the Web Lock `auth-refresh`
+  across tabs and adopts a token another tab shared on the `auth-session`
+  BroadcastChannel instead of refreshing again. Refresh requests are never
+  aborted (no timeout, no AbortSignal).
+- Login, refresh and logout send `X-Requested-With: XMLHttpRequest` and a
+  JSON body.

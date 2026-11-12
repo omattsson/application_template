@@ -1,4 +1,11 @@
-export const API_BASE_URL = process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8081';
+/**
+ * Base URL of the API. Always same-origin: the dev server (Vite proxy) and
+ * nginx in production forward `/api/*` to the backend and strip the `/api`
+ * prefix, so `/api` + `/api/v1/items` reaches the backend as `/api/v1/items`.
+ * Same-origin calls are required with auth on: the httpOnly refresh cookie
+ * (SameSite=Strict, Path=/) is only sent to the origin of the page.
+ */
+export const API_BASE_URL = '/api';
 
 export const endpoints = {
   health: {
@@ -14,9 +21,6 @@ export const axiosConfig = {
   },
 };
 
-// WebSocket base URL. In production, derived from the current page origin;
-// in development, points directly at the backend dev server.
-export const WS_BASE_URL =
-  process.env.NODE_ENV === 'production'
-    ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
-    : 'ws://localhost:8081';
+// WebSocket base URL, derived from the page origin. The dev server and nginx
+// proxy `/ws` to the backend.
+export const WS_BASE_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;

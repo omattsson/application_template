@@ -18,21 +18,31 @@ vi.mock('../api/client', () => ({
   itemService: {
     list: vi.fn().mockReturnValue(new Promise(() => {})),
   },
+  // Auth off (the backend default): the app behaves as without auth.
+  uiConfigService: {
+    get: vi.fn().mockResolvedValue({
+      title: 'Application Template',
+      auth_enabled: false,
+      oidc_enabled: false,
+      local_auth_enabled: false,
+    }),
+  },
+  authService: { login: vi.fn(), logout: vi.fn() },
 }));
 
 describe('App', () => {
-  it('renders the layout with navigation', () => {
+  it('renders the layout with navigation', async () => {
     render(<App />);
-    expect(screen.getByText('Full Stack App')).toBeInTheDocument();
+    expect(await screen.findByText('Full Stack App')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /home/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /health/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /items/i })).toBeInTheDocument();
   });
 
-  it('renders the Home page by default', () => {
+  it('renders the Home page by default', async () => {
     render(<App />);
     expect(
-      screen.getByRole('heading', { name: /welcome to the full stack application/i })
+      await screen.findByRole('heading', { name: /welcome to the full stack application/i })
     ).toBeInTheDocument();
   });
 });
