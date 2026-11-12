@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 const (
@@ -165,7 +166,7 @@ type oidcSetup struct {
 
 func openOIDCDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
@@ -1231,6 +1232,55 @@ func TestOIDCCallbackProviderFailures(t *testing.T) {
 			assert.NotEmpty(t, logs, "the failure is logged")
 			for _, secret := range []string{s.idp.ClientSecret, code, authtest.LeakMarker, "alice@example.com"} {
 				assert.NotContains(t, logs, secret, "no secret, code or claim in the logs")
+			}
+		})
+	}
+}
+
+// A token endpoint that refuses the client credentials (401) is a problem of
+// this server's configuration, not a login the user can retry: 502 (the same
+// answer as an unavailable provider), logged at Error level, no secret in the
+// answer or the log. Another 4xx stays "login failed" at Warn level.
+func TestOIDCCallbackRefusedClientCredentials(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		status    int
+		wantCode  int
+		wantBody  string
+		wantLevel string
+	}{
+		{name: "401: the client credentials are refused", status: http.StatusUnauthorized, wantCode: http.StatusBadGateway, wantBody: bodyProviderDown, wantLevel: "ERROR"},
+		{name: "400: the code is refused", status: http.StatusBadRequest, wantCode: http.StatusBadRequest, wantBody: bodyLoginFailed, wantLevel: "WARN"},
+		{name: "403: another 4xx stays a rejected login", status: http.StatusForbidden, wantCode: http.StatusBadRequest, wantBody: bodyLoginFailed, wantLevel: "WARN"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := newOIDCHarness(t)
+			s.idp.Configure(func(k *authtest.Knobs) { k.TokenStatus = tt.status })
+			b := newBrowser()
+			authURL := s.start(t, b)
+			cb, err := url.Parse(s.idp.Authorize(t, authURL, oidcClaims()))
+			require.NoError(t, err)
+			code := cb.Query().Get("code")
+
+			w := s.get(b, cb.RequestURI())
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			assert.JSONEq(t, tt.wantBody, w.Body.String())
+			assertNoSession(t, s, w, 0)
+			var found []logRecord
+			for _, r := range recordsOf(t, s.logs) {
+				if strings.HasPrefix(r.Msg, "OIDC provider refused") || strings.HasPrefix(r.Msg, "OIDC provider failure") || strings.HasPrefix(r.Msg, "OIDC login rejected") {
+					found = append(found, r)
+				}
+			}
+			require.Len(t, found, 1)
+			assert.Equal(t, tt.wantLevel, found[0].Level)
+			for _, secret := range []string{s.idp.ClientSecret, code, authtest.LeakMarker} {
+				assert.NotContains(t, s.logs.String(), secret)
 			}
 		})
 	}

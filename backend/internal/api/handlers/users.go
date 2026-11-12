@@ -169,7 +169,7 @@ func (h *UserHandler) findTarget(ctx context.Context, c *gin.Context, id string)
 func (h *UserHandler) respondError(c *gin.Context, err error, what string) {
 	status, message := mapError(err, "User")
 	if status >= http.StatusInternalServerError {
-		h.log().Error(what, "error", err, "request_id", c.GetString(requestIDKey))
+		h.log().Error(what, "error", err, "request_id", c.GetString(middleware.RequestIDKey))
 	}
 	c.JSON(status, gin.H{"error": message})
 }
@@ -450,8 +450,11 @@ func (h *UserHandler) CreateUser(c *gin.Context) {
 		}
 		return
 	}
-	hash, err := hashPassword(req.Password)
+	hash, err := hashPassword(c.Request.Context(), req.Password)
 	if err != nil {
+		if respondCancelled(c, err) {
+			return
+		}
 		h.log().Error("Failed to hash the password of a new user", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
 		return
@@ -477,7 +480,7 @@ func (h *UserHandler) CreateUser(c *gin.Context) {
 		h.respondError(c, err, "Failed to create a user")
 		return
 	}
-	h.log().Info("User created by an admin", "user_id", user.ID, "role", user.Role, "request_id", c.GetString(requestIDKey))
+	h.log().Info("User created by an admin", "user_id", user.ID, "role", user.Role, "request_id", c.GetString(middleware.RequestIDKey))
 	middleware.SetAuditEntityID(c, user.ID)
 	noStore(c)
 	c.JSON(http.StatusCreated, user)
@@ -568,7 +571,10 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 			return
 		}
 		var err error
-		if hash, err = hashPassword(*req.Password); err != nil {
+		if hash, err = hashPassword(reqCtx, *req.Password); err != nil {
+			if respondCancelled(c, err) {
+				return
+			}
 			h.log().Error("Failed to hash the password of a user", "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
 			return
@@ -716,7 +722,7 @@ func (h *UserHandler) ChangeUserRole(c *gin.Context) {
 
 	middleware.AddAuditDetail(c, "old_role", oldRole)
 	middleware.AddAuditDetail(c, "new_role", req.Role)
-	h.log().Info("User role changed", "user_id", target.ID, "old_role", oldRole, "new_role", req.Role, "changed_by", callerID, "request_id", c.GetString(requestIDKey))
+	h.log().Info("User role changed", "user_id", target.ID, "old_role", oldRole, "new_role", req.Role, "changed_by", callerID, "request_id", c.GetString(middleware.RequestIDKey))
 	// Tokens carry the role claim: end the sessions so the next request needs
 	// a new login with the new role.
 	if err := h.revokeUserAccess(ctx, target.ID, revokeOptions{}); err != nil {
@@ -799,7 +805,7 @@ func (h *UserHandler) SetUserDisabled(c *gin.Context) {
 	} else if !disabled {
 		middleware.SetAuditAction(c, middleware.AuditActionEnable)
 	}
-	h.log().Info("User disabled state set", "user_id", target.ID, "disabled", disabled, "changed", changed, "changed_by", callerID, "request_id", c.GetString(requestIDKey))
+	h.log().Info("User disabled state set", "user_id", target.ID, "disabled", disabled, "changed", changed, "changed_by", callerID, "request_id", c.GetString(middleware.RequestIDKey))
 
 	// A repeated disable still ends the sessions: it makes a retry after a
 	// failed revocation work. Enabling needs no revocation.
@@ -818,7 +824,7 @@ func (h *UserHandler) SetUserDisabled(c *gin.Context) {
 
 // DeleteUser godoc
 // @Summary      Delete a user
-// @Description  Permanently deletes a user. Admin only, with a login session; the caller must still be an enabled admin in the database (403). The last enabled admin cannot be deleted (409); an admin may delete themselves when another enabled admin exists. The user's access ends: access tokens issued before are rejected (user block), refresh tokens are revoked, all their API keys are deleted and the WebSockets are closed. The user block is written before the delete (a failure answers 500 and deletes nothing, so the request can be repeated; a refused delete, 403 or 409, has still blocked the user's tokens issued so far) and again after it (best effort); when a later step fails the answer is 500 and the user is gone.
+// @Description  Permanently deletes a user. Admin only, with a login session; the caller must still be an enabled admin in the database (403). The last enabled admin cannot be deleted (409, answered before anything is blocked when the admin deletes themselves); an admin may delete themselves when another enabled admin exists. The user's access ends: access tokens issued before are rejected (user block), refresh tokens are revoked, all their API keys are deleted and the WebSockets are closed. The user block is written before the delete (a failure answers 500 and deletes nothing, so the request can be repeated; a delete that the transaction guard refuses after a race, 403 or 409, has still blocked the user's tokens issued so far) and again after it (best effort); when a later step fails the answer is 500 and the user is gone.
 // @Tags         users
 // @Produce      json
 // @Security     BearerAuth
@@ -843,11 +849,27 @@ func (h *UserHandler) DeleteUser(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// An enabled admin who deletes themselves while no other enabled admin
+	// exists is refused (409) before anything is blocked: a refused delete
+	// must not sign the caller out. This read is only a pre-check; the guard
+	// in the delete transaction stays the authority (a change that races
+	// this check is still refused there).
+	if target.ID == callerID && target.Role == models.RoleAdmin && !target.Disabled {
+		n, err := h.users.CountEnabledAdmins(ctx)
+		if err != nil {
+			h.respondError(c, err, "Failed to count the enabled admins before a delete")
+			return
+		}
+		if n <= 1 {
+			c.JSON(http.StatusConflict, gin.H{"error": msgLastAdmin})
+			return
+		}
+	}
 	// Block first: once the row is gone no request can find the user again to
 	// block them, so a block that fails after the delete could not be
 	// repeated. When this block fails nothing is deleted and the request can
-	// be retried. (A refused delete, 403 or 409, has blocked the user's
-	// tokens issued so far: they must sign in again.)
+	// be retried. (A delete that the guard refuses after a race, 403 or 409,
+	// has blocked the user's tokens issued so far: they must sign in again.)
 	if err := h.blockUserStep(ctx, target.ID); err != nil {
 		h.log().Error("Failed to block the user before a delete", "user_id", target.ID, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
@@ -858,7 +880,7 @@ func (h *UserHandler) DeleteUser(c *gin.Context) {
 		return
 	}
 	middleware.SetAuditEntityID(c, target.ID)
-	h.log().Info("User deleted", "user_id", target.ID, "deleted_by", callerID, "request_id", c.GetString(requestIDKey))
+	h.log().Info("User deleted", "user_id", target.ID, "deleted_by", callerID, "request_id", c.GetString(middleware.RequestIDKey))
 
 	// The block after the delete covers the tokens issued since the first
 	// one; the first one already ended every older token, so it is best

@@ -57,9 +57,6 @@ const (
 	msgPasswordTooLong      = "Password must be at most 72 bytes"
 	msgInvalidEmail         = "Invalid email address"
 	msgDisplayNameTooLong   = "Display name must be at most 255 characters"
-	// msgSessionRequired is the 403 of an endpoint that only a login session
-	// may use (the text of middleware.RequireSessionAuth).
-	msgSessionRequired = "This action requires a login session"
 	// msgJSONContentTypeRequired is the 415 of a session login without a JSON
 	// Content-Type.
 	msgJSONContentTypeRequired = "Content-Type must be application/json"
@@ -68,9 +65,6 @@ const (
 // usernamePattern is the format of a self-registered username. The length is
 // checked separately (minUsernameLen, models.MaxUsernameLen).
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]*$`)
-
-// requestIDKey is the gin context key that middleware.RequestID sets.
-const requestIDKey = "request_id"
 
 // bcryptSem limits concurrent bcrypt operations to the number of CPU cores.
 // bcrypt is intentionally CPU-expensive; without a limit, many concurrent
@@ -138,18 +132,41 @@ func (h *AuthHandler) SetWebSocketRevoker(r websocket.ClientRevoker) {
 	h.wsRevoker = r
 }
 
+// acquireBcrypt takes a slot of bcryptSem. It gives up when ctx ends while it
+// waits (a client that left must not queue for CPU it will not use) and then
+// returns ctx.Err(). Call the returned release function once.
+func acquireBcrypt(ctx context.Context) (release func(), err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case bcryptSem <- struct{}{}:
+		return func() { <-bcryptSem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // comparePassword runs one bcrypt compare. bcryptSem limits the concurrent
-// compares.
-func (h *AuthHandler) comparePassword(hash []byte, password string) error {
-	bcryptSem <- struct{}{}
-	defer func() { <-bcryptSem }()
+// compares; the wait for a slot ends with ctx (the error is ctx.Err()). The
+// compare itself, once started, runs to its end.
+func (h *AuthHandler) comparePassword(ctx context.Context, hash []byte, password string) error {
+	release, err := acquireBcrypt(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return h.compareHash(hash, []byte(password))
 }
 
-// hashPassword returns the bcrypt hash of password at passwordHashCost.
-func hashPassword(password string) (string, error) {
-	bcryptSem <- struct{}{}
-	defer func() { <-bcryptSem }()
+// hashPassword returns the bcrypt hash of password at passwordHashCost. The
+// wait for a slot of bcryptSem ends with ctx (the error is ctx.Err()).
+func hashPassword(ctx context.Context, password string) (string, error) {
+	release, err := acquireBcrypt(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	if err != nil {
 		return "", err
@@ -192,7 +209,7 @@ type RegisterRequest struct {
 
 // Login godoc
 // @Summary     User login
-// @Description Authenticate with username and password; returns a JWT access token and the user. With refresh sessions on, the login starts a session: the access token lives ACCESS_TOKEN_EXPIRATION and carries the session ID (sid), and the response sets the httpOnly refresh_token cookie (named __Host-refresh_token unless SECURE_COOKIES=false; Path /, SameSite=Strict, Secure unless SECURE_COOKIES=false) for POST /api/v1/auth/refresh; without them the token lives JWT_EXPIRATION. With refresh sessions on, the request needs the X-Requested-With header (any value) and must not be cross-site (403), and its Content-Type must be application/json (415); both are checked first (login CSRF protection). Every credential failure (unknown user, wrong password, disabled account, SSO-only account) answers the same 401 "Invalid username or password". After 5 failed attempts for one username within 15 minutes, every login for that username answers 429 with Retry-After for 15 minutes.
+// @Description Authenticate with username and password; returns a JWT access token and the user. With refresh sessions on, the login starts a session: the access token lives ACCESS_TOKEN_EXPIRATION and carries the session ID (sid), and the response sets the httpOnly refresh_token cookie (named __Host-refresh_token unless SECURE_COOKIES=false; Path /, SameSite=Strict, Secure unless SECURE_COOKIES=false) for POST /api/v1/auth/refresh; without them the token lives JWT_EXPIRATION. With refresh sessions on, the request needs the X-Requested-With header (any value) and must not be cross-site (403), and its Content-Type must be application/json (415); both are checked first (login CSRF protection). Every credential failure (unknown user, wrong password, disabled account, SSO-only account) answers the same 401 "Invalid username or password". After 5 failed attempts for one username within 15 minutes, every login for that username answers 429 with Retry-After for 15 minutes. While attempts for the same username are in flight and use up its slots, a further attempt answers 429 with Retry-After 1. Only the submitted username answers 429: when the found account itself is locked or busy (the same account under another spelling of the name), the answer is the generic 401, so no answer shows whether a name is an account.
 // @Tags        auth
 // @Accept      json
 // @Produce     json
@@ -235,7 +252,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		h.log().Warn("Login throttled",
 			"username", truncateForLog(req.Username, maxLoggedUsernameLen),
 			"client_ip", c.ClientIP(),
-			"request_id", c.GetString(requestIDKey))
+			"request_id", c.GetString(middleware.RequestIDKey))
 		c.Header("Retry-After", retryAfterSeconds(retryAfter))
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": msgTooManyLoginAttempts})
 		return
@@ -247,7 +264,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	fail := func(f loginFailure) {
 		f.username = req.Username
 		f.clientIP = c.ClientIP()
-		f.requestID = c.GetString(requestIDKey)
+		f.requestID = c.GetString(middleware.RequestIDKey)
 		h.logLoginFailure(f)
 		if f.httpCode == http.StatusUnauthorized {
 			attempt.outcome = outcomeFailure
@@ -258,9 +275,10 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	// failDummy spends one compare on the dummy hash (the time of a real
 	// compare), then fails with a credential failure. The password is cut to
-	// maxPasswordBytes so an over-long one costs the same.
+	// maxPasswordBytes so an over-long one costs the same. A request that ended
+	// while it waited for a slot skips the compare (nobody reads the answer).
 	failDummy := func(reason, userID string) {
-		_ = h.comparePassword(dummyPasswordHash(), truncateAtRune(req.Password, maxPasswordBytes))
+		_ = h.comparePassword(c.Request.Context(), dummyPasswordHash(), truncateAtRune(req.Password, maxPasswordBytes))
 		fail(loginFailure{reason: reason, userID: userID, httpCode: http.StatusUnauthorized})
 	}
 
@@ -301,7 +319,15 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		failDummy(reason, user.ID)
 		return
 	}
-	if err := h.comparePassword([]byte(user.PasswordHash), req.Password); err != nil {
+	if err := h.comparePassword(ctx, []byte(user.PasswordHash), req.Password); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// The wait for a bcrypt slot ended with the request: 499 for a
+			// client that left, 500 for a deadline. Not a credential failure.
+			if !respondCancelled(c, err) {
+				fail(loginFailure{reason: loginReasonCompareError, userID: user.ID, httpCode: http.StatusInternalServerError, err: err})
+			}
+			return
+		}
 		reason := loginReasonPasswordMismatch
 		if !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
 			reason = loginReasonHashInvalid
@@ -384,7 +410,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		"user_id", fresh.ID,
 		"username", truncateForLog(fresh.Username, maxLoggedUsernameLen),
 		"client_ip", c.ClientIP(),
-		"request_id", c.GetString(requestIDKey))
+		"request_id", c.GetString(middleware.RequestIDKey))
 	noStore(c)
 	c.JSON(http.StatusOK, LoginResponse{Token: token, User: *fresh})
 }
@@ -528,6 +554,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		respondBindError(c, err)
 		return
 	}
+	req.Email = strings.TrimSpace(req.Email)
 	if msg := validateRegistration(&req); msg != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 		return
@@ -541,8 +568,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	hash, err := hashPassword(req.Password)
+	hash, err := hashPassword(c.Request.Context(), req.Password)
 	if err != nil {
+		if respondCancelled(c, err) {
+			return
+		}
 		h.log().Error("Failed to hash the password of a registration", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
 		return
@@ -575,6 +605,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	h.log().Info("User registered", "user_id", user.ID, "username", truncateForLog(user.Username, maxLoggedUsernameLen))
+	noStore(c)
 	c.JSON(http.StatusCreated, user)
 }
 
@@ -627,7 +658,7 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 // contains the password.
 func (h *AuthHandler) EnsureAdminUser(ctx context.Context) error {
 	if h.cfg.AdminPassword == "" {
-		h.log().Debug("ADMIN_PASSWORD is not set; no admin user is created")
+		h.log().Info("ADMIN_PASSWORD is not set; no admin user is created")
 		return nil
 	}
 	username := h.cfg.AdminUsername
@@ -652,7 +683,7 @@ func (h *AuthHandler) EnsureAdminUser(ctx context.Context) error {
 		return fmt.Errorf("look up the admin user: %w", err)
 	}
 
-	hash, err := hashPassword(h.cfg.AdminPassword)
+	hash, err := hashPassword(ctx, h.cfg.AdminPassword)
 	if err != nil {
 		// bcrypt errors do not contain the password.
 		return fmt.Errorf("hash the admin password: %w", err)
@@ -677,8 +708,13 @@ func (h *AuthHandler) EnsureAdminUser(ctx context.Context) error {
 }
 
 // checkExistingAdmin logs a warning when the user named ADMIN_USERNAME is not
-// an enabled local admin. It changes nothing.
+// an enabled local admin, or has no local password that ADMIN_PASSWORD could
+// match. It changes nothing.
 func (h *AuthHandler) checkExistingAdmin(u *models.User) {
+	if authProviderOf(u) != models.AuthProviderLocal || u.PasswordHash == "" {
+		h.log().Warn("ADMIN_USERNAME belongs to a user that is not a local account with a password; ADMIN_PASSWORD cannot sign in to it",
+			"username", u.Username, "user_id", u.ID, "auth_provider", authProviderOf(u))
+	}
 	switch {
 	case u.Role != models.RoleAdmin:
 		h.log().Warn("ADMIN_USERNAME belongs to a user that is not an admin; it is left unchanged",

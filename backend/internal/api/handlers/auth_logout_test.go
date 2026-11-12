@@ -235,6 +235,22 @@ func TestWaitPastMillisecond(t *testing.T) {
 	waitPastMillisecond(time.Now().Add(-time.Hour)) // a past time returns at once
 }
 
+// A wall-clock step (NTP, a VM resume) must not make the wait long: the sleep
+// is at most one millisecond, whatever `at` is.
+func TestWaitPastMillisecondNeverSleepsLong(t *testing.T) {
+	t.Parallel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		waitPastMillisecond(time.Now().Add(time.Hour)) // the clock stepped back by an hour
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitPastMillisecond slept for a time in the future")
+	}
+}
+
 func TestLogoutAllFailures(t *testing.T) {
 	t.Parallel()
 	t.Run("no user in the context", func(t *testing.T) {

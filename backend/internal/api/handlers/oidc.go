@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"backend/internal/api/middleware"
 	"backend/internal/auth"
 	"backend/internal/config"
 	"backend/internal/models"
@@ -219,7 +220,7 @@ func (h *OIDCHandler) Login(c *gin.Context) {
 
 // Callback godoc
 // @Summary     OIDC callback
-// @Description The identity provider sends the browser here with a code and the state. The state works once and only from the browser that started the login (the oidc_binding cookie); the code is exchanged with the PKCE verifier; the ID token is validated (signature, issuer, audience, expiry, nonce). The account is found by issuer and sub, or created with auth_provider oidc and the role user (admin when a role of the OIDC_ADMIN_ROLES claim matches exactly); an existing OIDC account gets its role from the claim at every login. An existing local account is never linked or taken over. On success the answer sets the httpOnly refresh_token cookie (named __Host-refresh_token unless SECURE_COOKIES=false) and redirects (302) to the fixed web UI path OIDC_FRONTEND_PATH, without any token in the URL; the web UI then calls POST /api/v1/auth/refresh for its access token. Every refusal caused by the request or the provider answers 400 {"error":"Login failed"}.
+// @Description The identity provider sends the browser here with a code and the state. The state works once and only from the browser that started the login (the oidc_binding cookie); the code is exchanged with the PKCE verifier; the ID token is validated (signature, issuer, audience, expiry, nonce). The account is found by issuer and sub, or created with auth_provider oidc and the role user (admin when a role of the OIDC_ADMIN_ROLES claim matches exactly); an existing OIDC account gets its role from the claim at every login. An existing local account is never linked or taken over. On success the answer sets the httpOnly refresh_token cookie (named __Host-refresh_token unless SECURE_COOKIES=false) and redirects (302) to the fixed web UI path OIDC_FRONTEND_PATH, without any token in the URL; the web UI then calls POST /api/v1/auth/refresh for its access token. Every refusal caused by the request or the provider answers 400 {"error":"Login failed"}. A provider that does not answer, answers with a server error, or refuses this server's client credentials (a configuration problem, logged at Error level) answers 502.
 // @Tags        auth
 // @Produce     json
 // @Param       code              query string false "Authorization code from the identity provider"
@@ -260,7 +261,7 @@ func (h *OIDCHandler) Callback(c *gin.Context) {
 // stored login data and the code on success.
 func (h *OIDCHandler) acceptCallback(c *gin.Context) (*sessionstore.OIDCStateData, string, bool) {
 	log := h.auth.log()
-	meta := []any{"client_ip", c.ClientIP(), "request_id", c.GetString(requestIDKey)}
+	meta := []any{"client_ip", c.ClientIP(), "request_id", c.GetString(middleware.RequestIDKey)}
 
 	state := c.Query("state")
 	if !wellFormedOIDCState(state) {
@@ -321,7 +322,7 @@ func (h *OIDCHandler) completeLogin(c *gin.Context, ident *auth.Identity) {
 	// Close the disable race: re-read the user before a session is stored.
 	if err := recheckUserActive(ctx, h.users, user.ID); err != nil {
 		if errors.Is(err, errAccountDisabled) || errors.Is(err, errUserGone) {
-			h.auth.log().Warn("OIDC login refused: account changed during the login", "user_id", user.ID, "request_id", c.GetString(requestIDKey))
+			h.auth.log().Warn("OIDC login refused: account changed during the login", "user_id", user.ID, "request_id", c.GetString(middleware.RequestIDKey))
 			c.JSON(http.StatusForbidden, gin.H{"error": msgOIDCNotPermitted})
 			return
 		}
@@ -331,7 +332,7 @@ func (h *OIDCHandler) completeLogin(c *gin.Context, ident *auth.Identity) {
 
 	fail := func(f loginFailure) {
 		if f.httpCode == http.StatusUnauthorized {
-			h.auth.log().Warn("OIDC login refused: the session was revoked during the login", "user_id", user.ID, "reason", f.reason, "request_id", c.GetString(requestIDKey))
+			h.auth.log().Warn("OIDC login refused: the session was revoked during the login", "user_id", user.ID, "reason", f.reason, "request_id", c.GetString(middleware.RequestIDKey))
 			c.JSON(http.StatusForbidden, gin.H{"error": msgOIDCNotPermitted})
 			return
 		}
@@ -344,7 +345,7 @@ func (h *OIDCHandler) completeLogin(c *gin.Context, ident *auth.Identity) {
 	h.auth.log().Info("OIDC login succeeded",
 		"user_id", user.ID,
 		"client_ip", c.ClientIP(),
-		"request_id", c.GetString(requestIDKey))
+		"request_id", c.GetString(middleware.RequestIDKey))
 	redirect(c, h.cfg.FrontendPath)
 }
 
@@ -402,11 +403,18 @@ func (h *OIDCHandler) failProvider(c *gin.Context, stage string, err error) {
 		return
 	}
 	if errors.Is(err, auth.ErrLoginRejected) {
-		h.auth.log().Warn("OIDC login rejected", "stage", stage, "reason", err.Error(), "client_ip", c.ClientIP(), "request_id", c.GetString(requestIDKey))
+		h.auth.log().Warn("OIDC login rejected", "stage", stage, "reason", err.Error(), "client_ip", c.ClientIP(), "request_id", c.GetString(middleware.RequestIDKey))
 		refuse(c)
 		return
 	}
-	h.auth.log().Warn("OIDC provider failure", "stage", stage, "reason", err.Error(), "request_id", c.GetString(requestIDKey))
+	var perr *auth.Error
+	if errors.As(err, &perr) && perr.Misconfigured {
+		// Every login fails until an operator fixes the client credentials
+		// (OIDC_CLIENT_ID, OIDC_CLIENT_SECRET): not a Warn.
+		h.auth.log().Error("OIDC provider refused the client credentials; check OIDC_CLIENT_ID and OIDC_CLIENT_SECRET", "stage", stage, "reason", err.Error(), "request_id", c.GetString(middleware.RequestIDKey))
+	} else {
+		h.auth.log().Warn("OIDC provider failure", "stage", stage, "reason", err.Error(), "request_id", c.GetString(middleware.RequestIDKey))
+	}
 	c.JSON(http.StatusBadGateway, gin.H{"error": msgOIDCProviderUnavailable})
 }
 
@@ -414,10 +422,10 @@ func (h *OIDCHandler) failProvider(c *gin.Context, stage string, err error) {
 func (h *OIDCHandler) failProvisioning(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, errAccountDisabled):
-		h.auth.log().Warn("OIDC login refused: account disabled", "client_ip", c.ClientIP(), "request_id", c.GetString(requestIDKey))
+		h.auth.log().Warn("OIDC login refused: account disabled", "client_ip", c.ClientIP(), "request_id", c.GetString(middleware.RequestIDKey))
 		c.JSON(http.StatusForbidden, gin.H{"error": msgOIDCNotPermitted})
 	case errors.Is(err, errNoUsername):
-		h.auth.log().Warn("OIDC login refused: no free username for the new account", "client_ip", c.ClientIP(), "request_id", c.GetString(requestIDKey))
+		h.auth.log().Warn("OIDC login refused: no free username for the new account", "client_ip", c.ClientIP(), "request_id", c.GetString(middleware.RequestIDKey))
 		c.JSON(http.StatusForbidden, gin.H{"error": msgOIDCNotPermitted})
 	default:
 		h.serverError(c, "OIDC user provisioning failed", err)
@@ -426,7 +434,7 @@ func (h *OIDCHandler) failProvisioning(c *gin.Context, err error) {
 
 // serverError logs err and answers the generic 500.
 func (h *OIDCHandler) serverError(c *gin.Context, msg string, err error, attrs ...any) {
-	attrs = append(attrs, "error", err, "request_id", c.GetString(requestIDKey))
+	attrs = append(attrs, "error", err, "request_id", c.GetString(middleware.RequestIDKey))
 	h.auth.log().Error(msg, attrs...)
 	c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
 }

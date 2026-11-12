@@ -92,7 +92,7 @@ func TestRequestIDMiddleware(t *testing.T) {
 		r.Use(RequestID())
 		var capturedID string
 		r.GET("/test", func(c *gin.Context) {
-			if v, ok := c.Get("request_id"); ok {
+			if v, ok := c.Get(RequestIDKey); ok {
 				capturedID = v.(string)
 			}
 			c.Status(http.StatusOK)
@@ -114,7 +114,7 @@ func TestRequestIDMiddleware(t *testing.T) {
 		r.Use(RequestID())
 		var capturedID string
 		r.GET("/test", func(c *gin.Context) {
-			if v, ok := c.Get("request_id"); ok {
+			if v, ok := c.Get(RequestIDKey); ok {
 				capturedID = v.(string)
 			}
 			c.Status(http.StatusOK)
@@ -181,7 +181,7 @@ func TestRequestIDValidatesClientValue(t *testing.T) {
 			r.Use(RequestID())
 			var capturedID string
 			r.GET("/test", func(c *gin.Context) {
-				capturedID = c.GetString("request_id")
+				capturedID = c.GetString(RequestIDKey)
 				c.Status(http.StatusOK)
 			})
 

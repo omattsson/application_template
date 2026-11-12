@@ -16,6 +16,15 @@ import (
 // CORS middleware with configurable allowed origins.
 // Pass "*" or "" to allow all origins (development only).
 // For production, pass a comma-separated list of allowed origins.
+//
+// Security invariant (do not change without reading this): the CSRF check of
+// the cookie endpoints (requireSameSiteRequest in the handlers package) relies
+// on the X-Requested-With header that a cross-origin page cannot send without a
+// successful CORS preflight. So the Access-Control-Allow-Headers list below
+// must never contain X-Requested-With, and this middleware must never send
+// Access-Control-Allow-Credentials (without it a browser does not send or
+// accept cookies on a cross-origin fetch at all). TestCORSNeverEnablesCookieCSRFHeader
+// fails when either one changes.
 func CORS(allowedOrigins string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if allowedOrigins == "" || allowedOrigins == "*" {
@@ -88,6 +97,10 @@ func Recovery() gin.HandlerFunc {
 // reused.
 const maxRequestIDLength = 64
 
+// RequestIDKey is the gin context key under which RequestID stores the request
+// ID. The audit middleware and the handlers read it.
+const RequestIDKey = "request_id"
+
 // RequestID adds a unique request ID to each request. A client-supplied
 // X-Request-ID is reused when it is a valid ID (see validRequestID);
 // otherwise, and when there is none, a new one is generated. The ID goes into
@@ -98,7 +111,7 @@ func RequestID() gin.HandlerFunc {
 		if !validRequestID(requestID) {
 			requestID = generateRequestID()
 		}
-		c.Set("request_id", requestID)
+		c.Set(RequestIDKey, requestID)
 		c.Writer.Header().Set("X-Request-ID", requestID)
 		c.Next()
 	}

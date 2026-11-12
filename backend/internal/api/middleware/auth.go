@@ -16,19 +16,21 @@ import (
 	"github.com/google/uuid"
 )
 
+// The gin context keys of the identity that the auth middleware sets. Every
+// value has the "auth." prefix, so a key of another middleware or handler
+// (a plain "role" or "userID") can never collide with, or forge, an identity.
 const (
-	contextKeyUserID   = "userID"
-	contextKeyUsername = "username"
-	contextKeyRole     = "role"
-	contextKeyJTI      = "jti"
-	contextKeyExpiry   = "tokenExpiry"
-	contextKeySID      = "sessionID"
+	contextKeyUserID   = "auth.userID"
+	contextKeyUsername = "auth.username"
+	contextKeyRole     = "auth.role"
+	contextKeyJTI      = "auth.jti"
+	contextKeyExpiry   = "auth.tokenExpiry"
+	contextKeySID      = "auth.sessionID"
 	// contextKeyIssuedAt holds the issue time of the access token
 	// (Claims.IssueTime, millisecond precision when the iat_ms claim is set).
-	contextKeyIssuedAt = "tokenIssuedAt"
-	// contextKeyAuthMethod holds AuthMethodJWT (or AuthMethodAPIKey once API
-	// keys are accepted).
-	contextKeyAuthMethod = "authMethod"
+	contextKeyIssuedAt = "auth.tokenIssuedAt"
+	// contextKeyAuthMethod holds AuthMethodJWT or AuthMethodAPIKey.
+	contextKeyAuthMethod = "auth.method"
 )
 
 // Values of GetAuthMethodFromContext.
@@ -275,9 +277,10 @@ var (
 //
 // The caller must decide what a non-nil lookupErr means and must not ignore
 // it: AuthRequiredWithOptions fails open or closed by
-// JWTAuthOptions.FailClosedOnStoreError. The WebSocket upgrade, which does not
-// exist yet, must apply the same policy (production wiring fails closed: a
-// non-nil lookupErr with no revocation must refuse the connection).
+// JWTAuthOptions.FailClosedOnStoreError, and the WebSocket upgrade
+// (WebSocketQueryToken with the same auth middleware) applies the same policy
+// (production wiring fails closed: a non-nil lookupErr with no revocation
+// refuses the connection).
 func RevocationStatus(ctx context.Context, store sessionstore.SessionStore, claims *Claims) (revoked error, lookupErr error) {
 	if store == nil || claims == nil {
 		return nil, nil
@@ -431,9 +434,9 @@ func GetTokenIssuedAtFromContext(c *gin.Context) (time.Time, bool) {
 	return timeFromContext(c, contextKeyIssuedAt)
 }
 
-// GetAuthMethodFromContext returns AuthMethodJWT ("jwt") (or AuthMethodAPIKey
-// ("api_key") once API keys are accepted), or "" when the request is not
-// authenticated.
+// GetAuthMethodFromContext returns AuthMethodJWT ("jwt") for a login session
+// token or AuthMethodAPIKey ("api_key") for an API key, or "" when the request
+// is not authenticated.
 func GetAuthMethodFromContext(c *gin.Context) string {
 	return stringFromContext(c, contextKeyAuthMethod)
 }

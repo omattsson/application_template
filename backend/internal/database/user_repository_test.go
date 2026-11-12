@@ -626,3 +626,34 @@ func TestUserRepositoryCancelledContext(t *testing.T) {
 	err = repo.Create(ctx, &models.User{Username: "alice", Role: models.RoleUser})
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+func TestGORMUserRepositoryCountEnabledAdmins(t *testing.T) {
+	t.Parallel()
+	repo := setupUserRepo(t)
+	ctx := context.Background()
+	n, err := repo.CountEnabledAdmins(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+
+	users := []models.User{
+		{ID: "a1", Username: "a1", Role: models.RoleAdmin},
+		{ID: "a2", Username: "a2", Role: models.RoleAdmin},
+		{ID: "a3", Username: "a3", Role: models.RoleAdmin},
+		{ID: "d1", Username: "d1", Role: models.RoleDevOps},
+		{ID: "u1", Username: "u1", Role: models.RoleUser},
+	}
+	for i := range users {
+		users[i].PasswordHash = "hash"
+		require.NoError(t, repo.Create(ctx, &users[i]))
+	}
+	require.NoError(t, repo.DB.Model(&models.User{}).Where("id = ?", "a3").Update("disabled", true).Error)
+
+	n, err = repo.CountEnabledAdmins(ctx)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, n, "disabled admins and other roles do not count")
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = repo.CountEnabledAdmins(cancelled)
+	assert.Error(t, err)
+}

@@ -79,8 +79,15 @@ const defaultMaxUnverifiedRuns = 3
 // a socket revoked at time t closes at the end of the M-th run that starts
 // after t, so within M*P + T of t, with T = websocket.RevalidateTimeout and
 // P = max(revalidation interval, T) the most time between two run starts;
-// with the defaults (1m interval, 30s, M = 3): 3m30s. A store that fails or
-// hangs closes the sockets that need it in the first run: within P + T.
+// with the defaults (1m interval, 30s, M = 3): 3m30s.
+//
+// A store that fails closes the sockets that need it in the first run that
+// starts after the failure: within P + T. A store that hangs does the same
+// (the lookup times out after defaultLookupTimeout, which is a failed lookup),
+// with one exception: when the hang begins within the last
+// defaultLookupTimeout of a run, the run ends before the lookup times out.
+// That is the run running out of time, not a failed lookup, so nothing closes
+// in it and the next run closes the sockets: within 2P + T.
 //
 // The re-check of a new socket neither uses nor changes this state. Errors
 // are logged at most once a minute (the rest at debug level); a cancelled

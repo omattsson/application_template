@@ -133,7 +133,9 @@ func (h *AuthHandler) blockSessions(ctx context.Context, userID string, sessions
 func waitPastMillisecond(at time.Time) {
 	next := time.UnixMilli(at.UnixMilli() + 1)
 	if d := time.Until(next); d > 0 {
-		time.Sleep(d)
+		// At most one millisecond: a wall-clock step (NTP, a VM resume) that
+		// puts `at` far in the future must not make a request sleep long.
+		time.Sleep(min(d, time.Millisecond))
 	}
 }
 
@@ -248,7 +250,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
 		return
 	}
-	h.log().Info("Logout", "user_id", userID, "sessions", len(sessions), "request_id", c.GetString(requestIDKey))
+	h.log().Info("Logout", "user_id", userID, "sessions", len(sessions), "request_id", c.GetString(middleware.RequestIDKey))
 	c.JSON(http.StatusOK, gin.H{"message": "Logged out"})
 }
 
@@ -307,7 +309,7 @@ func (h *AuthHandler) LogoutAll(c *gin.Context) {
 	// must not log its owner out everywhere. The route also has
 	// RequireSessionAuth; this check does not rely on the wiring.
 	if middleware.GetAuthMethodFromContext(c) != middleware.AuthMethodJWT {
-		c.JSON(http.StatusForbidden, gin.H{"error": msgSessionRequired})
+		c.JSON(http.StatusForbidden, gin.H{"error": middleware.MsgSessionRequired})
 		return
 	}
 	// Detached: a client that leaves is still logged out everywhere.
@@ -346,7 +348,7 @@ func (h *AuthHandler) LogoutAll(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
 		return
 	}
-	h.log().Info("Logout from all sessions", "user_id", userID, "sessions", len(sessions), "request_id", c.GetString(requestIDKey))
+	h.log().Info("Logout from all sessions", "user_id", userID, "sessions", len(sessions), "request_id", c.GetString(middleware.RequestIDKey))
 	c.JSON(http.StatusOK, gin.H{"message": "Logged out from all sessions"})
 }
 

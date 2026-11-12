@@ -105,7 +105,7 @@ func continuedSession(rt *models.RefreshToken) refreshSession {
 
 // Refresh godoc
 // @Summary     Refresh access token
-// @Description Issues a new access token for the session of the refresh token cookie and rotates the refresh token (the old one is consumed, a new cookie is set). The request needs the X-Requested-With header (any value) and must not be cross-site; otherwise 403. A session ends SESSION_MAX_LIFETIME after login and SESSION_IDLE_TIMEOUT after its last login or refresh; rotation never extends it, and the access token never outlives it. A token rotated less than REFRESH_REUSE_GRACE ago (two tabs refreshing at once) gets one more access token, once, without a new cookie. Any other reuse of a consumed token revokes the session and blocks its access tokens. Every refusal answers the same 401 and deletes the cookie.
+// @Description Issues a new access token for the session of the refresh token cookie and rotates the refresh token (the old one is consumed, a new cookie is set). The request needs the X-Requested-With header (any value) and must not be cross-site; otherwise 403. A session ends SESSION_MAX_LIFETIME after login and SESSION_IDLE_TIMEOUT after its last login or refresh; rotation never extends it, and the access token never outlives it. A token rotated less than REFRESH_REUSE_GRACE ago (two tabs refreshing at once) gets one more access token, once, without a new cookie. Any other reuse of a consumed token revokes the session and blocks its access tokens. A session that started before a user block (logout-all, a role change, disabling or deleting the user) is refused and revoked even when its refresh token was still active. The refresh cookie is named __Host-refresh_token unless SECURE_COOKIES=false (then refresh_token) and has Path /. Every refusal answers the same 401 and deletes the cookie.
 // @Tags        auth
 // @Produce     json
 // @Param       X-Requested-With header   string true "Any value (CSRF protection), for example XMLHttpRequest"
@@ -243,7 +243,7 @@ func (h *AuthHandler) refreshConsumedToken(c *gin.Context, stored *models.Refres
 	blockErr := h.blockSessions(wctx, stored.UserID, []sessionToBlock{{id: family, revokeFailed: revokeErr != nil}})
 	h.log().Warn("Refresh token reuse detected; session revoked",
 		"user_id", stored.UserID, "session_id", family,
-		"client_ip", c.ClientIP(), "request_id", c.GetString(requestIDKey))
+		"client_ip", c.ClientIP(), "request_id", c.GetString(middleware.RequestIDKey))
 	if revokeErr != nil || blockErr != nil {
 		// The session may stay usable on the server: an operator must see it.
 		h.log().Error("Failed to end a replayed session", "user_id", stored.UserID, "session_id", family,
@@ -278,21 +278,10 @@ func (h *AuthHandler) tryGraceRefresh(c *gin.Context, stored *models.RefreshToke
 		h.respondServerError(c, "Failed to check a refresh session", err, "user_id", stored.UserID)
 		return true
 	}
-	if h.sessionStore != nil {
-		blocked, err := h.sessionStore.IsSessionBlocked(reqCtx, family)
-		if err != nil {
-			h.respondServerError(c, "Failed to check the session block on refresh", err, "user_id", stored.UserID)
-			return true
-		}
-		if blocked {
-			return false
-		}
-		if blocked, err := h.userBlocked(reqCtx, stored); err != nil {
-			h.respondServerError(c, "Failed to check the user block on refresh", err, "user_id", stored.UserID)
-			return true
-		} else if blocked {
-			return false
-		}
+	if blocked, answered := h.graceBlockedByStore(c, stored, family); answered {
+		return true
+	} else if blocked {
+		return false
 	}
 
 	wctx, cancel := detachedCtx(c)
@@ -315,6 +304,31 @@ func (h *AuthHandler) tryGraceRefresh(c *gin.Context, stored *models.RefreshToke
 	}
 	c.JSON(http.StatusOK, RefreshResponse{Token: access})
 	return true
+}
+
+// graceBlockedByStore checks the session block and the user block before a
+// grace answer. blocked means the grace must not be given (the caller treats
+// the token as a replay); answered means a store error was answered (fail
+// closed: 499 or 500) and the caller returns.
+func (h *AuthHandler) graceBlockedByStore(c *gin.Context, stored *models.RefreshToken, family string) (blocked, answered bool) {
+	if h.sessionStore == nil {
+		return false, false
+	}
+	ctx := c.Request.Context()
+	sessionBlocked, err := h.sessionStore.IsSessionBlocked(ctx, family)
+	if err != nil {
+		h.respondServerError(c, "Failed to check the session block on refresh", err, "user_id", stored.UserID)
+		return false, true
+	}
+	if sessionBlocked {
+		return true, false
+	}
+	userBlocked, err := h.userBlocked(ctx, stored)
+	if err != nil {
+		h.respondServerError(c, "Failed to check the user block on refresh", err, "user_id", stored.UserID)
+		return false, true
+	}
+	return userBlocked, false
 }
 
 // withinReuseGrace reports whether a consumed token may still get an access
@@ -469,7 +483,7 @@ func (h *AuthHandler) findRefreshToken(ctx context.Context, c *gin.Context, toke
 // 401.
 func (h *AuthHandler) refuseRefresh(c *gin.Context, reason, userID string) {
 	h.log().Info("Refresh refused", "reason", reason, "user_id", userID,
-		"client_ip", c.ClientIP(), "request_id", c.GetString(requestIDKey))
+		"client_ip", c.ClientIP(), "request_id", c.GetString(middleware.RequestIDKey))
 	h.clearRefreshCookie(c)
 	c.JSON(http.StatusUnauthorized, gin.H{"error": msgInvalidSession})
 }
@@ -481,7 +495,7 @@ func (h *AuthHandler) respondServerError(c *gin.Context, msg string, err error, 
 	if respondCancelled(c, err) {
 		return
 	}
-	h.log().Error(msg, append(attrs, "error", err, "request_id", c.GetString(requestIDKey))...)
+	h.log().Error(msg, append(attrs, "error", err, "request_id", c.GetString(middleware.RequestIDKey))...)
 	c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
 }
 

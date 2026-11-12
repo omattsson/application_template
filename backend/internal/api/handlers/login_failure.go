@@ -38,6 +38,7 @@ const (
 
 	// Server-side failures (500).
 	loginReasonLookupError  = "lookup_error"  // the user lookup failed
+	loginReasonCompareError = "compare_error" // the request ended (deadline) while it waited for a bcrypt slot
 	loginReasonRereadError  = "reread_error"  // the re-read after the password check failed
 	loginReasonTokenError   = "token_error"   // the access token could not be signed
 	loginReasonRecheckError = "recheck_error" // the re-read after signing failed
@@ -112,14 +113,19 @@ func truncateAtRune(s string, n int) string {
 
 // Settings of the per-username login throttle. After loginFailureThreshold
 // credential failures for one key within loginFailureWindow, every login for
-// that key gets 429 for loginFailureWindow (also with the correct password).
+// that key is refused for loginFailureWindow (also with the correct password).
 // It complements the per-IP LOGIN_RATE_LIMIT: that one limits one client,
 // this one limits guesses at one account from many clients.
 //
 // An attempt reserves its slot before the password check, so a parallel
-// burst cannot get more than loginFailureThreshold guesses in: while
-// failures + attempts in flight reach the threshold, further attempts get 429
-// with Retry-After loginBusyRetryAfter.
+// burst cannot get more than loginFailureThreshold guesses in.
+//
+// Only a name key (the submitted name, checked before the user lookup, for
+// every name known or not) answers 429: Retry-After loginFailureWindow when it
+// is locked, loginBusyRetryAfter when its slots are taken by attempts in
+// flight. A locked or busy account key (the found user, any spelling of the
+// name) answers the generic 401 "Invalid username or password", like a wrong
+// password, so no answer tells whether a name is an account.
 //
 // The state is in memory and per replica: with N replicas a username can get
 // up to N*loginFailureThreshold guesses per window.

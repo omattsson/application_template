@@ -37,11 +37,7 @@ func TestAPIKeyEndpointsAllowOnlyAJWTSession(t *testing.T) {
 			t.Parallel()
 			r := gin.New()
 			r.Use(func(c *gin.Context) {
-				c.Set("userID", "u-alice")
-				c.Set("role", "admin")
-				if m.method != "" {
-					c.Set("authMethod", m.method)
-				}
+				middleware.SetTestIdentity(c, "u-alice", "admin", m.method)
 				c.Next()
 			})
 			r.POST("/api/v1/api-keys", env.handler.CreateAPIKey)

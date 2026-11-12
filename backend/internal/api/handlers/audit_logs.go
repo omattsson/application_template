@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"backend/internal/api/middleware"
 	"backend/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -156,7 +157,7 @@ func (h *AuditLogHandler) ListAuditLogs(c *gin.Context) {
 	if err != nil {
 		status, message := mapError(err, "Audit log")
 		if status >= http.StatusInternalServerError {
-			slog.ErrorContext(c.Request.Context(), "Failed to list audit logs", "error", err, "request_id", c.GetString(requestIDKey))
+			slog.ErrorContext(c.Request.Context(), "Failed to list audit logs", "error", err, "request_id", c.GetString(middleware.RequestIDKey))
 		}
 		c.JSON(status, gin.H{"error": message})
 		return

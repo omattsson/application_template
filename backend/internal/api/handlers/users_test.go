@@ -107,8 +107,7 @@ func TestUserAdminHandlersCheckTheCallerThemselves(t *testing.T) {
 	// is refused: only a login session counts.
 	r := gin.New()
 	r.GET("/x", func(c *gin.Context) {
-		c.Set("userID", idAdminA)
-		c.Set("role", models.RoleAdmin)
+		middleware.SetTestIdentity(c, idAdminA, models.RoleAdmin, "")
 		e.handler.ListUsers(c)
 	})
 	w = httptest.NewRecorder()
@@ -168,6 +167,8 @@ type userRepoWrap struct {
 	roleErr    error
 	disableErr error
 	deleteErr  error
+	// countAdminsErr fails CountEnabledAdmins.
+	countAdminsErr error
 	// beforeGuarded runs before a guarded change (a test cancels the request
 	// or changes the caller there).
 	beforeGuarded func()
@@ -208,6 +209,13 @@ func (w *userRepoWrap) UpdatePassword(ctx context.Context, id, hash string) erro
 		return w.passErr
 	}
 	return w.UserRepository.UpdatePassword(ctx, id, hash)
+}
+
+func (w *userRepoWrap) CountEnabledAdmins(ctx context.Context) (int64, error) {
+	if w.countAdminsErr != nil {
+		return 0, w.countAdminsErr
+	}
+	return w.UserRepository.CountEnabledAdmins(ctx)
 }
 
 func (w *userRepoWrap) guarded() {
@@ -969,9 +977,13 @@ func TestDeleteUser(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, e.asAdmin(t, http.MethodDelete, "/api/v1/users/1", "").Code)
 	})
 
-	t.Run("the last admin cannot be deleted; only the pre-delete block applies", func(t *testing.T) {
+	t.Run("the sole admin cannot delete themselves; the pre-check refuses before anything is blocked", func(t *testing.T) {
 		t.Parallel()
-		e := newAdminEnv(t)
+		var flaky *flakyBlockStore
+		e := newAdminEnv(t, adminOpt{store: func(s sessionstore.SessionStore) sessionstore.SessionStore {
+			flaky = &flakyBlockStore{SessionStore: s}
+			return flaky
+		}})
 		require.NoError(t, e.db.Model(&models.User{}).Where("id = ?", idAdminB).Update("disabled", true).Error)
 		_, _ = e.newKey(t, idAdminA)
 		tok, _ := e.login(t, "admin-a")
@@ -980,9 +992,52 @@ func TestDeleteUser(t *testing.T) {
 		assert.Equal(t, msgLastAdmin, errorOf(t, w))
 		assert.True(t, e.userExists(idAdminA))
 		assert.EqualValues(t, 1, e.keyCount(t, idAdminA))
-		assert.Equal(t, http.StatusUnauthorized, e.tokenStatus(bearerOf(tok)), "the block is written before the delete, so a refused delete has blocked the tokens issued so far")
+		assert.Equal(t, 0, flaky.callCount(), "no user block was written")
+		assert.Equal(t, http.StatusOK, e.tokenStatus(bearerOf(tok)), "the refused delete blocked nothing")
 		assert.EqualValues(t, 1, e.activeRefreshTokens(t, idAdminA), "nothing else is revoked")
 		assert.Empty(t, e.auditRows(t))
+	})
+
+	t.Run("the pre-check does not apply to another user or a disabled admin", func(t *testing.T) {
+		t.Parallel()
+		// Another admin deleting the sole other admin: not a self delete, the
+		// guard in the transaction decides (a second enabled admin exists: the
+		// caller).
+		e := newAdminEnv(t)
+		w := e.asAdmin(t, http.MethodDelete, "/api/v1/users/"+idAdminB, "")
+		assert.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+	})
+
+	t.Run("the pre-check is read-only: a failing admin count is 500 and blocks nothing", func(t *testing.T) {
+		t.Parallel()
+		var flaky *flakyBlockStore
+		e := newAdminEnv(t, adminOpt{
+			store: func(s sessionstore.SessionStore) sessionstore.SessionStore {
+				flaky = &flakyBlockStore{SessionStore: s}
+				return flaky
+			},
+			users: func(r models.UserRepository) models.UserRepository {
+				return &userRepoWrap{UserRepository: r, countAdminsErr: errors.New("dial tcp 10.1.2.3:3306: refused")}
+			},
+		})
+		w := e.asAdmin(t, http.MethodDelete, "/api/v1/users/"+idAdminA, "")
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Equal(t, msgInternalServerError, errorOf(t, w))
+		assert.NotContains(t, w.Body.String(), "dial tcp")
+		assert.True(t, e.userExists(idAdminA))
+		assert.Equal(t, 0, flaky.callCount())
+	})
+
+	t.Run("a race the pre-check missed is still refused by the guard in the transaction", func(t *testing.T) {
+		t.Parallel()
+		// The count says two admins, the guard (the authority) finds one.
+		e := newAdminEnv(t, adminOpt{users: func(r models.UserRepository) models.UserRepository {
+			return &userRepoWrap{UserRepository: r, deleteErr: dberrors.NewDatabaseError("delete", models.ErrLastAdmin)}
+		}})
+		w := e.asAdmin(t, http.MethodDelete, "/api/v1/users/"+idAdminA, "")
+		assert.Equal(t, http.StatusConflict, w.Code)
+		assert.Equal(t, msgLastAdmin, errorOf(t, w))
+		assert.True(t, e.userExists(idAdminA))
 	})
 
 	t.Run("an admin can delete themselves when another admin exists", func(t *testing.T) {

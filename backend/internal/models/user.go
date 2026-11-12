@@ -142,6 +142,11 @@ type UserRepository interface {
 	// limit <= 0 returns all matches; offset applies only with a limit.
 	ListPaged(ctx context.Context, filter UserFilter, limit, offset int) ([]User, int64, error)
 	Count(ctx context.Context) (int64, error)
+	// CountEnabledAdmins returns the number of enabled admins. It is a plain
+	// read, without a lock: a handler uses it for a pre-check that refuses an
+	// obviously refused change before any side effect. The guarded changes
+	// below stay the authority.
+	CountEnabledAdmins(ctx context.Context) (int64, error)
 
 	// Guarded admin changes. Each runs in one transaction that locks the
 	// admin rows (ordered by ID) and then the target row, so concurrent

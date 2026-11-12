@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -363,6 +364,28 @@ func TestAuthRequiredRevocation(t *testing.T) {
 		assert.Equal(t, http.StatusOK, doGet(r, "/protected", bearer(t, newClaims)).Code)
 	})
 
+	t.Run("a token without iat and iat_ms is refused once a user block exists", func(t *testing.T) {
+		t.Parallel()
+		store := sessionstore.NewMemory()
+		defer store.Stop()
+		r := jwtTestRouter(JWTAuthOptions{JWTSecret: testSecret, SessionStore: store})
+		noIAT := validClaims()
+		noIAT.IssuedAt = nil
+		noIAT.IssuedAtMs = 0
+		require.True(t, noIAT.IssueTime().IsZero(), "the token has no issue time")
+
+		assert.Equal(t, http.StatusOK, doGet(r, "/protected", bearer(t, noIAT)).Code, "without a block it passes")
+
+		require.NoError(t, store.BlockUser(ctx, "u1", until))
+		w := doGet(r, "/protected", bearer(t, noIAT))
+		assert.Equal(t, http.StatusUnauthorized, w.Code, "no issue time cannot prove the token is newer than the block")
+		assert.Equal(t, "Session revoked", errorBody(t, w))
+
+		other := noIAT
+		other.UserID = "u2"
+		assert.Equal(t, http.StatusOK, doGet(r, "/protected", bearer(t, other)).Code, "another user's block does not apply")
+	})
+
 	t.Run("blocked session gives 401", func(t *testing.T) {
 		t.Parallel()
 		store := sessionstore.NewMemory()
@@ -586,4 +609,33 @@ func TestAuthRequiredSetsExpiry(t *testing.T) {
 	w := doGet(r, "/x", bearer(t, validClaims()))
 	assert.Equal(t, http.StatusNoContent, w.Code)
 	assert.True(t, gotOK)
+}
+
+// The identity keys carry the "auth." prefix: a plain "userID" or "role" that
+// other code puts on the context is not an identity, and SetTestIdentity sets
+// exactly what the getters read.
+func TestIdentityContextKeys(t *testing.T) {
+	t.Parallel()
+	keys := []string{contextKeyUserID, contextKeyUsername, contextKeyRole, contextKeyJTI, contextKeyExpiry,
+		contextKeySID, contextKeyIssuedAt, contextKeyAuthMethod, contextKeyAPIKeyID}
+	for _, k := range keys {
+		assert.True(t, strings.HasPrefix(k, "auth."), k)
+	}
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("userID", "u-forged")
+	c.Set("role", "admin")
+	c.Set("authMethod", AuthMethodJWT)
+	assert.Empty(t, GetUserIDFromContext(c))
+	assert.Empty(t, GetRoleFromContext(c))
+	assert.Empty(t, GetAuthMethodFromContext(c))
+
+	SetTestIdentity(c, "u1", "devops", AuthMethodAPIKey)
+	assert.Equal(t, "u1", GetUserIDFromContext(c))
+	assert.Equal(t, "devops", GetRoleFromContext(c))
+	assert.Equal(t, AuthMethodAPIKey, GetAuthMethodFromContext(c))
+
+	c2, _ := gin.CreateTestContext(httptest.NewRecorder())
+	SetTestIdentity(c2, "u2", "user", "")
+	assert.Empty(t, GetAuthMethodFromContext(c2), "no method when none is given")
 }

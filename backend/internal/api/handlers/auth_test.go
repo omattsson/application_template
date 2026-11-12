@@ -29,6 +29,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 const (
@@ -233,6 +234,10 @@ func (r *mockUserRepo) ListPaged(context.Context, models.UserFilter, int, int) (
 }
 
 func (r *mockUserRepo) Count(context.Context) (int64, error) { return 0, dberrors.ErrNotImplemented }
+
+func (r *mockUserRepo) CountEnabledAdmins(context.Context) (int64, error) {
+	return 0, dberrors.ErrNotImplemented
+}
 
 func (r *mockUserRepo) UpdateRole(context.Context, string, string, string) (string, error) {
 	return "", dberrors.ErrNotImplemented
@@ -1154,6 +1159,25 @@ func TestRegisterCreatesAPlainUser(t *testing.T) {
 	assert.NotContains(t, logs.String(), "long-enough-1")
 }
 
+// The 201 carries the new account: it must not be cached. A padded email (a
+// pasted value) is trimmed before the check and before it is stored.
+func TestRegisterAnswerIsNotCachedAndEmailIsTrimmed(t *testing.T) {
+	t.Parallel()
+	repo := newMockUserRepo()
+	h, _, _ := newTestAuthHandler(repo, selfRegistrationConfig(), nil)
+
+	w := postJSON(t, newAuthRouter(h), "/api/v1/auth/register", `{"username":"newuser","password":"long-enough-1","email":"  new@example.com\t"}`)
+
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", w.Header().Get("Pragma"))
+	assert.Equal(t, "new@example.com", repo.byUsername(t, "newuser").Email)
+
+	w = postJSON(t, newAuthRouter(h), "/api/v1/auth/register", `{"username":"other","password":"long-enough-1","email":"   "}`)
+	require.Equal(t, http.StatusCreated, w.Code, "an email of spaces is no email")
+	assert.Empty(t, repo.byUsername(t, "other").Email)
+}
+
 func TestRegisterValidation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -1266,7 +1290,7 @@ func TestRegisterCancelledRequest(t *testing.T) {
 // openUserDB returns a SQLite database with the users table.
 func openUserDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)

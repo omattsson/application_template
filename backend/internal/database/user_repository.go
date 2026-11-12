@@ -121,6 +121,19 @@ func (r *GORMUserRepository) Count(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
+// CountEnabledAdmins returns the number of enabled admins. See
+// models.UserRepository.
+func (r *GORMUserRepository) CountEnabledAdmins(ctx context.Context) (int64, error) {
+	var count int64
+	err := r.DB.WithContext(ctx).Model(&models.User{}).
+		Where("role = ? AND disabled = ?", models.RoleAdmin, false).
+		Count(&count).Error
+	if err != nil {
+		return 0, repoError(ctx, "count_enabled_admins", err)
+	}
+	return count, nil
+}
+
 // userFilterWhere applies the filter to a query on the users table. The count and the
 // page query both use it.
 func userFilterWhere(q *gorm.DB, f models.UserFilter) *gorm.DB {

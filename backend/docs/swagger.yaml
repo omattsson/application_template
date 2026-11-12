@@ -620,16 +620,20 @@ paths:
       description: 'Authenticate with username and password; returns a JWT access
         token and the user. With refresh sessions on, the login starts a session:
         the access token lives ACCESS_TOKEN_EXPIRATION and carries the session ID
-        (sid), and the response sets the httpOnly refresh_token cookie (Path /api/v1/auth,
-        SameSite=Strict, Secure unless SECURE_COOKIES=false) for POST /api/v1/auth/refresh;
-        without them the token lives JWT_EXPIRATION. With refresh sessions on, the
-        request needs the X-Requested-With header (any value) and must not be cross-site
-        (403), and its Content-Type must be application/json (415); both are checked
-        first (login CSRF protection). Every credential failure (unknown user, wrong
-        password, disabled account, SSO-only account) answers the same 401 "Invalid
-        username or password". After 5 failed attempts for one username within 15
-        minutes, every login for that username answers 429 with Retry-After for 15
-        minutes.'
+        (sid), and the response sets the httpOnly refresh_token cookie (named __Host-refresh_token
+        unless SECURE_COOKIES=false; Path /, SameSite=Strict, Secure unless SECURE_COOKIES=false)
+        for POST /api/v1/auth/refresh; without them the token lives JWT_EXPIRATION.
+        With refresh sessions on, the request needs the X-Requested-With header (any
+        value) and must not be cross-site (403), and its Content-Type must be application/json
+        (415); both are checked first (login CSRF protection). Every credential failure
+        (unknown user, wrong password, disabled account, SSO-only account) answers
+        the same 401 "Invalid username or password". After 5 failed attempts for one
+        username within 15 minutes, every login for that username answers 429 with
+        Retry-After for 15 minutes. While attempts for the same username are in flight
+        and use up its slots, a further attempt answers 429 with Retry-After 1. Only
+        the submitted username answers 429: when the found account itself is locked
+        or busy (the same account under another spelling of the name), the answer
+        is the generic 401, so no answer shows whether a name is an account.'
       parameters:
       - description: Required with refresh sessions on (any value, for example XMLHttpRequest)
         in: header
@@ -821,10 +825,13 @@ paths:
         user (admin when a role of the OIDC_ADMIN_ROLES claim matches exactly); an
         existing OIDC account gets its role from the claim at every login. An existing
         local account is never linked or taken over. On success the answer sets the
-        httpOnly refresh_token cookie and redirects (302) to the fixed web UI path
-        OIDC_FRONTEND_PATH, without any token in the URL; the web UI then calls POST
-        /api/v1/auth/refresh for its access token. Every refusal caused by the request
-        or the provider answers 400 {"error":"Login failed"}.
+        httpOnly refresh_token cookie (named __Host-refresh_token unless SECURE_COOKIES=false)
+        and redirects (302) to the fixed web UI path OIDC_FRONTEND_PATH, without any
+        token in the URL; the web UI then calls POST /api/v1/auth/refresh for its
+        access token. Every refusal caused by the request or the provider answers
+        400 {"error":"Login failed"}. A provider that does not answer, answers with
+        a server error, or refuses this server's client credentials (a configuration
+        problem, logged at Error level) answers 502.
       parameters:
       - description: Authorization code from the identity provider
         in: query
@@ -899,9 +906,9 @@ paths:
       description: Redirects the browser to the identity provider (authorization code
         flow with PKCE S256, a random state and a nonce). The state, the PKCE verifier
         and the nonce are kept on the server for OIDC_STATE_TTL and work once; a short-lived
-        httpOnly cookie (oidc_binding, SameSite=Lax, Path /api/v1/auth/oidc) ties
-        the login to this browser. Answers 404 unless AUTH_ENABLED and OIDC_ENABLED
-        are true. No parameter of the request is used.
+        httpOnly cookie (oidc_binding, with the __Host- prefix unless SECURE_COOKIES=false;
+        SameSite=Lax, Path /) ties the login to this browser. Answers 404 unless AUTH_ENABLED
+        and OIDC_ENABLED are true. No parameter of the request is used.
       produces:
       - application/json
       responses:
@@ -952,8 +959,11 @@ paths:
         extends it, and the access token never outlives it. A token rotated less than
         REFRESH_REUSE_GRACE ago (two tabs refreshing at once) gets one more access
         token, once, without a new cookie. Any other reuse of a consumed token revokes
-        the session and blocks its access tokens. Every refusal answers the same 401
-        and deletes the cookie.
+        the session and blocks its access tokens. A session that started before a
+        user block (logout-all, a role change, disabling or deleting the user) is
+        refused and revoked even when its refresh token was still active. The refresh
+        cookie is named __Host-refresh_token unless SECURE_COOKIES=false (then refresh_token)
+        and has Path /. Every refusal answers the same 401 and deletes the cookie.
       parameters:
       - description: Any value (CSRF protection), for example XMLHttpRequest
         in: header
@@ -1515,14 +1525,16 @@ paths:
     delete:
       description: 'Permanently deletes a user. Admin only, with a login session;
         the caller must still be an enabled admin in the database (403). The last
-        enabled admin cannot be deleted (409); an admin may delete themselves when
-        another enabled admin exists. The user''s access ends: access tokens issued
-        before are rejected (user block), refresh tokens are revoked, all their API
-        keys are deleted and the WebSockets are closed. The user block is written
-        before the delete (a failure answers 500 and deletes nothing, so the request
-        can be repeated; a refused delete, 403 or 409, has still blocked the user''s
-        tokens issued so far) and again after it (best effort); when a later step
-        fails the answer is 500 and the user is gone.'
+        enabled admin cannot be deleted (409, answered before anything is blocked
+        when the admin deletes themselves); an admin may delete themselves when another
+        enabled admin exists. The user''s access ends: access tokens issued before
+        are rejected (user block), refresh tokens are revoked, all their API keys
+        are deleted and the WebSockets are closed. The user block is written before
+        the delete (a failure answers 500 and deletes nothing, so the request can
+        be repeated; a delete that the transaction guard refuses after a race, 403
+        or 409, has still blocked the user''s tokens issued so far) and again after
+        it (best effort); when a later step fails the answer is 500 and the user is
+        gone.'
       parameters:
       - description: User ID (UUID)
         in: path

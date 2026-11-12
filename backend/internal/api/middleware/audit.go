@@ -394,7 +394,7 @@ func buildAuditEntry(c *gin.Context, route AuditRoute, userID string, status int
 	details["path"] = truncateAuditText(c.FullPath(), maxAuditPathLen)
 	details["status"] = status
 	details["client_ip"] = c.ClientIP()
-	if id := c.GetString("request_id"); id != "" {
+	if id := c.GetString(RequestIDKey); id != "" {
 		details["request_id"] = truncateAuditText(id, maxAuditRequestIDLen)
 	}
 

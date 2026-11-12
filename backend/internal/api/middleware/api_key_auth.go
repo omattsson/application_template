@@ -23,7 +23,7 @@ const apiKeyHeader = "X-API-Key" // #nosec G101 -- the name of a header, not a c
 
 // contextKeyAPIKeyID holds the ID of the API key that authenticated the
 // request (not the key itself).
-const contextKeyAPIKeyID = "apiKeyID"
+const contextKeyAPIKeyID = "auth.apiKeyID"
 
 // Messages of the API key answers. None of them says why a key was refused,
 // and none contains an internal error or the key.
@@ -31,8 +31,13 @@ const (
 	msgInvalidAPIKey   = "Invalid API key" // #nosec G101 -- an error message, not a credential
 	msgAuthRequired    = "Authorization required"
 	msgAuthAmbiguous   = "Send either an Authorization Bearer token or an X-API-Key header, not both"
-	msgSessionRequired = "This action requires a login session"
+	msgSessionRequired = MsgSessionRequired
 )
+
+// MsgSessionRequired is the 403 of an endpoint that only a login session may
+// use (not an API key). Handlers that check the session themselves answer with
+// the same text.
+const MsgSessionRequired = "This action requires a login session"
 
 // Limits of the last-used write of an API key.
 const (
