@@ -146,13 +146,11 @@ describe('Layout', () => {
         expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
       });
 
-      it('is hidden from an anonymous visitor and while loading', () => {
-        vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, role: 'admin' }));
-        renderLayout();
-        expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
-        vi.mocked(useAuth).mockReturnValue(
-          authState({ authEnabled: true, isLoading: true, isAuthenticated: true, user: ADMIN, role: 'admin' }),
-        );
+      it.each([
+        ['an anonymous visitor', { authEnabled: true, role: 'admin' as const }],
+        ['an admin while the session is restored', { authEnabled: true, isLoading: true, isAuthenticated: true, user: ADMIN, role: 'admin' as const }],
+      ])('is hidden from %s', (_name, state) => {
+        vi.mocked(useAuth).mockReturnValue(authState(state));
         renderLayout();
         expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
       });

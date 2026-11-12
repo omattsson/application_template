@@ -6,6 +6,10 @@ import type { InternalAxiosRequestConfig } from 'axios';
 import AdminUsers from '../index';
 import { userService } from '../../../../api/client';
 import type { User, UserListResponse } from '../../../../api/client';
+import { useAuth } from '../../../../context/AuthContext';
+import type { AuthContextValue } from '../../../../context/AuthContext';
+
+vi.mock('../../../../context/AuthContext', () => ({ useAuth: vi.fn() }));
 
 vi.mock('../../../../api/client', () => ({
   userService: {
@@ -70,6 +74,21 @@ function httpError(status: number, body: unknown): AxiosError {
   });
 }
 
+/** The signed-in user is alice (the admin of the fixtures). */
+function authState(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
+  return {
+    authEnabled: true,
+    isLoading: false,
+    isAuthenticated: true,
+    user: { id: ALICE.id, username: 'alice', display_name: 'Alice Admin', role: 'admin' },
+    role: 'admin',
+    login: vi.fn(),
+    logout: vi.fn(),
+    loginWithOIDC: vi.fn(),
+    ...overrides,
+  };
+}
+
 const mocked = {
   list: vi.mocked(userService.list),
   create: vi.mocked(userService.create),
@@ -90,6 +109,7 @@ function rowOf(username: string): HTMLElement {
 
 describe('Admin Users page', () => {
   beforeEach(() => {
+    vi.mocked(useAuth).mockReturnValue(authState());
     mocked.delete.mockResolvedValue(undefined);
   });
 
@@ -346,9 +366,9 @@ describe('Admin Users page', () => {
       await user.click(screen.getByRole('button', { name: 'Delete bob' }));
       await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }));
 
-      // The dialog is closing: its text must not be rebuilt without the user.
-      expect(document.body).not.toHaveTextContent('Delete ""');
-      expect(document.body).not.toHaveTextContent('Delete user ""');
+      // The dialog is still on screen (exit transition) and still names the user.
+      const closing = screen.getByRole('dialog', { name: 'Delete user', hidden: true });
+      expect(closing).toHaveTextContent('Delete user "bob"?');
       finish();
       await waitFor(() => expect(mocked.list).toHaveBeenCalledTimes(2));
     });
@@ -378,6 +398,101 @@ describe('Admin Users page', () => {
 
       expect(await screen.findByRole('alert')).toHaveTextContent('User not found');
       await waitFor(() => expect(screen.queryByRole('row', { name: /^bob\b/ })).not.toBeInTheDocument());
+    });
+  });
+
+  describe('change in flight', () => {
+    it('disables the role selects and every row button until the change and the reload finish', async () => {
+      const user = userEvent.setup();
+      await renderLoaded();
+      let finish: (r: Awaited<ReturnType<typeof userService.changeRole>>) => void = () => {};
+      mocked.changeRole.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+
+      await user.click(screen.getByRole('combobox', { name: 'Role of bob' }));
+      await user.click(await screen.findByRole('option', { name: 'devops' }));
+
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Role of carol' })).toHaveAttribute('aria-disabled', 'true'));
+      expect(screen.getByRole('combobox', { name: 'Role of bob' })).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByRole('button', { name: 'Disable bob' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Enable carol' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Delete alice' })).toBeDisabled();
+
+      finish({ id: BOB.id, old_role: 'user', new_role: 'devops', message: 'Role changed', changed: true, idp_managed: false });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Delete alice' })).toBeEnabled());
+      expect(screen.getByRole('combobox', { name: 'Role of bob' })).not.toHaveAttribute('aria-disabled', 'true');
+    });
+  });
+
+  describe('own account', () => {
+    it('marks the signed-in user with (you) and nobody else', async () => {
+      await renderLoaded();
+      expect(within(rowOf('alice')).getByText('(you)')).toBeInTheDocument();
+      expect(within(rowOf('bob')).queryByText('(you)')).not.toBeInTheDocument();
+    });
+
+    it('warns in the delete dialog when the target is yourself, and not for another user', async () => {
+      const user = userEvent.setup();
+      await renderLoaded();
+
+      await user.click(screen.getByRole('button', { name: 'Delete alice' }));
+      expect(await screen.findByRole('dialog', { name: 'Delete user' })).toHaveAccessibleDescription(/your own account/i);
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+      await user.click(screen.getByRole('button', { name: 'Delete bob' }));
+      expect(await screen.findByRole('dialog', { name: 'Delete user' })).not.toHaveAccessibleDescription(/your own account/i);
+    });
+
+    it('warns after changing your own role, and still lets the backend decide', async () => {
+      const user = userEvent.setup();
+      await renderLoaded();
+      mocked.changeRole.mockResolvedValue({
+        id: ALICE.id, old_role: 'admin', new_role: 'devops', message: 'Role changed', changed: true, idp_managed: false,
+      });
+
+      await user.click(screen.getByRole('combobox', { name: 'Role of alice' }));
+      await user.click(await screen.findByRole('option', { name: 'devops' }));
+
+      await waitFor(() => expect(mocked.changeRole).toHaveBeenCalledWith(ALICE.id, 'devops'));
+      expect(await screen.findByText(/Role of alice changed to devops.*your own account/)).toBeInTheDocument();
+    });
+
+    it('warns after disabling yourself', async () => {
+      const user = userEvent.setup();
+      await renderLoaded();
+      mocked.setDisabled.mockResolvedValue({ id: ALICE.id, disabled: true, changed: true, message: 'User disabled' });
+
+      await user.click(screen.getByRole('button', { name: 'Disable alice' }));
+
+      expect(await screen.findByText(/alice disabled.*your own account/)).toBeInTheDocument();
+    });
+  });
+
+  describe('auth disabled', () => {
+    it('explains that user management needs authentication and calls no API', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: false, isAuthenticated: false, user: null, role: null }));
+      render(<AdminUsers />);
+      expect(screen.getByText(/requires authentication to be enabled/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Create user' })).not.toBeInTheDocument();
+      expect(mocked.list).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('inconsistent page', () => {
+    it('stops fetching and keeps the pagination when an empty page has a total that says it should exist', async () => {
+      const user = userEvent.setup();
+      mocked.list.mockImplementation(async (pageNumber) =>
+        pageNumber === 1 ? page([ALICE], 50) : page([], 50, 2),
+      );
+      render(<AdminUsers />);
+      await screen.findByRole('table', { name: 'Users' });
+
+      await user.click(screen.getByRole('button', { name: /next page/i }));
+
+      await waitFor(() => expect(mocked.list).toHaveBeenLastCalledWith(2, 25));
+      await waitFor(() => expect(screen.getByRole('table', { name: 'Users' }).closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false'));
+      // The user can still page back.
+      expect(screen.getByRole('button', { name: /previous page/i })).toBeEnabled();
     });
   });
 
@@ -499,6 +614,51 @@ describe('Admin Users page', () => {
       expect(mocked.create).toHaveBeenCalledTimes(1);
       finish(makeUser({ username: 'dave' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('ignores Escape while the request is in flight, and closes after it', async () => {
+      const { user, dialog } = await openDialog();
+      let finish: (u: User) => void = () => {};
+      mocked.create.mockReturnValue(new Promise<User>((resolve) => { finish = resolve; }));
+      await user.type(within(dialog).getByLabelText('Username', { exact: false }), 'dave');
+      await user.type(within(dialog).getByLabelText('Password', { exact: false }), 'long enough password');
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      await waitFor(() => expect(mocked.create).toHaveBeenCalledTimes(1));
+
+      // The key goes to the dialog only while the focus is inside it.
+      await user.click(within(dialog).getByLabelText('Username', { exact: false }));
+      await user.keyboard('{Escape}');
+
+      // Longer than the exit transition of the dialog: a close would have removed it by now.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(screen.getByRole('dialog', { name: 'Create user' })).toBeInTheDocument();
+      finish(makeUser({ username: 'dave' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('closes on Escape when nothing is in flight', async () => {
+      const { user } = await openDialog();
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('moves the focus to the first invalid field and ties its message to it', async () => {
+      const { user, dialog } = await openDialog();
+
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      const username = within(dialog).getByLabelText('Username', { exact: false });
+      expect(username).toHaveFocus();
+      expect(username).toHaveAccessibleDescription(/Username must be 3 to 100 characters/);
+
+      await user.type(username, 'dave');
+      await user.type(within(dialog).getByLabelText('Email', { exact: false }), 'nope');
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      expect(within(dialog).getByLabelText('Email', { exact: false })).toHaveFocus();
+
+      await user.clear(within(dialog).getByLabelText('Email', { exact: false }));
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      expect(within(dialog).getByLabelText('Password', { exact: false })).toHaveFocus();
+      expect(mocked.create).not.toHaveBeenCalled();
     });
 
     it('clears the form (and the password) when the dialog is reopened', async () => {

@@ -1,9 +1,22 @@
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { decideRun, isStrict } from './skipDecision';
+import type { BackendState, DecisionInput } from './skipDecision';
 
 // Shared part of the accessibility specs: opening a page in one colour mode,
 // the axe run, and the checks that make sure the page really loaded before axe
 // ran (a page that failed to load must not pass).
+//
+// Environment of the run:
+//   ADMIN_USERNAME (default "admin"), ADMIN_PASSWORD  The local administrator;
+//       the signed-in pages need the password.
+//   A11Y_REQUIRE_AUTH=1  Strict switch (set it in CI). Without it, a page whose
+//       precondition is missing (backend unreachable or answering no UI config,
+//       auth off for a page that needs auth, no ADMIN_PASSWORD) is skipped with a
+//       "[a11y] SKIPPED" console warning that names the reason. With it, the same
+//       condition FAILS the test, so a run cannot pass with a page unchecked.
+//       The decision is in skipDecision.ts (unit-tested in
+//       src/__tests__/a11ySkipDecision.test.ts).
 //
 // Axe rules: the WCAG 2.0 to 2.2 level A and AA rules and the best practices.
 // `color-contrast` also measures one-character text. A node that axe leaves
@@ -58,18 +71,51 @@ export interface PageCheck {
 }
 
 /**
- * Whether the backend runs with authentication, from the public UI config.
- * Never throws: an unreachable backend counts as "off".
+ * Ask the public UI config whether the backend runs with authentication.
+ * Tells "the backend answered, auth is on/off" apart from "could not ask"
+ * (connection refused, a non-2xx status, an answer that is not a UI config).
+ * Never throws.
  */
-export async function isAuthEnabled(page: Page): Promise<boolean> {
+export async function probeBackend(page: Page): Promise<BackendState> {
   try {
     const res = await page.request.get('/api/v1/ui-config');
-    if (!res.ok()) return false;
-    const config = (await res.json()) as { auth_enabled?: unknown };
-    return config.auth_enabled === true;
-  } catch {
-    return false;
+    if (!res.ok()) return { kind: 'unreachable', reason: `GET /api/v1/ui-config answered ${res.status()}` };
+    const config = (await res.json()) as { auth_enabled?: unknown } | null;
+    if (!config || typeof config.auth_enabled !== 'boolean') {
+      return { kind: 'unreachable', reason: 'GET /api/v1/ui-config did not answer a UI config' };
+    }
+    return { kind: 'responded', authEnabled: config.auth_enabled };
+  } catch (error) {
+    return { kind: 'unreachable', reason: error instanceof Error ? error.message : 'request failed' };
   }
+}
+
+/**
+ * Decide whether a page runs, is skipped (with a console warning) or fails,
+ * from the probe, what the page needs, ADMIN_PASSWORD and A11Y_REQUIRE_AUTH.
+ * Call `test.skip` / throw from the result.
+ * @param page - Playwright page (for the probe)
+ * @param needs - What the page needs
+ * @returns Whether to sign in; throws when strict mode makes a missing precondition a failure; skips otherwise
+ */
+export async function prepareRun(
+  page: Page,
+  needs: Pick<DecisionInput, 'needsAuth' | 'needsSignIn' | 'signInWhenAuthOn'>,
+): Promise<{ signIn: boolean }> {
+  const decision = decideRun({
+    ...needs,
+    backend: await probeBackend(page),
+    hasPassword: ADMIN_PASSWORD !== '',
+    strict: isStrict(process.env),
+  });
+  if (decision.action === 'fail') {
+    throw new Error(`A11Y_REQUIRE_AUTH=1: ${decision.reason}. The page would have been skipped, and was not checked.`);
+  }
+  if (decision.action === 'skip') {
+    console.warn(`[a11y] SKIPPED: ${decision.reason}. Set A11Y_REQUIRE_AUTH=1 to fail instead.`);
+    test.skip(true, decision.reason);
+  }
+  return { signIn: decision.action === 'run' && decision.signIn };
 }
 
 /**

@@ -1,5 +1,5 @@
-import { useId, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { FormEvent, RefObject } from 'react';
 import {
   Alert,
   Box,
@@ -9,7 +9,6 @@ import {
   DialogContent,
   DialogTitle,
   MenuItem,
-  Stack,
   TextField,
 } from '@mui/material';
 import { userService } from '../../../api/client';
@@ -30,6 +29,8 @@ const EMPTY_FORM: CreateUserForm = { username: '', email: '', displayName: '', p
 
 interface FieldsProps {
   titleId: string;
+  /** True from the submit until the dialog is reopened: no second request, and the dialog does not close meanwhile. */
+  inFlight: RefObject<boolean>;
   onClose: () => void;
   onCreated: (username: string) => void;
 }
@@ -38,12 +39,15 @@ interface FieldsProps {
  * The form. It lives inside the Dialog, which unmounts it after the exit
  * transition: reopening starts empty, so a typed password never survives a close.
  */
-const CreateUserFields = ({ titleId, onClose, onCreated }: FieldsProps) => {
+const CreateUserFields = ({ titleId, inFlight, onClose, onCreated }: FieldsProps) => {
   const [form, setForm] = useState<CreateUserForm>(EMPTY_FORM);
   const [errors, setErrors] = useState<CreateUserErrors>({});
   const [serverError, setServerError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const inFlight = useRef(false);
+  const usernameRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const displayNameRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   const setField = <K extends keyof CreateUserForm>(key: K, value: CreateUserForm[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -54,7 +58,17 @@ const CreateUserFields = ({ titleId, onClose, onCreated }: FieldsProps) => {
     setServerError(null);
     const found = validateCreateUser(form);
     setErrors(found);
-    if (Object.keys(found).length > 0) return;
+    if (Object.keys(found).length > 0) {
+      // A screen reader announces nothing for a message that appears elsewhere: move to the first invalid field.
+      const order = [
+        ['username', usernameRef],
+        ['email', emailRef],
+        ['displayName', displayNameRef],
+        ['password', passwordRef],
+      ] as const;
+      order.find(([field]) => found[field])?.[1].current?.focus();
+      return;
+    }
     inFlight.current = true;
     setSubmitting(true);
     try {
@@ -77,7 +91,7 @@ const CreateUserFields = ({ titleId, onClose, onCreated }: FieldsProps) => {
     <Box component="form" onSubmit={(e: FormEvent<HTMLFormElement>) => { void handleSubmit(e); }} noValidate>
       <DialogTitle id={titleId}>Create user</DialogTitle>
       <DialogContent>
-        <Stack spacing={2} sx={{ pt: 1 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
           {serverError && <Alert severity="error">{serverError}</Alert>}
           <TextField
             label="Username"
@@ -87,6 +101,7 @@ const CreateUserFields = ({ titleId, onClose, onCreated }: FieldsProps) => {
             error={Boolean(errors.username)}
             helperText={errors.username}
             autoComplete="off"
+            inputRef={usernameRef}
             required
             fullWidth
           />
@@ -99,6 +114,7 @@ const CreateUserFields = ({ titleId, onClose, onCreated }: FieldsProps) => {
             error={Boolean(errors.email)}
             helperText={errors.email}
             autoComplete="off"
+            inputRef={emailRef}
             fullWidth
           />
           <TextField
@@ -109,6 +125,7 @@ const CreateUserFields = ({ titleId, onClose, onCreated }: FieldsProps) => {
             error={Boolean(errors.displayName)}
             helperText={errors.displayName ?? 'Defaults to the username'}
             autoComplete="off"
+            inputRef={displayNameRef}
             fullWidth
           />
           <TextField
@@ -120,6 +137,7 @@ const CreateUserFields = ({ titleId, onClose, onCreated }: FieldsProps) => {
             error={Boolean(errors.password)}
             helperText={errors.password ?? 'At least 8 characters'}
             autoComplete="new-password"
+            inputRef={passwordRef}
             required
             fullWidth
           />
@@ -137,7 +155,7 @@ const CreateUserFields = ({ titleId, onClose, onCreated }: FieldsProps) => {
               </MenuItem>
             ))}
           </TextField>
-        </Stack>
+        </Box>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={submitting}>
@@ -154,9 +172,22 @@ const CreateUserFields = ({ titleId, onClose, onCreated }: FieldsProps) => {
 /** Dialog that creates a local user (POST /api/v1/users). */
 const CreateUserDialog = ({ open, onClose, onCreated }: CreateUserDialogProps) => {
   const titleId = useId();
+  const inFlight = useRef(false);
+  useEffect(() => {
+    if (open) inFlight.current = false;
+  }, [open]);
   return (
-    <Dialog open={open} onClose={onClose} aria-labelledby={titleId} fullWidth maxWidth="sm">
-      <CreateUserFields titleId={titleId} onClose={onClose} onCreated={onCreated} />
+    // Escape and a click on the backdrop do nothing while the request runs (Cancel is disabled too).
+    <Dialog
+      open={open}
+      onClose={() => {
+        if (!inFlight.current) onClose();
+      }}
+      aria-labelledby={titleId}
+      fullWidth
+      maxWidth="sm"
+    >
+      <CreateUserFields titleId={titleId} inFlight={inFlight} onClose={onClose} onCreated={onCreated} />
     </Dialog>
   );
 };

@@ -21,6 +21,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PeopleIcon from '@mui/icons-material/People';
 import { userService } from '../../../api/client';
+import { useAuth } from '../../../context/AuthContext';
 import type { User } from '../../../api/client';
 import ConfirmDialog from '../../../components/ConfirmDialog';
 import EmptyState from '../../../components/EmptyState';
@@ -34,6 +35,9 @@ import CreateUserDialog from './CreateUserDialog';
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
+/** Added to a change of the signed-in user's own account: the API ends the sessions of the target. */
+const SELF_NOTICE = ' This is your own account: your session ends and you may have to sign in again.';
+
 /**
  * Administration of users (admin role). Lists one page at a time, creates
  * users, changes roles, disables or enables users and deletes users. The API
@@ -41,6 +45,7 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
  * is shown as it is for a 4xx answer.
  */
 const AdminUsers = () => {
+  const { authEnabled, user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
@@ -60,9 +65,11 @@ const AdminUsers = () => {
 
   const fetchCounterRef = useRef(0);
   const busyRef = useRef(false);
-  // The query of the latest render, for a reload after a change.
+  // The query of the latest commit, for a reload after a change.
   const queryRef = useRef({ pageIndex, pageSize });
-  queryRef.current = { pageIndex, pageSize };
+  useEffect(() => {
+    queryRef.current = { pageIndex, pageSize };
+  }, [pageIndex, pageSize]);
 
   const fetchUsers = useCallback(async (index: number, size: number): Promise<void> => {
     fetchCounterRef.current += 1;
@@ -73,8 +80,13 @@ const AdminUsers = () => {
       if (mine !== fetchCounterRef.current) return;
       if (result.data.length === 0 && index > 0) {
         // The page is past the end (the last user of it was deleted): go to the last page.
-        setPageIndex(Math.max(0, Math.ceil(result.total / size) - 1));
-        return;
+        // That sets the page, which starts the next fetch (and `fetching` stays on until it ends).
+        const last = Math.max(0, Math.ceil(result.total / size) - 1);
+        if (last !== index) {
+          setPageIndex(last);
+          return;
+        }
+        // The total claims this page exists but it is empty: show it as it is, so the pagination stays usable.
       }
       setUsers(result.data);
       setTotal(result.total);
@@ -90,8 +102,10 @@ const AdminUsers = () => {
   }, []);
 
   useEffect(() => {
+    // With auth off there is no user administration (and the API would refuse).
+    if (!authEnabled) return;
     void fetchUsers(pageIndex, pageSize);
-  }, [fetchUsers, pageIndex, pageSize]);
+  }, [authEnabled, fetchUsers, pageIndex, pageSize]);
 
   /** Reload the current page. Used after every change, whether it worked or not. */
   const reload = () => fetchUsers(queryRef.current.pageIndex, queryRef.current.pageSize);
@@ -121,14 +135,15 @@ const AdminUsers = () => {
   const showNotice = (message: string) => setNotice({ message, open: true });
   const closeNotice = () => setNotice((prev) => ({ ...prev, open: false }));
 
+  const isSelf = (user: User) => currentUser !== null && currentUser.id === user.id;
+
   const handleRoleChange = (user: User, role: Role) => {
     if (role === user.role) return;
     void runChange(async () => {
       const result = await userService.changeRole(user.id, role);
       if (!result.changed) return `Role of ${user.username} is already ${role}`;
-      return result.idp_managed
-        ? `Role of ${user.username} changed to ${role}; the identity provider may override it at the next login`
-        : `Role of ${user.username} changed to ${role}`;
+      const idp = result.idp_managed ? '; the identity provider may override it at the next login' : '';
+      return `Role of ${user.username} changed to ${role}${idp}${isSelf(user) ? SELF_NOTICE : ''}`;
     });
   };
 
@@ -136,7 +151,7 @@ const AdminUsers = () => {
     const disabled = !user.disabled;
     void runChange(async () => {
       await userService.setDisabled(user.id, disabled);
-      return `${user.username} ${disabled ? 'disabled' : 'enabled'}`;
+      return `${user.username} ${disabled ? 'disabled' : 'enabled'}${isSelf(user) ? SELF_NOTICE : ''}`;
     });
   };
 
@@ -162,6 +177,21 @@ const AdminUsers = () => {
     void reload();
   };
 
+  if (!authEnabled) {
+    return (
+      <Box>
+        <Typography variant="h4" component="h1" sx={{ mb: 2 }}>
+          Users
+        </Typography>
+        <EmptyState
+          icon={<PeopleIcon />}
+          title="User management is unavailable"
+          description="User management requires authentication to be enabled on the server."
+        />
+      </Box>
+    );
+  }
+
   const renderContent = () => {
     if (loading) return <LoadingState label="Loading users" />;
     if (loadError) {
@@ -178,7 +208,7 @@ const AdminUsers = () => {
         </Alert>
       );
     }
-    if (users.length === 0) {
+    if (users.length === 0 && total === 0) {
       return (
         <EmptyState
           icon={<PeopleIcon />}
@@ -207,6 +237,11 @@ const AdminUsers = () => {
                 <TableRow key={user.id} hover>
                   <TableCell component="th" scope="row">
                     {user.username}
+                    {isSelf(user) && (
+                      <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
+                        (you)
+                      </Typography>
+                    )}
                   </TableCell>
                   <TableCell>{user.email || '—'}</TableCell>
                   <TableCell>{user.display_name}</TableCell>
@@ -307,7 +342,9 @@ const AdminUsers = () => {
       <ConfirmDialog
         open={deleteOpen}
         title="Delete user"
-        message={`Delete user "${deleteTarget?.username ?? ''}"? Their sessions end at once and this cannot be undone.`}
+        message={`Delete user "${deleteTarget?.username ?? ''}"? Their sessions end at once and this cannot be undone.${
+          deleteTarget !== null && isSelf(deleteTarget) ? ' This is your own account: you will lose access.' : ''
+        }`}
         confirmLabel="Delete"
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteOpen(false)}
