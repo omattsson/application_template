@@ -82,6 +82,40 @@ services:
       - CORS_ALLOWED_METHODS=${CORS_ALLOWED_METHODS:-GET,POST,PUT,DELETE,OPTIONS}
       - CORS_ALLOWED_HEADERS=${CORS_ALLOWED_HEADERS:-Origin,Content-Type,Accept,Authorization}
       - CORS_MAX_AGE=${CORS_MAX_AGE:-300}
+      # Authentication: off by default. There is no default secret: with
+      # AUTH_ENABLED=true the backend refuses to start unless JWT_SECRET has
+      # at least 16 characters, and it creates the first admin only when
+      # ADMIN_PASSWORD is set (8 to 72 bytes). An empty value below means the
+      # backend default (see backend/.env.example).
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - JWT_SECRET=${JWT_SECRET:-}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - SELF_REGISTRATION=${SELF_REGISTRATION:-false}
+      # Secure refresh cookie (__Host-refresh_token), the default. Browsers
+      # accept it on http://localhost; false only for plain HTTP on another
+      # host name.
+      - SECURE_COOKIES=${SECURE_COOKIES:-true}
+      - SESSION_STORE=${SESSION_STORE:-mysql}
+      - JWT_EXPIRATION=${JWT_EXPIRATION:-}
+      - ACCESS_TOKEN_EXPIRATION=${ACCESS_TOKEN_EXPIRATION:-}
+      - SESSION_IDLE_TIMEOUT=${SESSION_IDLE_TIMEOUT:-}
+      - SESSION_MAX_LIFETIME=${SESSION_MAX_LIFETIME:-}
+      - REFRESH_TOKEN_EXPIRATION=${REFRESH_TOKEN_EXPIRATION:-}
+      - REFRESH_REUSE_GRACE=${REFRESH_REUSE_GRACE:-}
+      # OpenID Connect single sign-on (needs AUTH_ENABLED=true): off by default.
+      - OIDC_ENABLED=${OIDC_ENABLED:-false}
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URL=${OIDC_REDIRECT_URL:-}
+      - OIDC_SCOPES=${OIDC_SCOPES:-}
+      - OIDC_ROLE_CLAIM=${OIDC_ROLE_CLAIM:-}
+      - OIDC_ADMIN_ROLES=${OIDC_ADMIN_ROLES:-}
+      - OIDC_DEVOPS_ROLES=${OIDC_DEVOPS_ROLES:-}
+      - OIDC_LOCAL_AUTH=${OIDC_LOCAL_AUTH:-false}
+      - OIDC_STATE_TTL=${OIDC_STATE_TTL:-}
+      - OIDC_FRONTEND_PATH=${OIDC_FRONTEND_PATH:-}
     depends_on:
       db:
         condition: service_healthy
