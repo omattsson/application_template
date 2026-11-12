@@ -70,6 +70,11 @@ var (
 type Error struct {
 	Kind   error
 	Detail string
+	// Misconfigured marks an ErrProviderUnavailable that is a problem of this
+	// server's configuration (the provider refuses the client credentials),
+	// not an outage of the provider: an operator must act, so the handler logs
+	// it at Error level.
+	Misconfigured bool
 }
 
 func (e *Error) Error() string { return e.Kind.Error() + ": " + e.Detail }
@@ -77,6 +82,12 @@ func (e *Error) Unwrap() error { return e.Kind }
 
 func rejected(detail string) error    { return &Error{Kind: ErrLoginRejected, Detail: detail} }
 func unavailable(detail string) error { return &Error{Kind: ErrProviderUnavailable, Detail: detail} }
+
+// misconfigured is an unavailable provider whose cause is the configuration of
+// this server (the client credentials).
+func misconfigured(detail string) error {
+	return &Error{Kind: ErrProviderUnavailable, Detail: detail, Misconfigured: true}
+}
 
 // Limits and defaults.
 const (
@@ -453,6 +464,13 @@ func exchangeError(err error) error {
 	var re *oauth2.RetrieveError
 	if errors.As(err, &re) && re.Response != nil {
 		status := re.Response.StatusCode
+		// The provider refuses this server's client credentials (a wrong or
+		// rotated secret, a client that may not use the code flow): every user
+		// fails the same way until an operator fixes the configuration, so it
+		// is not a rejected login.
+		if status == http.StatusUnauthorized || re.ErrorCode == "invalid_client" || re.ErrorCode == "unauthorized_client" {
+			return misconfigured(fmt.Sprintf("the token endpoint refused the client credentials (status %d, error %s)", status, safeCode(re.ErrorCode)))
+		}
 		if status >= 400 && status < 500 {
 			return rejected(fmt.Sprintf("the token endpoint refused the request (status %d, error %s)", status, safeCode(re.ErrorCode)))
 		}

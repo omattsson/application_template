@@ -189,3 +189,59 @@ func TestHTTPClientRefusesRedirectsAndLargeBodies(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ok", string(body))
 }
+
+// The token endpoint answer decides who has to act. A 401, or an invalid_client
+// or unauthorized_client code (any status), says this server's client
+// credentials are refused: that is a configuration problem and an operator must
+// act, so it is "provider unavailable" (the user cannot fix it by trying again)
+// and flagged as a configuration problem. Any other 4xx is the provider refusing
+// this login (a used or expired code): "rejected". 5xx and transport failures
+// are "unavailable" without the flag.
+func TestExchangeError(t *testing.T) {
+	t.Parallel()
+	retrieve := func(status int, code string) error {
+		return &oauth2.RetrieveError{
+			Response:  &http.Response{StatusCode: status},
+			Body:      []byte(`{"error":"` + code + `","error_description":"provider-text"}`),
+			ErrorCode: code,
+		}
+	}
+	tests := []struct {
+		name       string
+		err        error
+		wantKind   error
+		wantConfig bool
+	}{
+		{name: "400 invalid_grant", err: retrieve(400, "invalid_grant"), wantKind: ErrLoginRejected},
+		{name: "400 without a code", err: retrieve(400, ""), wantKind: ErrLoginRejected},
+		{name: "403", err: retrieve(403, "access_denied"), wantKind: ErrLoginRejected},
+		{name: "404", err: retrieve(404, ""), wantKind: ErrLoginRejected},
+		{name: "429", err: retrieve(429, "slow_down"), wantKind: ErrLoginRejected},
+		{name: "401 invalid_client", err: retrieve(401, "invalid_client"), wantKind: ErrProviderUnavailable, wantConfig: true},
+		{name: "401 without a code", err: retrieve(401, ""), wantKind: ErrProviderUnavailable, wantConfig: true},
+		{name: "401 invalid_grant", err: retrieve(401, "invalid_grant"), wantKind: ErrProviderUnavailable, wantConfig: true},
+		{name: "400 invalid_client", err: retrieve(400, "invalid_client"), wantKind: ErrProviderUnavailable, wantConfig: true},
+		{name: "400 unauthorized_client", err: retrieve(400, "unauthorized_client"), wantKind: ErrProviderUnavailable, wantConfig: true},
+		{name: "403 unauthorized_client", err: retrieve(403, "unauthorized_client"), wantKind: ErrProviderUnavailable, wantConfig: true},
+		{name: "500", err: retrieve(500, "server_error"), wantKind: ErrProviderUnavailable},
+		{name: "503", err: retrieve(503, ""), wantKind: ErrProviderUnavailable},
+		{name: "transport failure", err: errors.New("dial tcp 10.0.0.1:443: connect: refused"), wantKind: ErrProviderUnavailable},
+		{name: "RetrieveError without a response", err: &oauth2.RetrieveError{ErrorCode: "invalid_client"}, wantKind: ErrProviderUnavailable},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := exchangeError(tt.err)
+
+			require.ErrorIs(t, err, tt.wantKind)
+			var perr *Error
+			require.ErrorAs(t, err, &perr)
+			assert.Equal(t, tt.wantConfig, perr.Misconfigured)
+			// Nothing the provider sent or the transport said is in the error.
+			for _, leak := range []string{"provider-text", "10.0.0.1", "dial tcp"} {
+				assert.NotContains(t, err.Error(), leak)
+			}
+		})
+	}
+}

@@ -434,6 +434,8 @@ func TestExchangeProviderFailures(t *testing.T) {
 		wantErr error
 	}{
 		{name: "the provider rejects the code", knob: func(k *authtest.Knobs) { k.TokenStatus = http.StatusBadRequest }, wantErr: auth.ErrLoginRejected},
+		{name: "the provider refuses the client credentials (401)", knob: func(k *authtest.Knobs) { k.TokenStatus = http.StatusUnauthorized }, wantErr: auth.ErrProviderUnavailable},
+		{name: "the provider answers 403", knob: func(k *authtest.Knobs) { k.TokenStatus = http.StatusForbidden }, wantErr: auth.ErrLoginRejected},
 		{name: "the provider answers 500", knob: func(k *authtest.Knobs) { k.TokenStatus = http.StatusInternalServerError }, wantErr: auth.ErrProviderUnavailable},
 		{name: "the provider answers 503", knob: func(k *authtest.Knobs) { k.TokenStatus = http.StatusServiceUnavailable }, wantErr: auth.ErrProviderUnavailable},
 		{name: "the provider is too slow", knob: func(k *authtest.Knobs) { k.TokenDelay = 3 * time.Second }, opts: func(o *auth.Options) { o.HTTPTimeout = 200 * time.Millisecond }, wantErr: auth.ErrProviderUnavailable},
