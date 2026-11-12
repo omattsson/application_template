@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // uniqueUser is a test-only model with a unique username.
@@ -23,7 +24,7 @@ type uniqueUser struct {
 // repository error mapping and mapError, without the duplicate value.
 func TestDuplicateKeyOnSQLiteMapsTo409(t *testing.T) {
 	t.Parallel()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)

@@ -26,6 +26,7 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 const (
@@ -113,7 +114,7 @@ var keyTestUsers = []models.User{
 
 func newKeyEnv(t *testing.T, wrap func(models.APIKeyRepository) models.APIKeyRepository) *keyEnv {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
