@@ -23,7 +23,7 @@ const apiKeyHeader = "X-API-Key" // #nosec G101 -- the name of a header, not a c
 
 // contextKeyAPIKeyID holds the ID of the API key that authenticated the
 // request (not the key itself).
-const contextKeyAPIKeyID = "auth.apiKeyID"
+const contextKeyAPIKeyID = "auth.apiKeyID" // #nosec G101 -- the name of a context key, not a credential
 
 // Messages of the API key answers. None of them says why a key was refused,
 // and none contains an internal error or the key.
