@@ -34,12 +34,13 @@ type RateLimiters struct {
 	Login *handlers.RateLimiter
 	// Register is LOGIN_RATE_LIMIT per client IP on POST /auth/register.
 	Register *handlers.RateLimiter
-	// Refresh is LOGIN_RATE_LIMIT per client IP on POST /auth/refresh.
-	Refresh *handlers.RateLimiter
-	// OIDC is LOGIN_RATE_LIMIT per client IP on the two OIDC routes (the login
-	// writes one session store row per call, the callback calls the identity
-	// provider).
-	OIDC *handlers.RateLimiter
+	// OIDCLogin is LOGIN_RATE_LIMIT per client IP on GET /auth/oidc/login (it
+	// writes one session store row per call).
+	OIDCLogin *handlers.RateLimiter
+	// OIDCCallback is LOGIN_RATE_LIMIT per client IP on GET /auth/oidc/callback
+	// (it calls the identity provider). It has its own budget: a user who
+	// starts a login must still have the budget for the return.
+	OIDCCallback *handlers.RateLimiter
 }
 
 // Stop terminates the background cleanup goroutines. It is idempotent.
@@ -47,7 +48,7 @@ func (r *RateLimiters) Stop() {
 	if r == nil {
 		return
 	}
-	for _, l := range []*handlers.RateLimiter{r.API, r.Login, r.Register, r.Refresh, r.OIDC} {
+	for _, l := range []*handlers.RateLimiter{r.API, r.Login, r.Register, r.OIDCLogin, r.OIDCCallback} {
 		if l != nil {
 			l.Stop()
 		}
@@ -133,11 +134,12 @@ func checkDeps(deps Deps) error {
 //
 // With AUTH_ENABLED=true:
 //   - Public: /health/*, GET /api/v1/ui-config, POST /auth/login (LOGIN_RATE_LIMIT,
-//     same-site check when it sets the cookie), POST /auth/register,
-//     POST /auth/refresh (LOGIN_RATE_LIMIT each), POST /auth/logout (the
-//     handler authenticates itself from the bearer token and the refresh
-//     cookie), GET /auth/oidc/login and /callback (LOGIN_RATE_LIMIT, no
-//     same-site check: they are top-level navigations).
+//     same-site check when it sets the cookie), POST /auth/register
+//     (LOGIN_RATE_LIMIT, its own budget), POST /auth/refresh (no dedicated
+//     limiter: RATE_LIMIT only), POST /auth/logout (the handler
+//     authenticates itself from the bearer token and the refresh cookie),
+//     GET /auth/oidc/login and /callback (LOGIN_RATE_LIMIT each, one budget
+//     per route, no same-site check: they are top-level navigations).
 //   - Every other /api/v1 route: CombinedAuth (JWT or API key, revocation
 //     checks fail closed on a store error), then the audit middleware.
 //     /auth/logout-all and /api-keys also need a login session
@@ -214,8 +216,8 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 	result := &Result{RateLimiters: limiters}
 	if a != nil {
 		limiters.Register = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
-		limiters.Refresh = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
-		limiters.OIDC = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
+		limiters.OIDCLogin = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
+		limiters.OIDCCallback = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
 		a.registerPublicAuth(v1, limiters)
 		api = v1.Group("", a.authenticate, a.recorder.Middleware())
 		a.registerAuthenticated(api)
@@ -348,13 +350,15 @@ func (a *authWiring) registerPublicAuth(v1 *gin.RouterGroup, l *RateLimiters) {
 	g := v1.Group("/auth")
 	g.POST("/login", l.Login.RateLimit(), a.authHandler.Login)
 	g.POST("/register", l.Register.RateLimit(), a.authHandler.Register)
-	g.POST("/refresh", l.Refresh.RateLimit(), a.authHandler.Refresh)
+	// No dedicated limiter: a refresh needs a valid token, and several tabs
+	// refresh often. It stays under the v1 API limiter (RATE_LIMIT).
+	g.POST("/refresh", a.authHandler.Refresh)
 	// Public: a client with an expired access token can still end its session
 	// with the cookie. RequireSessionAuth passes here (no auth middleware ran);
 	// the handler reads only the bearer token and the cookie.
 	g.POST("/logout", middleware.RequireSessionAuth(), a.authHandler.Logout)
-	g.GET("/oidc/login", l.OIDC.RateLimit(), a.oidcHandler.Login)
-	g.GET("/oidc/callback", l.OIDC.RateLimit(), a.oidcHandler.Callback)
+	g.GET("/oidc/login", l.OIDCLogin.RateLimit(), a.oidcHandler.Login)
+	g.GET("/oidc/callback", l.OIDCCallback.RateLimit(), a.oidcHandler.Callback)
 }
 
 // registerAuthenticated registers the routes behind CombinedAuth.

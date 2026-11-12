@@ -377,8 +377,9 @@ func TestSetupRefusesAuthWithoutDeps(t *testing.T) {
 }
 
 // TestAuthOnLoginRateLimit: the 11th login within a minute from one IP gets
-// 429 (LOGIN_RATE_LIMIT default 10); register, refresh and the OIDC routes
-// have the same per-IP limit. Another IP is unaffected.
+// 429 (LOGIN_RATE_LIMIT default 10); register and the two OIDC routes have the
+// same per-IP limit, each with its own budget. Refresh has no dedicated limit
+// (see TestAuthOnRefreshIsOnlyUnderTheAPILimit). Another IP is unaffected.
 func TestAuthOnLoginRateLimit(t *testing.T) {
 	t.Parallel()
 
@@ -387,7 +388,6 @@ func TestAuthOnLoginRateLimit(t *testing.T) {
 	}{
 		{http.MethodPost, "/api/v1/auth/login"},
 		{http.MethodPost, "/api/v1/auth/register"},
-		{http.MethodPost, "/api/v1/auth/refresh"},
 		{http.MethodGet, "/api/v1/auth/oidc/login"},
 		{http.MethodGet, "/api/v1/auth/oidc/callback"},
 	}
@@ -413,6 +413,73 @@ func TestAuthOnLoginRateLimit(t *testing.T) {
 
 			w = doFrom(env.router, "198.51.100.7:1000", r.method, r.path, `{"username":"x","password":"wrong-password"}`, h)
 			assert.NotEqual(t, http.StatusTooManyRequests, w.Code, "another IP has its own budget")
+		})
+	}
+}
+
+// TestAuthOnRefreshIsOnlyUnderTheAPILimit: refresh has no dedicated limiter
+// (a web UI with several tabs refreshes often, and the refresh needs a valid
+// token anyway). It is under the v1 API limiter: the 11th refresh in a minute
+// is not refused, the 101st request is (RATE_LIMIT default 100).
+func TestAuthOnRefreshIsOnlyUnderTheAPILimit(t *testing.T) {
+	t.Parallel()
+	cfg := authOn()
+	cfg.Server.RateLimit = 100
+	cfg.Server.LoginRateLimit = 10
+	env := newAuthEnv(t, cfg)
+	h := map[string]string{"X-Requested-With": "x"}
+
+	for i := 0; i < 100; i++ {
+		w := env.do(t, http.MethodPost, "/api/v1/auth/refresh", "", h)
+		require.Equal(t, http.StatusUnauthorized, w.Code, "refresh %d (no cookie)", i+1)
+	}
+	w := env.do(t, http.MethodPost, "/api/v1/auth/refresh", "", h)
+	assert.Equal(t, http.StatusTooManyRequests, w.Code, "the 101st request of the minute is limited by RATE_LIMIT")
+}
+
+// TestAuthOnLimitersHaveSeparateBudgets: one IP that used up the login budget
+// still has the register budget, and the OIDC login and callback budgets are
+// separate too.
+func TestAuthOnLimitersHaveSeparateBudgets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		first, second struct{ method, path string }
+	}{
+		{name: "login then register",
+			first:  struct{ method, path string }{http.MethodPost, "/api/v1/auth/login"},
+			second: struct{ method, path string }{http.MethodPost, "/api/v1/auth/register"}},
+		{name: "register then login",
+			first:  struct{ method, path string }{http.MethodPost, "/api/v1/auth/register"},
+			second: struct{ method, path string }{http.MethodPost, "/api/v1/auth/login"}},
+		{name: "oidc login then callback",
+			first:  struct{ method, path string }{http.MethodGet, "/api/v1/auth/oidc/login"},
+			second: struct{ method, path string }{http.MethodGet, "/api/v1/auth/oidc/callback"}},
+		{name: "oidc callback then login",
+			first:  struct{ method, path string }{http.MethodGet, "/api/v1/auth/oidc/callback"},
+			second: struct{ method, path string }{http.MethodGet, "/api/v1/auth/oidc/login"}},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := authOn()
+			cfg.Server.LoginRateLimit = 10
+			env := newAuthEnv(t, cfg)
+			h := map[string]string{"X-Requested-With": "x", "Content-Type": "application/json"}
+			send := func(r struct{ method, path string }, i int) int {
+				body := fmt.Sprintf(`{"username":"nobody%d","password":"wrong-password"}`, i)
+				return env.do(t, r.method, r.path, body, h).Code
+			}
+			for i := 0; i < 10; i++ {
+				require.NotEqual(t, http.StatusTooManyRequests, send(tt.first, i), "first %d", i+1)
+			}
+			require.Equal(t, http.StatusTooManyRequests, send(tt.first, 10), "the first budget is used up")
+			for i := 0; i < 10; i++ {
+				require.NotEqual(t, http.StatusTooManyRequests, send(tt.second, i), "second %d: its own budget", i+1)
+			}
+			assert.Equal(t, http.StatusTooManyRequests, send(tt.second, 10), "the second budget is used up too")
 		})
 	}
 }
