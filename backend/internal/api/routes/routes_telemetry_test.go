@@ -267,3 +267,30 @@ func TestTelemetryCountsAuthOutcomes(t *testing.T) {
 	assert.Equal(t, map[string]int64{"success": 1, "missing": 1}, m.authCounts(t, "auth.jwt.total"))
 	assert.Equal(t, map[string]int64{"success": 1, "unknown": 1}, m.authCounts(t, "auth.apikey.total"))
 }
+
+// TestTelemetryHasOneRequestDurationInstrument: otelgin records its own
+// http.server.request.duration (and body-size histograms) through the global
+// provider. The router gives it a no-op meter, so only HTTPMetrics records
+// durations and a quantile over the name never mixes two bucket layouts.
+func TestTelemetryHasOneRequestDurationInstrument(t *testing.T) {
+	m := installTelemetry(t)
+	router, _ := newTestRouter(t, otelConfig(true, true))
+
+	require.Equal(t, http.StatusOK, doFrom(router, testPeer, http.MethodGet, "/api/v1/items", "", nil).Code)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, m.reader.Collect(context.Background(), &rm))
+	var scopes []string
+	for _, sm := range rm.ScopeMetrics {
+		for _, mt := range sm.Metrics {
+			if strings.HasPrefix(mt.Name, "http.server.") {
+				scopes = append(scopes, sm.Scope.Name+"/"+mt.Name)
+			}
+		}
+	}
+	assert.ElementsMatch(t, []string{"http/http.server.request.duration", "http/http.server.request.total"}, scopes,
+		"only the repo's middleware records HTTP server metrics")
+
+	// The spans are unaffected: tracing stays on.
+	assert.Len(t, m.spans.GetSpans(), 1)
+}

@@ -90,12 +90,15 @@ func RebindAuthMeter() {
 	authMetrics.Store(in)
 }
 
+// statusOther is the status of an outcome outside the fixed sets.
+const statusOther = "other"
+
 // statusOptions are the attribute sets of the known outcomes, built once: the
 // authenticated request path records an outcome without allocating, also with
 // telemetry off.
 func statusOptions(statuses ...string) map[string]metric.AddOption {
-	m := make(map[string]metric.AddOption, len(statuses))
-	for _, s := range statuses {
+	m := make(map[string]metric.AddOption, len(statuses)+1)
+	for _, s := range append(statuses, statusOther) {
 		m[s] = metric.WithAttributeSet(attribute.NewSet(attribute.String("status", s)))
 	}
 	return m
@@ -118,9 +121,21 @@ func add(in *authInstruments, c metric.Int64Counter, known map[string]metric.Add
 	}
 	opt, ok := known[status]
 	if !ok {
-		opt = metric.WithAttributes(attribute.String("status", status))
+		// Callers pass the constants above. A status outside the fixed set
+		// must not open a series of its own.
+		opt = known[statusOther]
 	}
 	c.Add(context.Background(), 1, opt)
+}
+
+// boundedLabel returns v when it is one of allowed, else statusOther.
+func boundedLabel(v string, allowed ...string) string {
+	for _, a := range allowed {
+		if v == a {
+			return v
+		}
+	}
+	return statusOther
 }
 
 // RecordJWTAuth counts one bearer-token authentication outcome.
@@ -158,8 +173,8 @@ func RecordLoginFailure(method, status, reason string) {
 		return
 	}
 	attrs := []attribute.KeyValue{
-		attribute.String("method", method),
-		attribute.String("status", status),
+		attribute.String("method", boundedLabel(method, "local", "oidc")),
+		attribute.String("status", boundedLabel(status, "success", "failure")),
 	}
 	if reason != "" {
 		attrs = append(attrs, attribute.String("reason", reason))

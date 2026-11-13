@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -196,4 +197,45 @@ func TestHTTPMetricsDisabledAddsNoAllocations(t *testing.T) {
 	installReader(t)
 	enabled := measure(build(true))
 	assert.Greater(t, enabled-base, 2.0, "the enabled middleware does allocate, so the comparison above means something")
+}
+
+// TestHTTPMetricsMethodLabelIsBounded: net/http accepts any token as a
+// method, so the label maps the nine standard methods to themselves and
+// everything else to _OTHER. Otherwise a client could open a new series per
+// junk method until the SDK's cardinality limit pushes the real routes into
+// the overflow series.
+func TestHTTPMetricsMethodLabelIsBounded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	reader := installReader(t)
+	router := gin.New()
+	router.Use(HTTPMetrics())
+	router.Any("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	standard := []string{"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"}
+	for _, m := range standard {
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(m, "/x", nil))
+	}
+	for i := 0; i < 50; i++ {
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(fmt.Sprintf("JUNK%d", i), "/x", nil))
+	}
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("get", "/x", nil)) // methods are case-sensitive
+
+	rm := collectMetrics(t, reader)
+	counter, ok := findCounter(rm, "http.server.request.total")
+	require.True(t, ok)
+	byMethod := map[string]int64{}
+	for _, dp := range counter.DataPoints {
+		m, _ := dp.Attributes.Value(attribute.Key("http.request.method"))
+		byMethod[m.AsString()] += dp.Value
+	}
+	want := map[string]int64{"_OTHER": 51}
+	for _, m := range standard {
+		want[m] = 1
+	}
+	assert.Equal(t, want, byMethod)
+	assert.Len(t, counter.DataPoints, len(standard)+1, "one series per standard method and one for the rest")
+
+	hist, ok := findHistogram(rm, "http.server.request.duration")
+	require.True(t, ok)
+	assert.Len(t, hist.DataPoints, len(standard)+1, "the duration histogram is bounded the same way")
 }

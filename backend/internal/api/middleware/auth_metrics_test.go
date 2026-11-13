@@ -75,12 +75,12 @@ func TestAuthMetricsRecorders(t *testing.T) {
 	RecordRefresh("success")
 	RecordRefresh("")
 	RecordAPIKeyAuth("success")
-	RecordAPIKeyAuth("a-status-that-is-not-precomputed")
+	RecordAPIKeyAuth("a-status-that-is-not-in-the-fixed-set")
 	RecordJWTAuth("revoked")
 
 	assert.Equal(t, map[string]int64{"local/success": 2, "local/failure/password_mismatch": 1}, counts(t, reader, "auth.login.total"))
 	assert.Equal(t, map[string]int64{"success": 1}, counts(t, reader, "auth.token.refresh.total"))
-	assert.Equal(t, map[string]int64{"success": 1, "a-status-that-is-not-precomputed": 1}, counts(t, reader, "auth.apikey.total"))
+	assert.Equal(t, map[string]int64{"success": 1, "other": 1}, counts(t, reader, "auth.apikey.total"))
 	assert.Equal(t, map[string]int64{"revoked": 1}, counts(t, reader, "auth.jwt.total"))
 }
 
@@ -258,4 +258,19 @@ func TestCombinedAuthRecordsRefusalsBeforeEitherCheck(t *testing.T) {
 
 	assert.Equal(t, map[string]int64{"missing": 1}, counts(t, reader, "auth.jwt.total"))
 	assert.Equal(t, map[string]int64{"ambiguous": 1, "repeated": 1}, counts(t, reader, "auth.apikey.total"))
+}
+
+// TestCombinedAuthCountsANonBearerAuthorizationAsMalformed: "Basic x" without
+// a key is not "no credential": the client sent an Authorization header that
+// is not a bearer token.
+func TestCombinedAuthCountsANonBearerAuthorizationAsMalformed(t *testing.T) {
+	_, rec := issuedKey(t, "k1", "u1", inHours(24))
+	users := newUserRepoFake(&models.User{ID: "u1", Username: "alice", Role: models.RoleUser})
+	r := keyRouter(keyDeps(newKeyRepoFake(rec), users))
+
+	reader := useAuthMetrics(t)
+	assert.Equal(t, http.StatusUnauthorized, doGet(r, "/protected", map[string]string{"Authorization": "Basic dXNlcjpwdw=="}).Code)
+	assert.Equal(t, http.StatusUnauthorized, doGet(r, "/protected", nil).Code)
+
+	assert.Equal(t, map[string]int64{"malformed": 1, "missing": 1}, counts(t, reader, "auth.jwt.total"))
 }

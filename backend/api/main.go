@@ -65,6 +65,7 @@ func main() {
 		os.Exit(1)
 	}
 	attachTelemetry(s, tel)
+	startFailureHook = func() { flushTelemetry(tel) }
 	s.servers = append(s.servers, startHTTPServer(cfg, router))
 
 	quit := make(chan os.Signal, 1)

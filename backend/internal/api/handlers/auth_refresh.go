@@ -205,6 +205,7 @@ func (h *AuthHandler) rotate(c *gin.Context, stored *models.RefreshToken, tokenH
 
 	access, err := h.sessionAccessToken(user, sess, now)
 	if err != nil {
+		middleware.RecordRefresh("error")
 		h.log().Error("Failed to sign access token on refresh", "user_id", user.ID, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
 		return

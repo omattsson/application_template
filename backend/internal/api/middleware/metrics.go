@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,26 @@ import (
 // path of such a request is client input (a scanner can send any path), so it
 // never becomes a label.
 const unmatchedRoute = "<unmatched>"
+
+// otherMethod is the method label of a request whose method is not one of the
+// nine standard ones (the value of the OpenTelemetry HTTP semantic
+// conventions).
+const otherMethod = "_OTHER"
+
+// methodLabel returns the method for the http.request.method label. net/http
+// accepts any token as a method, so the raw value is client input: a client
+// could open a new series per junk method until the SDK's cardinality limit
+// pushes the real routes into the overflow series. Only the nine standard
+// methods (case-sensitive, as RFC 9110 defines them) are labels.
+func methodLabel(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete,
+		http.MethodConnect, http.MethodOptions, http.MethodTrace, http.MethodPatch:
+		return method
+	default:
+		return otherMethod
+	}
+}
 
 // durationBuckets are the bucket bounds of the request duration, in seconds:
 // 5 ms to 30 s (exports). The OpenTelemetry default buckets (0 to 10000) are
@@ -73,7 +94,7 @@ func HTTPMetrics() gin.HandlerFunc {
 		}
 
 		attrs := metric.WithAttributes(
-			attribute.String("http.request.method", c.Request.Method),
+			attribute.String("http.request.method", methodLabel(c.Request.Method)),
 			attribute.String("http.route", route),
 			attribute.Int("http.response.status_code", c.Writer.Status()),
 		)

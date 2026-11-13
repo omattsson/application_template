@@ -1,9 +1,11 @@
 package telemetry_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -209,4 +211,61 @@ func TestInit_FailsTheStartOnABadConfiguration(t *testing.T) {
 			assert.Nil(t, tel)
 		})
 	}
+}
+
+// logsOf captures the default logger for the duration of the test.
+func logsOf(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// TestInit_WarnsAboutPlaintextToARemoteCollector: the exporters use plain
+// gRPC, so a collector that is not on this host receives spans, metrics and
+// logs (and any header) unencrypted. The start says so.
+func TestInit_WarnsAboutPlaintextToARemoteCollector(t *testing.T) {
+	tests := []struct {
+		endpoint string
+		wantWarn bool
+	}{
+		{endpoint: "collector:4317", wantWarn: true},
+		{endpoint: "10.0.0.5:4317", wantWarn: true},
+		{endpoint: "otel.example.com:4317", wantWarn: true},
+		{endpoint: "localhost:4317"},
+		{endpoint: "127.0.0.1:4317"},
+		{endpoint: "[::1]:4317"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.endpoint, func(t *testing.T) {
+			buf := logsOf(t)
+			tel, err := telemetry.Init(config.OtelConfig{Enabled: true, Endpoint: tt.endpoint, ServiceName: "s", SampleRate: 1})
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+				defer cancel()
+				_ = tel.Shutdown(ctx)
+				_, _ = telemetry.Init(config.OtelConfig{})
+			})
+
+			out := buf.String()
+			if tt.wantWarn {
+				assert.Contains(t, out, "level=WARN")
+				assert.Contains(t, out, "unencrypted")
+				assert.Contains(t, out, tt.endpoint)
+			} else {
+				assert.NotContains(t, out, "unencrypted")
+			}
+		})
+	}
+
+	t.Run("no warning with telemetry off", func(t *testing.T) {
+		buf := logsOf(t)
+		_, err := telemetry.Init(config.OtelConfig{Endpoint: "collector:4317"})
+		require.NoError(t, err)
+		assert.NotContains(t, buf.String(), "unencrypted")
+	})
 }

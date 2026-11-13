@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	noopmetric "go.opentelemetry.io/otel/metric/noop"
 )
 
 // ErrAuthDepsMissing is returned by Setup when AUTH_ENABLED is true and an
@@ -185,7 +186,11 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 		router.Use(middleware.HTTPMetrics())
 	}
 	if cfg.Otel.Enabled {
-		router.Use(otelgin.Middleware(cfg.Otel.ServiceName))
+		// otelgin also records http.server.request.duration and body-size
+		// histograms through the global provider. HTTPMetrics is the one
+		// recorder of request metrics (its own buckets and bounded labels),
+		// so otelgin gets a no-op meter and only traces.
+		router.Use(otelgin.Middleware(cfg.Otel.ServiceName, otelgin.WithMeterProvider(noopmetric.NewMeterProvider())))
 	}
 	router.Use(middleware.Logger())
 	router.Use(middleware.Recovery())

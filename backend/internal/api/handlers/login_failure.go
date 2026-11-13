@@ -46,6 +46,28 @@ const (
 	loginReasonSessionError = "session_error" // the refresh session could not be stored or checked
 )
 
+// knownLoginReasons is the set of loginReason* constants. The "reason" metric
+// label takes only these: anything else is "other", so no caller can open a
+// series per free-text value.
+var knownLoginReasons = map[string]bool{
+	loginReasonUserNotFound: true, loginReasonPasswordMismatch: true, loginReasonNoPassword: true,
+	loginReasonHashInvalid: true, loginReasonNotLocal: true, loginReasonPasswordTooLong: true,
+	loginReasonRereadNotFound: true, loginReasonHashChanged: true, loginReasonDisabled: true,
+	loginReasonLocalLoginNotAllowed: true, loginReasonAccountThrottled: true, loginReasonRecheckFailed: true,
+	loginReasonSessionRevoked: true, loginReasonLookupError: true, loginReasonCompareError: true,
+	loginReasonRereadError: true, loginReasonTokenError: true, loginReasonRecheckError: true,
+	loginReasonSessionError: true,
+}
+
+// boundedLoginReason returns reason when it is a loginReason* constant, else
+// "other".
+func boundedLoginReason(reason string) string {
+	if knownLoginReasons[reason] {
+		return reason
+	}
+	return "other"
+}
+
 // maxLoggedUsernameLen caps the username in a log line: the value is client
 // input and is not checked before the lookup.
 const maxLoggedUsernameLen = 64
@@ -70,7 +92,7 @@ type loginFailure struct {
 func (h *AuthHandler) logLoginFailure(f loginFailure) {
 	// The reason is one of the loginReason* constants, so the label stays
 	// low-cardinality. Throttled attempts are counted by their own log line.
-	middleware.RecordLoginFailure("local", "failure", f.reason)
+	middleware.RecordLoginFailure("local", "failure", boundedLoginReason(f.reason))
 	attrs := []any{
 		"reason", f.reason,
 		// The username is logged also for user_not_found, the case where it

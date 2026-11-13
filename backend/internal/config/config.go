@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -324,8 +325,9 @@ func (c *Config) GinMode() string {
 // switches are off by default and nothing is created while they are off.
 type OtelConfig struct {
 	// Endpoint is OTEL_EXPORTER_OTLP_ENDPOINT (default localhost:4317): the
-	// gRPC address of the collector, host:port without a scheme. The
-	// connection is not encrypted.
+	// gRPC address of the collector as host:port (LoadConfig reduces an
+	// http:// URL to it and refuses https://). The connection is not
+	// encrypted.
 	Endpoint string
 	// ServiceName is OTEL_SERVICE_NAME (default backend-api): the
 	// service.name of every span, metric and log record.
@@ -718,7 +720,44 @@ func loadOtelConfig() (OtelConfig, error) {
 		return OtelConfig{}, err
 	}
 
+	if cfg.Endpoint, err = normalizeOTLPEndpoint(cfg.Endpoint); err != nil {
+		return OtelConfig{}, err
+	}
+
 	return cfg, nil
+}
+
+// normalizeOTLPEndpoint reduces OTEL_EXPORTER_OTLP_ENDPOINT to the host:port
+// that the exporters take. It accepts that form and the standard URL form of
+// the variable with an http:// scheme (and at most a trailing slash). An
+// https:// URL is refused: the exporters use plain gRPC, so accepting it would
+// run unencrypted although the operator asked for TLS. A path, query,
+// fragment or credentials are refused too: the exporters would ignore them.
+func normalizeOTLPEndpoint(raw string) (string, error) {
+	const name = "OTEL_EXPORTER_OTLP_ENDPOINT"
+
+	if !strings.Contains(raw, "://") {
+		return raw, nil
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("%s must be host:port or an http:// URL", name)
+	}
+
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+	case "https":
+		return "", fmt.Errorf("%s: https is not supported (the OTLP connection is not encrypted); use host:port or an http:// URL to a collector on a trusted network", name)
+	default:
+		return "", fmt.Errorf("%s must be host:port or an http:// URL", name)
+	}
+
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil || u.Opaque != "" {
+		return "", fmt.Errorf("%s must be host:port or an http:// URL without path, query or credentials", name)
+	}
+
+	return u.Host, nil
 }
 
 // parseEnvBoolStrict reads a boolean from the environment. Surrounding

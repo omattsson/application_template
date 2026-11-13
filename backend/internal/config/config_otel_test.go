@@ -70,8 +70,33 @@ func TestLoadConfigOtelValidation(t *testing.T) {
 			wantErr: "OTEL_TRACE_SAMPLE_RATE",
 		},
 		{
-			name:    "endpoint with a scheme",
-			env:     map[string]string{"OTEL_ENABLED": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4317"},
+			name:    "https endpoint (TLS is not supported)",
+			env:     map[string]string{"OTEL_ENABLED": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector:4317"},
+			wantErr: "https",
+		},
+		{
+			name:    "endpoint with a path",
+			env:     map[string]string{"OTEL_ENABLED": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4317/v1/traces"},
+			wantErr: "OTEL_EXPORTER_OTLP_ENDPOINT",
+		},
+		{
+			name:    "endpoint with a query",
+			env:     map[string]string{"OTEL_ENABLED": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4317?x=1"},
+			wantErr: "OTEL_EXPORTER_OTLP_ENDPOINT",
+		},
+		{
+			name:    "endpoint with credentials",
+			env:     map[string]string{"OTEL_ENABLED": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://user:pw@collector:4317"},
+			wantErr: "OTEL_EXPORTER_OTLP_ENDPOINT",
+		},
+		{
+			name:    "unsupported scheme",
+			env:     map[string]string{"OTEL_ENABLED": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "grpc://collector:4317"},
+			wantErr: "OTEL_EXPORTER_OTLP_ENDPOINT",
+		},
+		{
+			name:    "URL without a port",
+			env:     map[string]string{"OTEL_ENABLED": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector"},
 			wantErr: "OTEL_EXPORTER_OTLP_ENDPOINT",
 		},
 		{
@@ -115,6 +140,32 @@ func TestLoadConfigOtelValidation(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, cfg)
 			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestLoadConfigOtelEndpointForms: the standard URL form of the variable is
+// accepted and reduced to host:port, which is what the exporters take.
+func TestLoadConfigOtelEndpointForms(t *testing.T) {
+	tests := []struct{ raw, want string }{
+		{raw: "collector:4317", want: "collector:4317"},
+		{raw: "http://collector:4317", want: "collector:4317"},
+		{raw: "http://collector:4317/", want: "collector:4317"},
+		{raw: "HTTP://Collector:4317", want: "Collector:4317"},
+		{raw: " http://127.0.0.1:4317 ", want: "127.0.0.1:4317"},
+		{raw: "http://[::1]:4317", want: "[::1]:4317"},
+		{raw: "[::1]:4317", want: "[::1]:4317"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.raw, func(t *testing.T) {
+			t.Setenv("ENV_FILE", "/nonexistent/.env")
+			t.Setenv("OTEL_ENABLED", "true")
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", tt.raw)
+
+			cfg, err := config.LoadConfig()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.Otel.Endpoint)
 		})
 	}
 }

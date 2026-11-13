@@ -27,7 +27,7 @@ Where things are. Run `ls` when a file is missing here: the tree below lists the
 ```text
 backend/
 ├── api/
-│   ├── main.go                # config -> database -> services -> HTTP server -> signal -> shutdown; Swagger header
+│   ├── main.go                # config -> telemetry -> database -> services -> HTTP server -> signal -> shutdown; Swagger header
 │   └── bootstrap.go           # initTelemetry, initDatabase, buildServices, buildRouter, startHTTPServer, shutdown (ordered)
 ├── internal/
 │   ├── api/

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -115,11 +116,33 @@ func Init(cfg config.OtelConfig) (*Telemetry, error) {
 			"service", cfg.ServiceName,
 			"sample_rate", cfg.SampleRate,
 		)
+		warnPlaintext(cfg.Endpoint)
 	}
 	if cfg.MetricsEnabled {
 		slog.Info("Prometheus metrics enabled")
 	}
 	return tel, nil
+}
+
+// warnPlaintext warns when the collector is not on this host: the exporters
+// use plain gRPC (WithInsecure, which also overrides
+// OTEL_EXPORTER_OTLP_CERTIFICATE), so spans, metrics and logs, and any header,
+// cross the network unencrypted. A collector on the loopback interface, or on
+// a private network that the operator trusts (Compose service, sidecar), is
+// the intended use; the warning keeps the choice visible.
+func warnPlaintext(endpoint string) {
+	host, _, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		host = endpoint
+	}
+	if host == "localhost" {
+		return
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return
+	}
+	slog.Warn("OTLP export is unencrypted: spans, metrics and logs travel to the collector in plaintext; use a collector on this host or on a trusted private network",
+		"endpoint", endpoint)
 }
 
 // InitWithBackends is Init with the destinations given by the caller. With no

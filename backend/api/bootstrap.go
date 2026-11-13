@@ -58,6 +58,11 @@ var openRepository = database.NewRepository
 // exit ends the process. Tests replace it.
 var exit = os.Exit
 
+// startFailureHook runs before the process exits because the HTTP server
+// could not start. main sets it to flush the telemetry, so the "Failed to
+// start server" record reaches the collector. Tests replace it.
+var startFailureHook = func() { /* nothing to flush until main sets it */ }
+
 // The interfaces below are the parts of each service that shutdown uses.
 // Tests pass fakes to check the order.
 
@@ -454,6 +459,7 @@ func startHTTPServer(cfg *config.Config, handler http.Handler) *http.Server {
 	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", srv.Addr)
 	if err != nil {
 		slog.Error("Failed to start server", "error", err)
+		startFailureHook()
 		exit(1)
 		return srv
 	}
@@ -465,6 +471,7 @@ func startHTTPServer(cfg *config.Config, handler http.Handler) *http.Server {
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("Failed to start server", "error", err)
+			startFailureHook()
 			exit(1)
 		}
 	}()

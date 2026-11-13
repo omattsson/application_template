@@ -218,7 +218,11 @@ func (a *APIKeyAuthenticator) middleware(jwtMW gin.HandlerFunc) gin.HandlerFunc 
 		case bearer:
 			jwtMW(c)
 		case !hasKey:
-			RecordJWTAuth(jwtOutcomeMissing) // no credential of either kind
+			if c.GetHeader("Authorization") != "" {
+				RecordJWTAuth(jwtOutcomeMalformed) // an Authorization header that is not a bearer token
+			} else {
+				RecordJWTAuth(jwtOutcomeMissing) // no credential of either kind
+			}
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": msgAuthRequired})
 		case len(keyValues) > 1:
 			RecordAPIKeyAuth(apiKeyOutcomeRepeated)

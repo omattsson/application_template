@@ -485,6 +485,31 @@ func TestStartHTTPServerBindFailureExits(t *testing.T) {
 	assert.Equal(t, 1, code)
 }
 
+// TestStartHTTPServerBindFailureFlushesTelemetry: the "Failed to start server"
+// record must reach the collector, so the start-failure hook (main sets it to
+// flush the telemetry) runs before the process exits.
+func TestStartHTTPServerBindFailureFlushesTelemetry(t *testing.T) {
+	// Not parallel: it replaces package-level functions.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	var order []string
+	prevExit, prevHook := exit, startFailureHook
+	exit = func(int) { order = append(order, "exit") }
+	startFailureHook = func() { order = append(order, "flush") }
+	t.Cleanup(func() { exit, startFailureHook = prevExit, prevHook })
+
+	cfg := bootstrapTestConfig()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	require.NoError(t, err)
+	cfg.Server.Port = port
+
+	startHTTPServer(cfg, http.NewServeMux())
+
+	assert.Equal(t, []string{"flush", "exit"}, order)
+}
+
 func TestShutdownTimeout(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapTestConfig()
