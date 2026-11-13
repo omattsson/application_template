@@ -434,6 +434,52 @@ func assertClosedInRunM(t *testing.T, run, m int, firstSeen map[string]int, ids 
 	return open
 }
 
+// TestRevocationCheckerPartialRunsWithEscalation combines the two limits: a
+// store that lets a run verify only K of N identities (the rest of the run
+// hits its deadline) and the fail-closed escalation after M runs without a
+// verification. The runs go through the identities in turn, so an identity
+// is closed only when a full turn takes M runs or more: N/K <= M closes
+// nothing, N/K > M closes the tail in run M.
+func TestRevocationCheckerPartialRunsWithEscalation(t *testing.T) {
+	t.Parallel()
+	const m, perRun = 3, 2
+
+	tests := []struct {
+		name       string
+		n          int
+		wantClosed []string // closed in run m, none before
+	}{
+		{name: "N=6, K=2, M=3: every identity is verified in time", n: 6},
+		{name: "N=8, K=2, M=3: the tail is closed in run 3", n: 8, wantClosed: []string{"jti-6", "jti-7"}},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := newCountingStore(t)
+			store.budget = 3 * perRun // 3 lookups per identity: token, session, user block
+			check := newRevocationChecker(store, newFakeUsers(1000), nil,
+				checkerConfig{failClosed: true, lookupTimeout: defaultLookupTimeout, maxUnverifiedRuns: m}).check
+			ids := jwtIdentities(tt.n)
+
+			for run := 1; run <= m; run++ {
+				got := runOnce(check, store, ids)
+				var closed []string
+				for i, r := range got {
+					if r {
+						closed = append(closed, ids[i].TokenID)
+					}
+				}
+				if run < m {
+					assert.Empty(t, closed, "run %d closes nothing before the M-th run", run)
+					continue
+				}
+				assert.ElementsMatch(t, tt.wantClosed, closed, "run %d", run)
+			}
+		})
+	}
+}
+
 // TestRevocationCheckerHungLookupFailsClosed: a lookup that hangs until its
 // context ends fails on its own timeout while the run still has time: that is
 // a store failure, so it fails closed in the same run.

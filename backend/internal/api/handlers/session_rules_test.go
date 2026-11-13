@@ -23,8 +23,9 @@ func TestAPIKeyEndpointsAllowOnlyAJWTSession(t *testing.T) {
 	t.Parallel()
 	env := newKeyEnv(t, nil)
 
-	// The context keys of the middleware package ("userID", "authMethod").
-	// A future auth middleware that sets a new method must not pass.
+	// The identity is set the way the middleware package does ("auth.userID",
+	// "auth.method"). A future auth middleware that sets a new method must
+	// not pass.
 	methods := []struct{ name, method string }{
 		{name: "no method", method: ""},
 		{name: "unknown method", method: "cookie"},

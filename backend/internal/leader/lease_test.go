@@ -129,10 +129,9 @@ func (tr *tracker) notify() {
 	}
 }
 
-// callbacks returns onStarted and onStopped for replica id. onStarted
-// blocks until its ctx ends, like a leader callback that blocks for the
-// whole term, so the test
-// also checks that the ctx is cancelled when leadership ends.
+// callbacks returns onStarted and onStopped for replica id. onStarted blocks
+// until its ctx ends, like a leader callback that runs for the whole term, so
+// the test also checks that the ctx is cancelled when leadership ends.
 func (tr *tracker) callbacks(t *testing.T, id string) (func(context.Context), func()) {
 	t.Helper()
 	var startedFlag atomic.Bool

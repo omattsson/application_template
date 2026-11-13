@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -88,32 +87,21 @@ func (m *MockSQLDB) Close() error {
 	return args.Error(0)
 }
 
-// Helper function to set up environment variables for testing
-func setupTestEnv() {
-	os.Setenv("APP_NAME", "testapp")
-	os.Setenv("GO_ENV", "testing")
-	os.Setenv("APP_DEBUG", "true")
-	os.Setenv("DB_HOST", "testhost")
-	os.Setenv("DB_PORT", "3306")
-	os.Setenv("DB_USER", "testuser")
-	os.Setenv("DB_PASSWORD", "testpass")
-	os.Setenv("DB_NAME", "testdb")
-	os.Setenv("SERVER_HOST", "localhost")
-	os.Setenv("SERVER_PORT", "8082") // Use different port for tests
-}
-
-// Helper function to clean up environment variables after testing
-func cleanupTestEnv() {
-	vars := []string{
-		"APP_NAME", "GO_ENV", "APP_DEBUG",
-		"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
-		"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_LIFETIME",
-		"SERVER_HOST", "SERVER_PORT", "SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT", "SERVER_SHUTDOWN_TIMEOUT",
-		"LOG_LEVEL", "LOG_FILE",
-	}
-	for _, v := range vars {
-		os.Unsetenv(v)
-	}
+// setupTestEnv sets the environment variables of the config test. t.Setenv
+// restores them when the test ends, so they cannot leak into the other tests
+// of the process (TestDatabaseInitialization reads DB_HOST).
+func setupTestEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("APP_NAME", "testapp")
+	t.Setenv("GO_ENV", "testing")
+	t.Setenv("APP_DEBUG", "true")
+	t.Setenv("DB_HOST", "testhost")
+	t.Setenv("DB_PORT", "3306")
+	t.Setenv("DB_USER", "testuser")
+	t.Setenv("DB_PASSWORD", "testpass")
+	t.Setenv("DB_NAME", "testdb")
+	t.Setenv("SERVER_HOST", "localhost")
+	t.Setenv("SERVER_PORT", "8082") // Use different port for tests
 }
 
 // Mock functions to replace the actual implementations
@@ -151,10 +139,9 @@ func mockLoadConfig() (*config.Config, error) {
 // Tests for main.go functions
 
 func TestConfigLoading(t *testing.T) {
-	t.Parallel()
-	// Setup test environment
-	setupTestEnv()
-	t.Cleanup(cleanupTestEnv)
+	// Not parallel: t.Setenv changes the process environment, and a serial
+	// test restores it before the parallel tests continue.
+	setupTestEnv(t)
 
 	// Test LoadConfig directly
 	cfg, err := config.LoadConfig()

@@ -66,10 +66,15 @@ type fakeServer struct {
 	name string
 	// hang makes Shutdown block until ctx ends, like a hung request.
 	hang bool
+	// entered is the time Shutdown was called (set when hang is true).
+	entered time.Time
 }
 
 func (f *fakeServer) Shutdown(ctx context.Context) error {
 	f.rec.add(f.name)
+	if f.hang {
+		f.entered = time.Now()
+	}
 	if f.hang {
 		<-ctx.Done()
 		return ctx.Err()
@@ -93,14 +98,16 @@ func (f *fakeLeader) Close(timeout time.Duration) bool {
 
 // ctxState is the state of a step context when the step started.
 type ctxState struct {
-	err  error
-	left time.Duration // time until the deadline; 0 without one
+	err      error
+	left     time.Duration // time until the deadline; 0 without one
+	deadline time.Time     // zero without one
 }
 
 func stateOf(ctx context.Context) ctxState {
 	st := ctxState{err: ctx.Err()}
 	if dl, ok := ctx.Deadline(); ok {
 		st.left = time.Until(dl)
+		st.deadline = dl
 	}
 	return st
 }
@@ -273,10 +280,12 @@ func TestShutdownCompletesWithinTimeout(t *testing.T) {
 				s.inFlight = tracker
 			}
 
+			// start before the ctx: elapsed can then not be shorter than the
+			// timeout, however late the goroutine gets to run.
+			start := time.Now()
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 
-			start := time.Now()
 			done := make(chan error, 1)
 			go func() { done <- shutdown(ctx, s) }()
 
@@ -294,7 +303,7 @@ func TestShutdownCompletesWithinTimeout(t *testing.T) {
 			// Each hung step waits its own budget (see shutdown): at most
 			// two budgets here.
 			assert.Less(t, elapsed, 2*time.Second, "shutdown must not wait past the step budgets")
-			assert.GreaterOrEqual(t, elapsed, timeout-20*time.Millisecond)
+			assert.GreaterOrEqual(t, elapsed, timeout, "a hung step waits for its whole budget")
 			// The steps after the hung one still ran.
 			calls := rec.list()
 			assert.Contains(t, calls, "hub")
@@ -308,13 +317,18 @@ func TestShutdownCompletesWithinTimeout(t *testing.T) {
 // TestShutdownBudgetsAreIndependent checks that a hung HTTP shutdown, which
 // uses up the whole ctx, does not starve the later steps: the leader group,
 // the in-flight work and the telemetry hook each get their own budget.
+//
+// No assertion depends on how fast the test runs: every bound is computed
+// from times the fakes recorded, so a stalled scheduler (-race, loaded CI)
+// cannot fail it.
 func TestShutdownBudgetsAreIndependent(t *testing.T) {
 	t.Parallel()
 
 	const budget = 300 * time.Millisecond
 	rec := &callRecorder{}
 	s := fakeServices(rec)
-	s.servers = []httpServer{&fakeServer{rec: rec, name: "server", hang: true}}
+	hung := &fakeServer{rec: rec, name: "server", hang: true}
+	s.servers = []httpServer{hung}
 	lead := &fakeLeader{rec: rec}
 	s.leader = lead
 	wait := &fakeWaiter{rec: rec}
@@ -328,19 +342,37 @@ func TestShutdownBudgetsAreIndependent(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
+	sharedDeadline, ok := ctx.Deadline()
+	require.True(t, ok)
 	err := shutdown(ctx, s)
 
 	require.ErrorIs(t, err, context.DeadlineExceeded, "the hung HTTP shutdown is reported")
 	assert.Equal(t, []string{
 		"server", "server close", "leader group", "in-flight", "hub", "telemetry", "rate limiters", "database",
 	}, rec.list())
-	assert.Error(t, ctx.Err(), "the HTTP step used up the shared ctx")
+	// The shared ctx timer fires on its own goroutine; wait for it instead of
+	// reading Err() at one instant.
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the shared ctx never ended")
+	}
 
-	assert.GreaterOrEqual(t, lead.timeout, budget-50*time.Millisecond, "leader step got its own budget")
+	// The leader budget was measured when shutdown started, which is before
+	// the hung server was entered and after the ctx was created: so it lies
+	// between the time left at that point and the whole budget.
+	assert.LessOrEqual(t, lead.timeout, budget)
+	assert.GreaterOrEqual(t, lead.timeout, sharedDeadline.Sub(hung.entered), "leader step got its own budget")
+
+	// The later steps run on contexts of their own: live, and with a deadline
+	// a whole budget after the shared one (the hung step used its budget
+	// first, so each later deadline is at least one budget past it).
 	assert.NoError(t, wait.got.err, "in-flight step got a live ctx")
-	assert.Greater(t, wait.got.left, budget/2)
+	assert.Positive(t, wait.got.left)
+	assert.GreaterOrEqual(t, wait.got.deadline.Sub(sharedDeadline), lead.timeout, "in-flight deadline is not the shared one")
 	assert.NoError(t, tel.err, "telemetry hook got a live ctx")
-	assert.Greater(t, tel.left, budget/2)
+	assert.Positive(t, tel.left)
+	assert.GreaterOrEqual(t, tel.deadline.Sub(sharedDeadline), lead.timeout, "telemetry deadline is not the shared one")
 }
 
 func TestShutdownStepBudget(t *testing.T) {

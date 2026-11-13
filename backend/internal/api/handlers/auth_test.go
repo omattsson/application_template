@@ -917,7 +917,10 @@ func TestLoginAccentVariantsShareTheAccountThrottle(t *testing.T) {
 		account := probe(t, "aaaa")  // variants of the existing account
 		unknown := probe(t, "aaaaz") // variants of a name that does not exist
 
-		assert.Equal(t, unknown, account)
+		require.Len(t, account, len(unknown))
+		for i := range unknown {
+			assertSameAnswer(t, unknown[i], account[i])
+		}
 		assert.Equal(t, http.StatusUnauthorized, account[0].code, "no 429 right after the variant failures")
 		assert.Empty(t, account[0].retryAfter)
 		assert.Equal(t, http.StatusTooManyRequests, account[loginFailureThreshold].code, "the name key locks after its own failures")
@@ -987,6 +990,24 @@ type loginAnswer struct {
 	body       string
 	retryAfter string
 	code       int
+}
+
+// assertSameAnswer compares two answers of independent throttles: status and
+// body exactly, Retry-After within one second (each throttle reads its own
+// clock, so a second boundary can fall between the two answers).
+func assertSameAnswer(t *testing.T, want, got loginAnswer) {
+	t.Helper()
+	assert.Equal(t, want.code, got.code)
+	assert.Equal(t, want.body, got.body)
+	if want.retryAfter == "" || got.retryAfter == "" {
+		assert.Equal(t, want.retryAfter, got.retryAfter, "Retry-After is set on both answers or on neither")
+		return
+	}
+	w, werr := strconv.Atoi(want.retryAfter)
+	g, gerr := strconv.Atoi(got.retryAfter)
+	require.NoError(t, werr)
+	require.NoError(t, gerr)
+	assert.InDelta(t, w, g, 1, "Retry-After of the two throttles")
 }
 
 func answerOf(w *httptest.ResponseRecorder) loginAnswer {

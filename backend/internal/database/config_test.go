@@ -7,23 +7,16 @@ import (
 	appconfig "backend/internal/config"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewConfig(t *testing.T) {
 	t.Run("With environment variables", func(t *testing.T) {
-		// Set test environment variables
-		os.Setenv("DB_HOST", "testhost")
-		os.Setenv("DB_PORT", "3307")
-		os.Setenv("DB_USER", "testuser")
-		os.Setenv("DB_PASSWORD", "testpass")
-		os.Setenv("DB_NAME", "testdb")
-		defer func() {
-			os.Unsetenv("DB_HOST")
-			os.Unsetenv("DB_PORT")
-			os.Unsetenv("DB_USER")
-			os.Unsetenv("DB_PASSWORD")
-			os.Unsetenv("DB_NAME")
-		}()
+		t.Setenv("DB_HOST", "testhost")
+		t.Setenv("DB_PORT", "3307")
+		t.Setenv("DB_USER", "testuser")
+		t.Setenv("DB_PASSWORD", "testpass")
+		t.Setenv("DB_NAME", "testdb")
 
 		config := NewConfig()
 
@@ -35,12 +28,11 @@ func TestNewConfig(t *testing.T) {
 	})
 
 	t.Run("With default values", func(t *testing.T) {
-		// Clear environment variables
-		os.Unsetenv("DB_HOST")
-		os.Unsetenv("DB_PORT")
-		os.Unsetenv("DB_USER")
-		os.Unsetenv("DB_PASSWORD")
-		os.Unsetenv("DB_NAME")
+		// Clear the variables; t.Setenv restores the original values.
+		for _, k := range []string{"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"} {
+			t.Setenv(k, "")
+			require.NoError(t, os.Unsetenv(k))
+		}
 
 		config := NewConfig()
 

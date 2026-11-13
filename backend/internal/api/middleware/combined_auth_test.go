@@ -102,7 +102,9 @@ func TestCombinedAuthSetsContext(t *testing.T) {
 
 func TestCombinedAuthPassesStoreSettings(t *testing.T) {
 	t.Parallel()
-	failing := failingStore{SessionStore: sessionstore.NewMemory(), err: assert.AnError}
+	memory := sessionstore.NewMemory()
+	t.Cleanup(memory.Stop)
+	failing := failingStore{SessionStore: memory, err: assert.AnError}
 	tok, err := GenerateToken("u1", "alice", "user", testSecret, time.Hour)
 	require.NoError(t, err)
 	h := map[string]string{"Authorization": "Bearer " + tok}

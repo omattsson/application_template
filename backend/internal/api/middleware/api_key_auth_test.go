@@ -445,9 +445,11 @@ func TestCombinedAuthAPIKeyIgnoresTheSessionStore(t *testing.T) {
 	t.Parallel()
 	client, rec := issuedKey(t, "k1", "u1", inHours(24))
 	users := newUserRepoFake(&models.User{ID: "u1", Username: "alice", Role: models.RoleUser})
+	memory := sessionstore.NewMemory()
+	t.Cleanup(memory.Stop)
 	for _, strict := range []bool{false, true} {
 		deps := keyDeps(newKeyRepoFake(rec), users)
-		deps.SessionStore = failingStore{SessionStore: sessionstore.NewMemory(), err: assert.AnError}
+		deps.SessionStore = failingStore{SessionStore: memory, err: assert.AnError}
 		deps.FailClosedOnStoreError = strict
 		w := doGet(keyRouter(deps), "/protected", map[string]string{"X-API-Key": client})
 		assert.Equal(t, http.StatusOK, w.Code, "strict=%v", strict)

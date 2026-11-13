@@ -367,13 +367,17 @@ func TestAuditInFlightWritesAreBounded(t *testing.T) {
 	waitRecorded(t, rec)
 	assert.Len(t, sink.snapshot(), 2)
 
-	// A slot is free again once the writes ended.
-	rec2 := newAuditRecorder(&auditSink{}, 1)
+	// A slot is free again once its write ended: a second entry is recorded,
+	// not dropped.
+	sink2 := &auditSink{}
+	rec2 := newAuditRecorder(sink2, 1)
 	r2 := auditRouter(rec2, "u-1")
-	for i := 0; i < 20; i++ {
-		serve(r2, http.MethodPost, "/api/v1/items", "{}")
-		time.Sleep(time.Millisecond)
+	for i := 1; i <= 2; i++ {
+		require.Equal(t, http.StatusCreated, serve(r2, http.MethodPost, "/api/v1/items", "{}").Code)
+		require.Eventually(t, func() bool { return len(sink2.snapshot()) == i && len(rec2.sem) == 0 },
+			5*time.Second, time.Millisecond, "write %d ended and released its slot", i)
 	}
+	assert.Zero(t, rec2.Dropped(), "no entry was dropped")
 	waitRecorded(t, rec2)
 }
 
@@ -394,18 +398,23 @@ func TestAuditWriteContextIsDetachedAndBounded(t *testing.T) {
 	t.Parallel()
 	sink := &auditSink{}
 	rec := NewAuditRecorder(sink)
-	r := auditRouter(rec, "u-1")
 
+	// The client leaves while the handler runs: the handler cancels the
+	// request context itself, so the cancel always comes before the audit
+	// middleware submits the entry, with no timing involved.
 	reqCtx, cancelReq := context.WithCancel(context.Background())
+	defer cancelReq()
+	r := gin.New()
+	r.Use(RequestID(), identity("u-1", "alice", models.RoleAdmin), rec.Middleware())
+	r.POST("/api/v1/items", func(c *gin.Context) {
+		SetAuditEntityID(c, "42")
+		cancelReq()
+		c.JSON(http.StatusCreated, gin.H{})
+	})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/items", strings.NewReader("{}")).WithContext(reqCtx)
 	w := httptest.NewRecorder()
-	go func() {
-		// Cancel as the request ends: the write must still go through.
-		time.Sleep(time.Millisecond)
-		cancelReq()
-	}()
 	r.ServeHTTP(w, req)
-	cancelReq()
+	require.Error(t, reqCtx.Err(), "the request context ended before the entry was written")
 	waitRecorded(t, rec)
 
 	require.Len(t, sink.snapshot(), 1, "a client that left does not skip the entry")

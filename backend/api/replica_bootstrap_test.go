@@ -255,6 +255,17 @@ func TestElectedLeaderKeepsLeaseWhileWorkersHang(t *testing.T) {
 	assert.False(t, e.Close(100*time.Millisecond), "the hung worker is reported")
 	assert.False(t, g.Running())
 
+	// Another replica tries to take the lease for the whole wait below: about
+	// 2*Duration/RetryPeriod = 24 attempts, twice as long as the lease lasts
+	// without renewal. It must never start.
+	other := leader.NewLease(db, "workers", "other", cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	otherDone := make(chan struct{})
+	go func() {
+		defer close(otherDone)
+		other.Run(ctx, func(context.Context) { t.Error("another replica started while the worker runs") }, func() {})
+	}()
+
 	// Held: this replica is still the holder and the expiry is in the
 	// future, also after more than one lease duration (the election renews).
 	time.Sleep(2 * cfg.Duration)
@@ -266,15 +277,6 @@ func TestElectedLeaderKeepsLeaseWhileWorkersHang(t *testing.T) {
 		t.Fatal("the election ended")
 	default:
 	}
-	// Another replica cannot take it.
-	other := leader.NewLease(db, "workers", "other", cfg)
-	ctx, cancel := context.WithCancel(context.Background())
-	otherDone := make(chan struct{})
-	go func() {
-		defer close(otherDone)
-		other.Run(ctx, func(context.Context) { t.Error("another replica started while the worker runs") }, func() {})
-	}()
-	time.Sleep(3 * cfg.RetryPeriod)
 	cancel()
 	<-otherDone
 }
