@@ -59,7 +59,7 @@ The entry point is `api/main.go`. The helpers (database, services, router, HTTP 
 - Validate JSON responses with `gojsonschema` against the schemas in `test_schemas.go`.
 - Run unit tests: `go test ./... -v -short`, or `make test-backend-unit` at the root (with `-race`).
 - Integration tests need MySQL and the build tag `integration`: `make test-backend-all` at the root starts MySQL and runs them with `-p 1`.
-- Coverage (80% threshold, total): `make test-coverage` in this directory.
+- Coverage (80% for each package of `coverage-packages.txt`, not a total): `make test-coverage` in this directory or at the root. A package you add goes into that list in the same change.
 
 ## Swagger/OpenAPI
 

@@ -1,0 +1,31 @@
+# Packages in the coverage gate of "make test-coverage" (80% per package).
+# One Go package per line, as a path relative to backend/. Blank lines and
+# lines starting with # are ignored.
+#
+# The list holds every package that has non-test Go code added or changed
+# since the merge base 5b2e7ce of this backport branch: derived with
+#   git diff --name-only 5b2e7ce2e414efd935f87587e6ea1be32863a0b1..HEAD -- backend
+# Add a new package here in the same change that adds it.
+#
+# Not listed, on purpose:
+#   ./docs                                 generated Swagger spec (swag init), no logic
+#   ./internal/auth/authtest               test helper for other packages' tests
+#
+./api
+./internal/api/handlers
+./internal/api/middleware
+./internal/api/routes
+./internal/auth
+./internal/config
+./internal/ctxutil
+./internal/database
+./internal/database/schema
+./internal/inflight
+./internal/leader
+./internal/logutil
+./internal/models
+./internal/replica
+./internal/sessionstore
+./internal/telemetry
+./internal/websocket
+./pkg/dberrors

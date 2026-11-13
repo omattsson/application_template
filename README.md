@@ -128,6 +128,10 @@ The complete file tree is in [docs/claude/structure.md](docs/claude/structure.md
 - `make docs` - Generate API documentation
 - `make fmt` - Format code
 - `make lint` - Run linters
+- `make test-coverage` - Backend unit tests with an 80% coverage gate per package
+- `make test-backend-repeat` - Repeat the tests of the changed backend packages with `-race` (`REPEAT_COUNT`, `REPEAT_BASE`)
+- `make seed` - Create sample Items through the API of a running backend
+- `make loadtest` - k6 load tests of the Items API and `/ws` (needs k6; `make loadtest-stress` is the opt-in stress profile)
 
 ### Production
 

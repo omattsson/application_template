@@ -284,6 +284,62 @@ With auth on, every successful `POST`, `PUT`, `PATCH` or `DELETE` of an authenti
 
 With `ENABLE_SWAGGER=true` the UI is at `/swagger/index.html` and stays open even with `AUTH_ENABLED=true`: the spec lists every route. Keep it off in production. Regenerate the spec with `make docs`.
 
+## Coverage, repeated tests, sample data and load tests
+
+None of the variables in this section is read by the backend: they are Make and script variables, set on the command line (`make loadtest LOADTEST_VUS=20`) or in the environment.
+
+### Coverage gate
+
+`make test-coverage` runs the unit tests (`-short`, no database) with `-coverpkg` over the packages of `backend/coverage-packages.txt` and fails when any listed package has less than `COVERAGE_MIN` percent (default 80) on its own; an average would hide a weak package. `-coverpkg` credits a package for what any test binary runs, so the `api` main package is measured through its bootstrap tests (its `main()` is not testable). The list holds every package with non-test Go code added or changed since the backport began; the file says what is left out (generated `docs`, the test helper `auth/authtest`) and how it was derived. Add a package to the list in the change that adds it. Reports: `backend/coverage/coverage.html` and `coverage-summary.txt`. The logic is in `scripts/coverage-gate.sh`.
+
+### Repeated tests
+
+`make test-backend-repeat` runs `go test -short -race -count=$(REPEAT_COUNT)` on the backend packages whose `.go` files changed against `REPEAT_BASE`, to find a flaky test before CI does. It compares the working tree (and untracked files) with the merge base of `REPEAT_BASE` and `HEAD`. Without a changed package it says so and succeeds. If `origin/main` does not exist (a clone without that remote) it uses the local `main`; any other unknown ref is an error.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `REPEAT_COUNT` | `3` | Positive integer. |
+| `REPEAT_BASE` | `origin/main` | Any ref, for example `main` or a commit. |
+| `COVERAGE_MIN` | `80` | Minimum percent per package for `make test-coverage`. |
+
+### Sample data
+
+`make seed` runs `scripts/seed-dev-data.sh` against a running backend (`make dev` or `make dev-backend`) and creates `SEED_COUNT` Items named `Sample Item 01`, `Sample Item 02`, and so on. It only creates: an Item whose exact name exists is skipped, so a second run changes nothing. A `429` is retried (the default `RATE_LIMIT` is 100 requests per minute).
+
+| Variable | Default | Notes |
+|---|---|---|
+| `API_URL` | `http://localhost:8081` | Base URL of the API. |
+| `SEED_COUNT` | `10` | Number of sample Items. |
+| `API_TOKEN` | none | Access token, for a backend with `AUTH_ENABLED=true`. |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | `admin`, none | With auth on and no `API_TOKEN`, the script logs in with them. Give the password in the environment, never in a file of the repository. |
+
+With auth off no credential is needed.
+
+### Load tests
+
+`make loadtest` runs two k6 scripts against a **running** backend with the `k6` binary on your machine (install: <https://grafana.com/docs/k6/latest/set-up/install-k6/>; the scripts are written for k6 1.x and checked with 2.4). There is no Docker variant: one tool, one way to run it. `make -n loadtest` works without k6; only running it needs the binary (`K6=/path/to/k6` picks another one).
+
+- `loadtest/k6-api.js`: two scenarios for `LOADTEST_DURATION`: `browse` (`LOADTEST_VUS` users list, filter and read Items) and `crud` (half as many users create, read, update and delete an Item). `SCENARIO=browse` or `SCENARIO=crud` runs one.
+- `loadtest/k6-websocket.js`: `LOADTEST_VUS` clients open `/ws` and subscribe to `items` while one writer creates and deletes Items, so every listener receives the broadcasts.
+- `loadtest/k6-stress.js` (`make loadtest-stress`): opt-in. It ramps up to `LOADTEST_STRESS_VUS` users in steps of `LOADTEST_STRESS_STEP` with 80% reads and 20% create-and-delete, with thresholds three times looser. It is never part of `make loadtest`.
+
+Thresholds make k6, and so `make`, exit non-zero on a regression: error rate, check pass rate and p95/p99 latency of every request (the WebSocket run: connection error rate, p95 connect time and at least one broadcast received). The Items the tests create are named `k6-loadtest-...` and deleted again; the teardown removes any a failed iteration left.
+
+Start the backend with a high rate limit, or the default 100 requests per minute per client IP stops the run at once (setup reports a `429`): `RATE_LIMIT=1000000 make dev-backend`. Safety: the scripts refuse a target that is not `localhost`, `127.x.x.x` or `[::1]` unless `LOADTEST_ALLOW_REMOTE=1`, so a stray `API_URL` cannot load a shared backend. They never write to anything but Items.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `API_URL` | `http://localhost:8081` | Target backend. |
+| `LOADTEST_ALLOW_REMOTE` | unset | `1` allows a target that is not local. Use it only for a backend you own. |
+| `LOADTEST_VUS`, `LOADTEST_DURATION` | `10`, `30s` | Virtual users and length of the steady phase. |
+| `LOADTEST_STRESS_VUS`, `LOADTEST_STRESS_STEP` | `100`, `30s` | Peak and step length of the stress profile. |
+| `LOADTEST_P95_MS`, `LOADTEST_P99_MS` | `500`, `1500` | Latency thresholds in milliseconds. |
+| `LOADTEST_ERROR_RATE` | `0.01` | Maximum error rate, 0 to 1. |
+| `K6` | `k6` | The k6 binary. |
+| `API_TOKEN`, `API_KEY`, `ADMIN_USERNAME`, `ADMIN_PASSWORD` | none, none, `admin`, none | For `AUTH_ENABLED=true`, one of the three credentials: an access token (it expires after `ACCESS_TOKEN_EXPIRATION`, 15 m by default), an API key (`X-API-Key`), or a login in `setup()` once for all users. `/ws` takes the token as `?token=` and the key as a header. Pass them in the environment, not on the command line. |
+
+`make check-make-targets` (part of `make lint`, run by CI) fails when one of these targets is missing, is not `.PHONY` or cannot be planned with `make -n`.
+
 ## End-to-end tests
 
 `make test-e2e` (auth off) and `make test-e2e-auth` (auth on) run `scripts/e2e.sh`: MySQL in its own Compose project, a natively built backend, the Vite dev server and Playwright (Chromium). The run sets `RATE_LIMIT=10000` and `LOGIN_RATE_LIMIT=1000` for the backend, because every request comes from 127.0.0.1.

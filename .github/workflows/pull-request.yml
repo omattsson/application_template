@@ -51,6 +51,9 @@ jobs:
       - name: Claude agents and settings
         run: make check-agents
 
+      - name: Make targets
+        run: make check-make-targets
+
       - name: Domain terms
         run: |
           git config --global user.email ci@example.com

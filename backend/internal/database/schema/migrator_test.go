@@ -2,6 +2,7 @@ package schema
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -149,6 +150,74 @@ func TestMigrator(t *testing.T) {
 		var count int64
 		err = db.Model(&SchemaVersion{}).Count(&count).Error
 		assert.NoError(t, err)
+		assert.Equal(t, int64(1), count)
+	})
+
+	t.Run("a failing migration is reported and not recorded", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		migrator := NewMigrator(db)
+		migrator.AddMigration(Migration{
+			Version: "20250602000010",
+			Name:    "broken",
+			Up:      func(tx *gorm.DB) error { return tx.Exec("NOT SQL").Error },
+			Down:    func(tx *gorm.DB) error { return nil },
+		})
+
+		err := migrator.MigrateUp()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to apply migration 20250602000010")
+
+		var count int64
+		require.NoError(t, db.Model(&SchemaVersion{}).Count(&count).Error)
+		assert.Zero(t, count)
+	})
+
+	t.Run("rolling back with nothing applied is a no-op", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NoError(t, db.AutoMigrate(&SchemaVersion{}))
+		assert.NoError(t, NewMigrator(db).MigrateDown())
+	})
+
+	t.Run("rolling back without the version table fails", func(t *testing.T) {
+		t.Parallel()
+		err := NewMigrator(setupTestDB(t)).MigrateDown()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get last migration")
+	})
+
+	t.Run("a failing rollback is reported and keeps the version", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		migrator := NewMigrator(db)
+		migrator.AddMigration(Migration{
+			Version: "20250602000011",
+			Name:    "sticky",
+			Up:      func(tx *gorm.DB) error { return nil },
+			Down:    func(tx *gorm.DB) error { return tx.Exec("NOT SQL").Error },
+		})
+		require.NoError(t, migrator.MigrateUp())
+
+		err := migrator.MigrateDown()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to roll back migration 20250602000011")
+
+		var count int64
+		require.NoError(t, db.Model(&SchemaVersion{}).Count(&count).Error)
+		assert.Equal(t, int64(1), count)
+	})
+
+	t.Run("rolling back an unknown applied version changes nothing", func(t *testing.T) {
+		t.Parallel()
+		db := setupTestDB(t)
+		require.NoError(t, db.AutoMigrate(&SchemaVersion{}))
+		require.NoError(t, db.Create(&SchemaVersion{Version: "20250602000099", Name: "gone", AppliedAt: time.Now()}).Error)
+
+		require.NoError(t, NewMigrator(db).MigrateDown())
+
+		var count int64
+		require.NoError(t, db.Model(&SchemaVersion{}).Count(&count).Error)
 		assert.Equal(t, int64(1), count)
 	})
 }

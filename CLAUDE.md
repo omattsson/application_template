@@ -59,13 +59,17 @@ The steps after the HTTP step have their own budgets, so the worst case is about
 | End-to-end tests, auth off | `make test-e2e` |
 | End-to-end tests, auth on | `make test-e2e-auth` (`E2E_SECURE_COOKIES=true` for the production cookie) |
 | Swagger docs | `make docs` (runs `swag init -g api/main.go` in `backend`) |
-| Coverage (80% threshold) | `cd backend && make test-coverage` |
+| Coverage (80% per package of `backend/coverage-packages.txt`) | `make test-coverage` |
+| Repeat the tests of changed backend packages with `-race` | `make test-backend-repeat` (`REPEAT_COUNT`, `REPEAT_BASE`) |
+| Sample Items through the API of a running backend | `make seed` |
+| k6 load tests of Items and `/ws` (stress profile: `make loadtest-stress`) | `make loadtest` |
 | Format | `make fmt` |
-| Lint (go vet, ESLint, workflow, env docs and agent checks) | `make lint` |
+| Lint (go vet, ESLint, workflow, env docs, agent and make target checks) | `make lint` |
 | Markdown lint | `make lint-docs` |
 | Security scan (backend) | `make gosec` |
 | Environment variable docs match the code | `make check-env-docs` |
 | Claude agents, skill and settings are consistent | `make check-agents` |
+| The ops make targets exist and can be planned | `make check-make-targets` |
 | Domain terms check | `scripts/check-domain-terms.sh` |
 | Install dependencies | `make install` |
 

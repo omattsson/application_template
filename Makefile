@@ -1,4 +1,4 @@
-.PHONY: test-e2e test-e2e-auth gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs check-agents test-backend-unit dev dev-backend dev-frontend dev-otel mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
+.PHONY: test-e2e test-e2e-auth test-coverage test-backend-repeat seed loadtest loadtest-stress check-make-targets gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs check-agents test-backend-unit dev dev-backend dev-frontend dev-otel mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
 
 # MySQL service management
 mysql-start:
@@ -107,6 +107,93 @@ test-backend-all: integration-infra-start
 	cd backend && go test -tags integration -p 1 ./... -v
 	$(MAKE) integration-infra-stop
 
+# Backend unit tests with coverage and a gate: every package of
+# backend/coverage-packages.txt needs COVERAGE_MIN percent (default 80) on its
+# own. Reports: backend/coverage/coverage.html and coverage-summary.txt. See
+# backend/Makefile and scripts/coverage-gate.sh.
+test-coverage:
+	$(MAKE) -C backend test-coverage $(if $(COVERAGE_MIN),COVERAGE_MIN=$(COVERAGE_MIN))
+
+# Repeat (-race, -short, -count=REPEAT_COUNT) the tests of the backend packages
+# that changed against REPEAT_BASE, to catch a flaky test before CI does.
+# Changed = .go files that differ from the merge base of REPEAT_BASE and HEAD
+# (working tree included), plus untracked ones. REPEAT_BASE defaults to
+# origin/main; when that ref does not exist the local main is used, and when
+# neither exists the target stops with an error. No changed package is not an
+# error: there is nothing to repeat. -race needs cgo.
+# The variables are exported and read in the recipe, never pasted into the shell text.
+REPEAT_BASE ?= origin/main
+REPEAT_COUNT ?= 3
+export REPEAT_BASE REPEAT_COUNT
+test-backend-repeat:
+	@case "$$REPEAT_COUNT" in ''|*[!0-9]*|0|0[0-9]*) echo "ERROR: REPEAT_COUNT must be a positive integer, got '$$REPEAT_COUNT'"; exit 1;; esac; \
+	ref="$$REPEAT_BASE"; \
+	if ! git rev-parse --verify --quiet "$$ref^{commit}" >/dev/null; then \
+		if [ "$$ref" = origin/main ] && git rev-parse --verify --quiet "main^{commit}" >/dev/null; then \
+			echo "NOTICE: origin/main does not exist; using the local main as REPEAT_BASE"; ref=main; \
+		else \
+			echo "ERROR: REPEAT_BASE=$$ref is not a known ref. Fetch it, or set REPEAT_BASE (for example REPEAT_BASE=main)."; exit 1; \
+		fi; \
+	fi; \
+	base=$$(git merge-base "$$ref" HEAD) || { echo "ERROR: no merge base of $$ref and HEAD"; exit 1; }; \
+	tracked=$$(git diff --name-only "$$base" -- backend) || { echo "ERROR: git diff failed"; exit 1; }; \
+	untracked=$$(git ls-files --others --exclude-standard -- backend) || { echo "ERROR: git ls-files failed"; exit 1; }; \
+	files=$$(printf '%s\n%s\n' "$$tracked" "$$untracked" | grep '\.go$$' | sort -u || true); \
+	pkgs=""; \
+	for f in $$files; do \
+		d=$$(dirname "$${f#backend/}"); \
+		[ -d "backend/$$d" ] || continue; \
+		ls backend/$$d/*.go >/dev/null 2>&1 || continue; \
+		[ "$$d" = "." ] || d="./$$d"; \
+		pkgs="$$pkgs $$d"; \
+	done; \
+	pkgs=$$(printf '%s\n' $$pkgs | sort -u | tr '\n' ' '); \
+	if [ -z "$$(echo $$pkgs)" ]; then echo "No changed backend Go packages vs $$ref; nothing to repeat."; exit 0; fi; \
+	echo "Repeating tests ($$REPEAT_COUNT x, -race, -short) for: $$pkgs"; \
+	cd backend && go test -short -race -count="$$REPEAT_COUNT" $$pkgs
+
+# Create sample Items through the API of a running backend (make dev or
+# make dev-backend). Needs API_URL (default http://localhost:8081); with
+# AUTH_ENABLED=true also API_TOKEN or ADMIN_PASSWORD (and ADMIN_USERNAME).
+# SEED_COUNT (default 10) items named "Sample Item NN"; a second run creates
+# nothing. See scripts/seed-dev-data.sh.
+seed:
+	scripts/seed-dev-data.sh
+
+# k6 load tests of the Items API and /ws against a RUNNING backend: a local k6
+# binary (https://grafana.com/docs/k6/latest/set-up/install-k6/, the load tests
+# are written for k6 1.x) runs loadtest/k6-api.js and loadtest/k6-websocket.js.
+# k6 is looked up only when the recipe runs, so make -n works without it. K6
+# is the binary to run. The target must be local; LOADTEST_ALLOW_REMOTE=1 allows
+# another one. A crossed threshold (error rate, p95/p99 latency) makes k6, and
+# so make, fail. Start the backend with a high RATE_LIMIT (the default of 100
+# requests per minute per IP stops the test at once), for example:
+#   RATE_LIMIT=1000000 make dev-backend
+# Credentials of a backend with AUTH_ENABLED=true: API_TOKEN, API_KEY or
+# ADMIN_PASSWORD (ADMIN_USERNAME), from the environment, never on a command
+# line. See "Load tests" in docs/claude/operations.md.
+API_URL ?= http://localhost:8081
+K6 ?= k6
+LOADTEST_VUS ?= 10
+LOADTEST_DURATION ?= 30s
+LOADTEST_STRESS_VUS ?= 100
+LOADTEST_STRESS_STEP ?= 30s
+LOADTEST_ENV = API_URL=$(API_URL) LOADTEST_VUS=$(LOADTEST_VUS) LOADTEST_DURATION=$(LOADTEST_DURATION)
+define require_k6
+	@command -v $(K6) >/dev/null 2>&1 || { echo "ERROR: k6 not found ($(K6)). Install it (brew install k6, or https://grafana.com/docs/k6/latest/set-up/install-k6/) or set K6=/path/to/k6."; exit 1; }
+endef
+
+loadtest:
+	$(require_k6)
+	$(LOADTEST_ENV) $(K6) run loadtest/k6-api.js
+	$(LOADTEST_ENV) $(K6) run loadtest/k6-websocket.js
+
+# Opt-in stress profile: ramps up to LOADTEST_STRESS_VUS users, in steps of
+# LOADTEST_STRESS_STEP. Never part of make loadtest. Same safety rules.
+loadtest-stress:
+	$(require_k6)
+	$(LOADTEST_ENV) LOADTEST_STRESS_VUS=$(LOADTEST_STRESS_VUS) LOADTEST_STRESS_STEP=$(LOADTEST_STRESS_STEP) $(K6) run loadtest/k6-stress.js
+
 test-frontend:
 	cd frontend && npm test
 
@@ -161,7 +248,7 @@ fmt:
 	cd backend && go fmt ./...
 	cd frontend && npm run format
 
-lint: lint-backend lint-frontend check-workflows check-env-docs check-agents
+lint: lint-backend lint-frontend check-workflows check-env-docs check-agents check-make-targets
 
 lint-backend:
 	cd backend && go vet ./...
@@ -189,6 +276,12 @@ check-env-docs:
 check-agents:
 	scripts/check-agents.sh --self-test
 	scripts/check-agents.sh
+
+# The ops targets (test-coverage, test-backend-repeat, seed, loadtest,
+# loadtest-stress) exist, are .PHONY and can be planned with make -n (also
+# without k6). CI runs it too.
+check-make-targets:
+	scripts/check-make-targets.sh
 
 # Markdown lint (rules: .markdownlint.yml, ignores: .markdownlint-cli2.jsonc;
 # markdownlint-cli2 does not read .markdownlintignore).
