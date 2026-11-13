@@ -79,6 +79,7 @@ type APIKeyAuthenticator struct {
 	keys       models.APIKeyRepository
 	users      models.UserRepository
 	lastUsed   *lastUsedUpdater
+	errLog     *storeErrorLog
 	failClosed bool
 }
 
@@ -91,6 +92,7 @@ func NewAPIKeyAuthenticator(deps APIKeyAuthDeps) *APIKeyAuthenticator {
 		keys:       deps.APIKeyRepo,
 		users:      deps.UserRepo,
 		lastUsed:   newLastUsedUpdater(),
+		errLog:     newStoreErrorLog(),
 		failClosed: deps.FailClosedOnStoreError,
 	}
 }
@@ -109,39 +111,62 @@ func NewAPIKeyAuthenticator(deps APIKeyAuthDeps) *APIKeyAuthenticator {
 // is cached: a deleted key or a disabled owner is refused by the next
 // request.
 func (a *APIKeyAuthenticator) Authenticate(ctx context.Context, clientKey string) (*APIKeyPrincipal, *APIKeyAuthFailure) {
+	p, failure, outcome := a.verify(ctx, clientKey)
+	RecordAPIKeyAuth(outcome) //nolint:contextcheck // a counter needs no request context
+	return p, failure
+}
+
+// verify is Authenticate with the outcome for the auth.apikey.total metric.
+func (a *APIKeyAuthenticator) verify(ctx context.Context, clientKey string) (*APIKeyPrincipal, *APIKeyAuthFailure, string) {
 	invalid := &APIKeyAuthFailure{Status: http.StatusUnauthorized, Message: msgInvalidAPIKey}
 
 	rawKey, ok := models.ParseAPIKey(clientKey)
 	if !ok {
-		return nil, invalid
+		return nil, invalid, apiKeyOutcomeMalformed
 	}
 
 	records, err := a.keys.FindByPrefix(ctx, rawKey[:models.APIKeyPrefixLen])
 	if err != nil {
 		if errors.Is(err, dberrors.ErrNotFound) {
-			return nil, invalid
+			return nil, invalid, apiKeyOutcomeUnknown
 		}
-		return nil, a.lookupFailure(ctx, "API key lookup failed", err, invalid)
+		failure := a.lookupFailure(ctx, "API key lookup failed", err, invalid)
+		return nil, failure, lookupOutcome(failure)
 	}
 
 	record := matchAPIKey(records, rawKey)
-	if record == nil || (record.ExpiresAt != nil && !time.Now().Before(*record.ExpiresAt)) {
-		return nil, invalid
+	if record == nil {
+		return nil, invalid, apiKeyOutcomeUnknown
+	}
+	if record.ExpiresAt != nil && !time.Now().Before(*record.ExpiresAt) {
+		return nil, invalid, apiKeyOutcomeExpired
 	}
 
 	user, err := a.users.FindByID(ctx, record.UserID)
 	if err != nil {
 		if errors.Is(err, dberrors.ErrNotFound) {
-			return nil, invalid
+			return nil, invalid, apiKeyOutcomeOwnerUnusable
 		}
-		return nil, a.lookupFailure(ctx, "API key owner lookup failed", err, invalid, "key_id", record.ID, "user_id", record.UserID)
+		failure := a.lookupFailure(ctx, "API key owner lookup failed", err, invalid, "key_id", record.ID, "user_id", record.UserID)
+		return nil, failure, lookupOutcome(failure)
 	}
 	if user.Disabled || !models.IsValidRole(user.Role) {
-		return nil, invalid
+		return nil, invalid, apiKeyOutcomeOwnerUnusable
 	}
 
 	a.lastUsed.touch(ctx, a.keys, record.UserID, record.ID)
-	return &APIKeyPrincipal{Key: record, User: user, Role: user.Role}, nil
+	return &APIKeyPrincipal{Key: record, User: user, Role: user.Role}, nil, apiKeyOutcomeSuccess
+}
+
+// lookupOutcome is the metric outcome of a failed lookup, by the answer that
+// lookupFailure chose: 499 is a client that left, 500 a store failure, and a
+// 401 (fail open) a store failure that is answered like an unknown key. The
+// store failure is what the metric must show, so it is "error" in both.
+func lookupOutcome(f *APIKeyAuthFailure) string {
+	if f.Status == statusClientClosedRequest {
+		return apiKeyOutcomeCancelled
+	}
+	return apiKeyOutcomeError
 }
 
 // matchAPIKey returns the candidate whose hash matches rawKey, or nil. It
@@ -164,7 +189,7 @@ func (a *APIKeyAuthenticator) lookupFailure(ctx context.Context, msg string, err
 		slog.DebugContext(ctx, msg+" (cancelled by the client)", append(attrs, "error", err)...)
 		return &APIKeyAuthFailure{Status: statusClientClosedRequest, Message: msgClientClosed}
 	}
-	slog.ErrorContext(ctx, msg, append(attrs, "fail_closed", a.failClosed, "error", err)...)
+	a.errLog.log(ctx, msg, append(attrs, "fail_closed", a.failClosed, "error", err)...)
 	if a.failClosed || errors.Is(err, context.DeadlineExceeded) {
 		return &APIKeyAuthFailure{Status: http.StatusInternalServerError, Message: msgInternalError}
 	}
@@ -188,12 +213,15 @@ func (a *APIKeyAuthenticator) middleware(jwtMW gin.HandlerFunc) gin.HandlerFunc 
 
 		switch {
 		case bearer && hasKey:
+			RecordAPIKeyAuth(apiKeyOutcomeAmbiguous)
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": msgAuthAmbiguous})
 		case bearer:
 			jwtMW(c)
 		case !hasKey:
+			RecordJWTAuth(jwtOutcomeMissing) // no credential of either kind
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": msgAuthRequired})
 		case len(keyValues) > 1:
+			RecordAPIKeyAuth(apiKeyOutcomeRepeated)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": msgInvalidAPIKey})
 		default:
 			a.authenticate(c, keyValues[0])

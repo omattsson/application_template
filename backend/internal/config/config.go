@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -54,6 +56,8 @@ type Config struct {
 	OIDC    OIDCConfig
 	CORS    CORSConfig
 	Logging LogConfig
+	// Otel holds the telemetry settings (OTEL_*, METRICS_ENABLED).
+	Otel OtelConfig
 	// LogLevel is LOG_LEVEL parsed to a slog level; main applies it to the
 	// default slog logger. An invalid value makes LoadConfig fail.
 	LogLevel slog.Level
@@ -315,6 +319,50 @@ func (c *Config) GinMode() string {
 	return gin.ReleaseMode
 }
 
+// OtelConfig holds the telemetry settings: OpenTelemetry traces, metrics and
+// logs sent to an OTLP collector, and the Prometheus metrics handler. Both
+// switches are off by default and nothing is created while they are off.
+type OtelConfig struct {
+	// Endpoint is OTEL_EXPORTER_OTLP_ENDPOINT (default localhost:4317): the
+	// gRPC address of the collector, host:port without a scheme. The
+	// connection is not encrypted.
+	Endpoint string
+	// ServiceName is OTEL_SERVICE_NAME (default backend-api): the
+	// service.name of every span, metric and log record.
+	ServiceName string
+	// SampleRate is OTEL_TRACE_SAMPLE_RATE (default 1): the share of new
+	// traces that are recorded, 0 to 1. A request that arrives with a
+	// sampled traceparent is always recorded.
+	SampleRate float64
+	// Enabled is OTEL_ENABLED (default false): traces, metrics and logs go
+	// to the collector.
+	Enabled bool
+	// MetricsEnabled is METRICS_ENABLED (default false): request metrics are
+	// recorded and a Prometheus handler is built, also without OTEL_ENABLED.
+	MetricsEnabled bool
+}
+
+// Validate checks the telemetry settings. LoadConfig calls it only when
+// Enabled is true: nothing reads the collector settings otherwise.
+func (c *OtelConfig) Validate() error {
+	if strings.TrimSpace(c.ServiceName) == "" {
+		return errors.New("OTEL_SERVICE_NAME must not be empty")
+	}
+
+	if math.IsNaN(c.SampleRate) || c.SampleRate < 0 || c.SampleRate > 1 {
+		return errors.New("OTEL_TRACE_SAMPLE_RATE must be a number from 0 to 1")
+	}
+
+	// The exporters take host:port. A URL ("http://collector:4317") is not
+	// an address and would fail at the first export, long after the start.
+	host, port, err := net.SplitHostPort(c.Endpoint)
+	if err != nil || host == "" || port == "" || strings.Contains(c.Endpoint, "/") {
+		return errors.New("OTEL_EXPORTER_OTLP_ENDPOINT must be host:port, without a scheme")
+	}
+
+	return nil
+}
+
 // Validate checks if the configuration is valid
 func (c *Config) Validate() error {
 	if err := c.App.Validate(); err != nil {
@@ -331,6 +379,13 @@ func (c *Config) Validate() error {
 
 	if err := c.Server.Validate(); err != nil {
 		return fmt.Errorf("server config: %w", err)
+	}
+
+	// With telemetry off the collector settings are not used.
+	if c.Otel.Enabled {
+		if err := c.Otel.Validate(); err != nil {
+			return fmt.Errorf("telemetry config: %w", err)
+		}
 	}
 
 	// With auth off the auth settings are not used, so a missing secret is fine.
@@ -539,6 +594,10 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	if cfg.Otel, err = loadOtelConfig(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	trustedProxies, err := ParseTrustedProxies(getEnv("TRUSTED_PROXIES", ""))
 	if err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
@@ -621,6 +680,42 @@ func loadAuthConfig() (AuthConfig, error) {
 		}
 
 		*d.dst = v
+	}
+
+	return cfg, nil
+}
+
+// loadOtelConfig reads the telemetry variables. The two switches are parsed
+// strictly: a typo such as OTEL_ENABLED=ture would otherwise turn telemetry
+// off without a word. The sample rate is strict only with OTEL_ENABLED=true;
+// with it off nothing reads the value.
+func loadOtelConfig() (OtelConfig, error) {
+	enabled, err := parseEnvBoolStrict("OTEL_ENABLED", false)
+	if err != nil {
+		return OtelConfig{}, err
+	}
+
+	metrics, err := parseEnvBoolStrict("METRICS_ENABLED", false)
+	if err != nil {
+		return OtelConfig{}, err
+	}
+
+	cfg := OtelConfig{
+		Enabled:        enabled,
+		MetricsEnabled: metrics,
+		Endpoint:       strings.TrimSpace(getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")),
+		ServiceName:    getEnv("OTEL_SERVICE_NAME", "backend-api"),
+		SampleRate:     1,
+	}
+
+	if !enabled {
+		cfg.SampleRate = getEnvFloat64("OTEL_TRACE_SAMPLE_RATE", 1)
+
+		return cfg, nil
+	}
+
+	if cfg.SampleRate, err = parseEnvFloat64Strict("OTEL_TRACE_SAMPLE_RATE", 1); err != nil {
+		return OtelConfig{}, err
 	}
 
 	return cfg, nil
@@ -710,6 +805,37 @@ func parseEnvInt32Strict(key string, fallback int32) (int32, error) {
 	}
 
 	return int32(v), nil
+}
+
+func getEnvFloat64(key string, fallback float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	v, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return fallback
+	}
+
+	return v
+}
+
+// parseEnvFloat64Strict reads a float from the environment. An unset or empty
+// variable gives the fallback; a value that does not parse is an error that
+// names the variable.
+func parseEnvFloat64Strict(key string, fallback float64) (float64, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+
+	v, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number from 0 to 1", key)
+	}
+
+	return v, nil
 }
 
 func getEnvDuration(key string, fallback time.Duration) time.Duration {

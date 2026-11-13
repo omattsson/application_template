@@ -15,6 +15,8 @@ Packages in `internal/`:
 - `inflight`: `Tracker` for work that outlives its request.
 - `leader`: `Worker` and `Group` for leader-only background jobs.
 - `models`: Item, User, RefreshToken, APIKey, AuditLog, validation, repository interfaces, `GenericRepository`, `RetryOnLock`.
+- `logutil`: `Limiter`, one log line per interval for an error that repeats on every request.
+- `telemetry`: OpenTelemetry (`Init`, `Shutdown`, `LogHandler`, `StartDBMetrics`). Off by default and then a true no-op.
 - `sessionstore`: token and session blocklist and OIDC login state. `SESSION_STORE=mysql` is the default; `memory` is for tests and one replica.
 - `websocket`: hub, clients, topics, revalidation, message types.
 
@@ -77,6 +79,7 @@ Key groups:
 - `SERVER_*`, `RATE_LIMIT` (default 100 per minute), `LOGIN_RATE_LIMIT` (default 10 per minute), `TRUSTED_PROXIES` (validated by `config.ParseTrustedProxies` at load, applied by `routes.Setup`), `ENABLE_SWAGGER`.
 - `LOG_LEVEL`: `debug`, `info` (default), `warn` or `error`. `main` applies it to the default `slog` logger, which writes text to stderr. GORM SQL errors and slow queries (200 ms or more) go through `slog`; with `APP_DEBUG=false` the SQL values are replaced with `?`.
 - `GIN_MODE` wins when set. Otherwise the mode is debug when `APP_DEBUG` is true and release when it is false. The code default of `APP_DEBUG` is `true`: set `false` in production.
+- `OTEL_ENABLED` (default false), `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACE_SAMPLE_RATE`, `METRICS_ENABLED` (default false). The two switches are strict booleans; the other three are read and validated only with `OTEL_ENABLED=true`.
 - `CORS_ALLOWED_ORIGINS` (default `*`, development only). It also gates the WebSocket `Origin` header.
 
 ## Migrations
@@ -97,6 +100,17 @@ Key groups:
 - The `/api/v1` group adds the API rate limiter.
 - With auth on, the authenticated group adds `CombinedAuth` (JWT and API key) and the audit recorder.
 - `Setup` returns `*Result`: call `Result.RateLimiters.Stop()` on shutdown and `Result.AuditRecorder.Shutdown(ctx)` before the database closes (the bootstrap does).
+
+## Telemetry
+
+Read `docs/claude/operations.md` ("Telemetry") for the signals and variables. The rules:
+
+- `main` calls `initTelemetry` before the database and the router: the router, the hub and the revalidation checker read the global OTel providers when they are built. `attachTelemetry` makes `Telemetry.Shutdown` the telemetry step of `shutdown`.
+- With both switches off nothing may be registered or allocated per request: `routes.Setup` adds `HTTPMetrics` and `otelgin` only when a switch is on, and the auth outcome counters return at once on the no-op provider (`authInstruments.off`). A new per-request metric must keep that property (test it with `testing.AllocsPerRun`).
+- Register `otelgin` and `HTTPMetrics` after `RedactWSToken`: the `/ws` query token must never reach a span attribute or a label.
+- Never use user input as a metric label (a path, a username, an error text). Use route patterns and fixed outcome constants.
+- An error that repeats on every request goes through `logutil.Limiter` (one Error line per interval, the rest at Debug) and is counted in a metric, so the limit hides nothing. Never log an Error per request or per frame for a failing dependency.
+- The `slog` bridge (`setupOTelLogging`) builds its own text handler. Never pass `slog.Default().Handler()` to `LogHandler`: it deadlocks with the `log` package or chains a second bridge.
 
 ## Sessions, Tokens, OIDC
 

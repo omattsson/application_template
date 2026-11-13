@@ -13,6 +13,10 @@ import (
 	"backend/internal/models"
 	"backend/internal/sessionstore"
 	"backend/internal/websocket"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // revalidateChunkSize is the number of identities whose API keys and users one
@@ -128,12 +132,38 @@ func newRevocationChecker(store sessionstore.SessionStore, users models.UserRepo
 	if isNilDep(keys) {
 		keys = nil
 	}
+	escalated, failures := revalidationCounters()
 	return &revocationChecker{
 		store: store, users: users, keys: keys, cfg: cfg,
-		errLog:  &logLimiter{interval: time.Minute},
-		slowLog: &logLimiter{interval: time.Minute},
-		state:   map[checkKey]identityState{},
+		errLog:    &logLimiter{interval: time.Minute},
+		slowLog:   &logLimiter{interval: time.Minute},
+		escalated: escalated,
+		failures:  failures,
+		state:     map[checkKey]identityState{},
 	}
+}
+
+// revalidationCounters creates the counters of the checker on the global
+// MeterProvider. The routes build the checker after telemetry.Init, so they
+// bind to the real provider (or to the no-op one with telemetry off).
+func revalidationCounters() (escalated, failures metric.Int64Counter) {
+	meter := otel.Meter("websocket")
+
+	escalated, err := meter.Int64Counter("ws.revalidation.escalation.total",
+		metric.WithDescription("WebSocket identities closed because they stayed unverified for several revalidation runs in a row (fail closed)."),
+		metric.WithUnit("{identity}"))
+	if err != nil {
+		otel.Handle(err)
+	}
+
+	failures, err = meter.Int64Counter("ws.revalidation.failure.total",
+		metric.WithDescription("Lookups of a WebSocket revalidation run that failed while the run still had time, by lookup."),
+		metric.WithUnit("{lookup}"))
+	if err != nil {
+		otel.Handle(err)
+	}
+
+	return escalated, failures
 }
 
 // isNilDep reports whether a dependency interface is nil or holds a nil
@@ -209,7 +239,13 @@ type revocationChecker struct {
 	keys    models.APIKeyRepository
 	errLog  *logLimiter
 	slowLog *logLimiter
-	cfg     checkerConfig
+	// escalated counts the identities that the fail-closed escalation closed
+	// and failures the lookups that failed while the run had time. Both
+	// count every event: the log lines are rate limited. Nil (never in
+	// production) records nothing.
+	escalated metric.Int64Counter
+	failures  metric.Int64Counter
+	cfg       checkerConfig
 
 	mu sync.Mutex
 	// run counts the revalidation runs; state holds the identities of the
@@ -293,6 +329,9 @@ func (r *revocationChecker) finishRun(run uint64, cr *checkRun) {
 	r.mu.Unlock()
 	if closed == 0 {
 		return
+	}
+	if r.escalated != nil {
+		r.escalated.Add(context.Background(), int64(closed))
 	}
 	msg := "WebSocket revalidation: closing sockets that could not be verified in several runs in a row (fail closed)"
 	if r.errLog.allow() {
@@ -417,6 +456,10 @@ func (cr *checkRun) ranOut(checked int) {
 
 // failure logs a lookup that failed while the run still had time.
 func (cr *checkRun) failure(what string, err error, args ...any) {
+	if cr.r.failures != nil {
+		// what is one of five fixed strings, never client input.
+		cr.r.failures.Add(context.Background(), 1, metric.WithAttributes(attribute.String("lookup", what)))
+	}
 	args = append(args, "identities", len(cr.identities), "fail_closed", cr.r.cfg.failClosed, "error", err)
 	msg := "WebSocket revalidation: " + what + " failed; the next run retries"
 	if cr.r.errLog.allow() {

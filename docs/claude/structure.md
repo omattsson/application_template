@@ -28,12 +28,13 @@ Where things are. Run `ls` when a file is missing here: the tree below lists the
 backend/
 ├── api/
 │   ├── main.go                # config -> database -> services -> HTTP server -> signal -> shutdown; Swagger header
-│   └── bootstrap.go           # initDatabase, buildServices, buildRouter, startHTTPServer, shutdown (ordered)
+│   └── bootstrap.go           # initTelemetry, initDatabase, buildServices, buildRouter, startHTTPServer, shutdown (ordered)
 ├── internal/
 │   ├── api/
 │   │   ├── routes/routes.go   # Setup(): every route, middleware order, auth wiring, rate limiters
 │   │   ├── middleware/        # RequestID, RedactWSToken, Logger, Recovery, SecurityHeaders, CORS, MaxBodySize,
-│   │   │                      # JWT + API key auth (CombinedAuth), roles, audit recorder, /ws token helpers
+│   │   │                      # JWT + API key auth (CombinedAuth), roles, audit recorder, /ws token helpers,
+│   │   │                      # HTTPMetrics, SpanEnrichUser, auth_metrics.go (auth outcome counters)
 │   │   └── handlers/          # items.go (reference CRUD), auth*.go, oidc.go, users.go, api_keys.go,
 │   │                          # audit_logs.go, websocket*.go, ui_config.go, rate_limiter.go, errors.go,
 │   │                          # login_failure.go, mock_repository.go and test_schemas.go (test support)
@@ -46,7 +47,9 @@ backend/
 │   ├── inflight/              # Tracker for work that outlives its request
 │   ├── leader/                # Worker and Group: leader-only background jobs
 │   ├── models/                # Item, User, RefreshToken, APIKey, AuditLog, validation, GenericRepository, RetryOnLock
+│   ├── logutil/               # Limiter: one log line per interval for a repeating error
 │   ├── sessionstore/          # Token and session blocklist, OIDC state: mysql.go, memory.go, janitor.go
+│   ├── telemetry/             # Init, Shutdown, LogHandler (slog bridge), StartDBMetrics; no-op when off
 │   ├── websocket/             # Hub, Client, topics, revalidation, message types
 │   └── test/                  # Small test helpers
 ├── pkg/

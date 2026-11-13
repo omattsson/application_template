@@ -40,19 +40,31 @@ func main() {
 	// LOG_LEVEL (LoadConfig already rejected an invalid value).
 	setupLoggingTo(os.Stderr, cfg.LogLevel)
 
+	// Telemetry first: the router, the hub and the repositories read the
+	// global providers when they are built.
+	tel, err := initTelemetry(cfg)
+	if err != nil {
+		slog.Error("Failed to initialize OpenTelemetry", "error", err)
+		os.Exit(1)
+	}
+
 	repo, err := initDatabase(cfg)
 	if err != nil {
 		slog.Error("Failed to initialize repository", "error", err)
+		flushTelemetry(tel)
 		os.Exit(1)
 	}
+	registerDBMetrics(cfg, repo)
 
 	s, router, err := buildServices(cfg, repo)
 	if err != nil {
 		// No secret in err: the config and auth errors name the variable only.
 		slog.Error("Failed to start the services", "error", err)
 		_ = repo.Close()
+		flushTelemetry(tel)
 		os.Exit(1)
 	}
+	attachTelemetry(s, tel)
 	s.servers = append(s.servers, startHTTPServer(cfg, router))
 
 	quit := make(chan os.Signal, 1)

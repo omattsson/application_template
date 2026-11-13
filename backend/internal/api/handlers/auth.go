@@ -435,6 +435,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	attempt.outcome = outcomeSuccess
+	middleware.RecordLogin("local", "success")
 	h.log().Info("Login succeeded",
 		"user_id", fresh.ID,
 		"username", truncateForLog(fresh.Username, maxLoggedUsernameLen),

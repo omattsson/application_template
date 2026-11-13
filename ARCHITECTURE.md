@@ -49,6 +49,8 @@ backend/
     health                liveness and readiness checks
     leader, inflight      leader-only background workers; work that outlives its request
     ctxutil               detached, bounded contexts for post-commit writes
+    telemetry             OpenTelemetry traces, metrics, logs (off by default); pool metrics
+    logutil               Limiter: one log line per interval for a repeating error
   pkg/dberrors            sentinel errors and duplicate-key detection
 frontend/src
   api/                    Axios client, session (in-memory token), refresh, config
@@ -108,7 +110,7 @@ The WebSocket hub, the leader worker group and the in-flight tracker are always 
 3. Leader worker group.
 4. In-flight work.
 5. WebSocket hub.
-6. Telemetry flush (a no-op).
+6. Telemetry flush (OpenTelemetry; a no-op with telemetry off).
 7. Rate limiters.
 8. Session store (auth on), after everything that reads it.
 9. Database pool.

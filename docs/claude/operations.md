@@ -102,6 +102,18 @@ The DSN sets `sql_mode`, `time_zone` (UTC) and `foreign_key_checks` as driver pa
 | `LOG_FILE` | empty | Read but not used: logs go to stderr. |
 | `CORS_ALLOWED_ORIGINS` | `*` | `*` or a comma-separated list. `*` is for development only. It also gates the WebSocket `Origin` header. The other `CORS_*` names in old files are not read: methods and headers are fixed in `middleware.CORS`. |
 
+### Telemetry
+
+Off by default. With both switches off nothing is created (no exporter, goroutine or handler) and requests do no extra work. Details: "Telemetry" below.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `OTEL_ENABLED` | `false` | Strict boolean. Traces, metrics and logs go to the OTLP collector over gRPC, **without transport security**: use a collector on a trusted network. Spans carry the user's ID, username and role. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | `host:port`, no scheme (a URL stops the start). Read only with `OTEL_ENABLED=true`. |
+| `OTEL_SERVICE_NAME` | `backend-api` | `service.name` of every signal. Must not be empty. Read only with `OTEL_ENABLED=true`. |
+| `OTEL_TRACE_SAMPLE_RATE` | `1` | New traces recorded, 0 to 1; a sampled incoming `traceparent` is always kept. A value outside 0 to 1 stops the start with `OTEL_ENABLED=true`. |
+| `METRICS_ENABLED` | `false` | Strict boolean. Records `http.server.request.*` and builds the Prometheus handler, also without `OTEL_ENABLED`. |
+
 ### Compose and Makefile variables
 
 These are read by `docker-compose.yml`, the Makefile or the scripts, not by the backend.
@@ -143,7 +155,7 @@ The username login throttle is separate and in memory per replica: 5 failed logi
 3. Leader worker group: stop the background workers. Own budget.
 4. In-flight work (`inflight.Tracker`): work that outlives its request. Own budget.
 5. WebSocket hub: close the client connections and end the revalidation loop.
-6. Telemetry flush (a no-op today). Own budget.
+6. Telemetry flush (`Telemetry.Shutdown`: spans, metrics and logs that are still buffered, sent or dropped within the budget). Own budget.
 7. Rate limiters: stop their cleanup goroutines.
 8. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
 9. Database: close the pool last.
@@ -151,6 +163,19 @@ The username login throttle is separate and in memory per replica: 5 failed logi
 Steps 2, 3, 4 and 6 get their own budget of the length that was left on the shutdown context when shutdown began (at least 100 ms), detached from it, so a hung request cannot starve them. With the HTTP step that is five budgeted steps, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT`. The stop grace period of the orchestrator must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s. Raise both together. Work that outlives its request starts with `inflight.Tracker.Go`; a periodic job is a `leader.Worker`.
 
 The API-key last-used update runs in a goroutine that shutdown does not wait for.
+
+## Telemetry
+
+`telemetry.Init` (`internal/telemetry`) runs in `main` before the database, the hub and the router, so they see the providers. It installs them as the global OpenTelemetry providers.
+
+- `OTEL_ENABLED=true`: spans (batched), metrics (every 60 s) and `slog` records go to the collector. The sampler keeps the decision of an incoming `traceparent` and applies `OTEL_TRACE_SAMPLE_RATE` to new traces. The `slog` bridge adds the trace and span ID of the context to a record that is logged with a context (`slog.InfoContext`); the local stderr output is unchanged and still follows `LOG_LEVEL`, which also filters what goes to the collector. An unreachable collector does not stop the start: the data is dropped and the SDK reports the export errors.
+- `METRICS_ENABLED=true` or `OTEL_ENABLED=true`: `middleware.HTTPMetrics` records `http.server.request.duration` (seconds) and `http.server.request.total` with `http.request.method`, `http.route` (the route pattern; `<unmatched>` for an unknown path) and `http.response.status_code`. `METRICS_ENABLED=true` also builds `Telemetry.MetricsHandler`, a Prometheus text handler over its own registry (OTel instruments plus the Go runtime and process collectors). The bootstrap does not serve it yet.
+- With either switch on, the connection pool is exported as `db.pool.*` (max open, open, in use, idle, wait count and duration, closed because of the idle or lifetime limit).
+- With `OTEL_ENABLED=true` every request has a server span (`otelgin`, after `RedactWSToken`, so a `/ws` token is never recorded) and, with auth on, the span carries `user.id`, `user.name` and `user.role`.
+- Auth counters (all `status` outcomes are fixed sets): `auth.login.total` (`method`, `status`, and `reason` for a failed local login), `auth.token.refresh.total`, `auth.jwt.total` (`success_unchecked` is a request that was let through because the session store lookup failed with fail-open), `auth.apikey.total`.
+- WebSocket counters: `ws.revalidation.escalation.total` (identities closed because they stayed unverified for several revalidation runs in a row, fail closed), `ws.revalidation.failure.total` (`lookup`: failed lookups of a revalidation run) and `ws.broadcast.dropped.total` (broadcast channel full).
+
+Repeated errors do not flood the log. A lookup that fails on every request (the session store or the database is down) logs one Error line per minute per middleware, with `suppressed` counting the lines that were left out; the others go to Debug. The WebSocket revalidation does the same, and so does a full broadcast channel. The counters above count every event, so an outage stays visible in the metrics. Alert on `auth.jwt.total{status="success_unchecked"}`, `auth.jwt.total{status="error"}` and `ws.revalidation.escalation.total`.
 
 ## Replicas
 
@@ -166,7 +191,7 @@ The API-key last-used update runs in a goroutine that shutdown does not wait for
 
 ## Logging
 
-Structured text on stderr through `slog`, at `LOG_LEVEL`. Failed logins log `reason`, the capped username, `client_ip` and `request_id` at Warn, never the password or hash. `RequestID` accepts a client `X-Request-ID` of 1 to 64 characters `[A-Za-z0-9._-]` and returns it; anything else is replaced. GORM errors and slow queries (200 ms or more) go through `slog`; with `APP_DEBUG=false` the SQL values are replaced with `?`. Keep `APP_DEBUG=false` in production.
+Structured text on stderr through `slog`, at `LOG_LEVEL`. With `OTEL_ENABLED=true` the records also go to the OTLP collector (see "Telemetry"). Failed logins log `reason`, the capped username, `client_ip` and `request_id` at Warn, never the password or hash. `RequestID` accepts a client `X-Request-ID` of 1 to 64 characters `[A-Za-z0-9._-]` and returns it; anything else is replaced. GORM errors and slow queries (200 ms or more) go through `slog`; with `APP_DEBUG=false` the SQL values are replaced with `?`. Keep `APP_DEBUG=false` in production.
 
 ## Audit log
 

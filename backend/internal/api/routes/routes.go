@@ -17,6 +17,7 @@ import (
 	"backend/internal/websocket"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
 // ErrAuthDepsMissing is returned by Setup when AUTH_ENABLED is true and an
@@ -171,10 +172,21 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 
 	setTrustedProxies(router, cfg.Server.TrustedProxies)
 
-	// Add middleware. RedactWSToken runs before Logger (and any tracer) so
-	// the WebSocket token in the query string is never recorded.
+	// Add middleware. RedactWSToken runs before Logger and the telemetry
+	// middleware so the WebSocket token in the query string is never recorded
+	// in a log line, a span attribute or a metric label.
 	router.Use(middleware.RequestID())
 	router.Use(middleware.RedactWSToken())
+	// Telemetry: the providers are installed by telemetry.Init before Setup.
+	// With both switches off nothing is registered and the auth counters are
+	// bound to the no-op provider, so a request does no extra work.
+	middleware.RebindAuthMeter()
+	if cfg.Otel.Enabled || cfg.Otel.MetricsEnabled {
+		router.Use(middleware.HTTPMetrics())
+	}
+	if cfg.Otel.Enabled {
+		router.Use(otelgin.Middleware(cfg.Otel.ServiceName))
+	}
 	router.Use(middleware.Logger())
 	router.Use(middleware.Recovery())
 	router.Use(middleware.SecurityHeaders())
@@ -219,7 +231,13 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 		limiters.OIDCLogin = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
 		limiters.OIDCCallback = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
 		a.registerPublicAuth(v1, limiters)
-		api = v1.Group("", a.authenticate, a.recorder.Middleware())
+		authMW := []gin.HandlerFunc{a.authenticate}
+		if cfg.Otel.Enabled {
+			// The span of an authenticated request names its user.
+			authMW = append(authMW, middleware.SpanEnrichUser())
+		}
+		authMW = append(authMW, a.recorder.Middleware())
+		api = v1.Group("", authMW...)
 		a.registerAuthenticated(api)
 		result.AuthHandler = a.authHandler
 		result.AuditRecorder = a.recorder

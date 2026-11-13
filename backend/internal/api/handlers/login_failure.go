@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"backend/internal/api/middleware"
 	"backend/internal/models"
 )
 
@@ -67,6 +68,9 @@ type loginFailure struct {
 // security event; LOGIN_RATE_LIMIT and the username throttle bound the
 // volume), Error for server-side failures.
 func (h *AuthHandler) logLoginFailure(f loginFailure) {
+	// The reason is one of the loginReason* constants, so the label stays
+	// low-cardinality. Throttled attempts are counted by their own log line.
+	middleware.RecordLoginFailure("local", "failure", f.reason)
 	attrs := []any{
 		"reason", f.reason,
 		// The username is logged also for user_not_found, the case where it

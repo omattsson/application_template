@@ -215,6 +215,7 @@ func (h *AuthHandler) rotate(c *gin.Context, stored *models.RefreshToken, tokenH
 	// The cookie is set only after the transaction committed and the
 	// re-checks passed.
 	h.setRefreshCookie(c, newRaw, newExpiry)
+	middleware.RecordRefresh("success")
 	c.JSON(http.StatusOK, RefreshResponse{Token: access})
 }
 
@@ -482,6 +483,7 @@ func (h *AuthHandler) findRefreshToken(ctx context.Context, c *gin.Context, toke
 // refuseRefresh logs the reason, deletes the cookie and answers the generic
 // 401.
 func (h *AuthHandler) refuseRefresh(c *gin.Context, reason, userID string) {
+	middleware.RecordRefresh("refused")
 	h.log().Info("Refresh refused", "reason", reason, "user_id", userID,
 		"client_ip", c.ClientIP(), "request_id", c.GetString(middleware.RequestIDKey))
 	h.clearRefreshCookie(c)
@@ -495,6 +497,7 @@ func (h *AuthHandler) respondServerError(c *gin.Context, msg string, err error, 
 	if respondCancelled(c, err) {
 		return
 	}
+	middleware.RecordRefresh("error")
 	h.log().Error(msg, append(attrs, "error", err, "request_id", c.GetString(middleware.RequestIDKey))...)
 	c.JSON(http.StatusInternalServerError, gin.H{"error": msgInternalServerError})
 }

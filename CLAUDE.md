@@ -27,7 +27,7 @@ signal -> shutdown              # ordered, see below
 3. Leader worker group: stop the background workers.
 4. In-flight work (`inflight.Tracker`): wait for work that outlives its request.
 5. WebSocket hub: close the client connections.
-6. Telemetry flush (a no-op today).
+6. Telemetry flush (OpenTelemetry; a no-op with `OTEL_ENABLED=false` and `METRICS_ENABLED=false`).
 7. Rate limiters: stop their cleanup goroutines.
 8. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
 9. Database: close the pool last.

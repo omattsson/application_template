@@ -7,6 +7,12 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"backend/internal/logutil"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 )
 
 const (
@@ -119,11 +125,27 @@ type Hub struct {
 	revalidateOnce sync.Once
 	// revalidateDone is closed when the revalidation loop exits (tests).
 	revalidateDone chan struct{}
+
+	// dropLog limits the log line of a dropped broadcast: with the channel
+	// full, every Broadcast drops its message. dropped counts every drop.
+	dropLog *logutil.Limiter
+	dropped metric.Int64Counter
 }
 
 // NewHub creates a new Hub ready to accept clients.
 func NewHub() *Hub {
+	// The counter binds to the MeterProvider of the moment: the bootstrap
+	// creates the hub after telemetry.Init. A failed creation leaves it nil.
+	dropped, err := otel.Meter("websocket").Int64Counter("ws.broadcast.dropped.total",
+		metric.WithDescription("Broadcast messages dropped because the hub's broadcast channel was full."),
+		metric.WithUnit("{message}"))
+	if err != nil {
+		otel.Handle(err)
+	}
+
 	return &Hub{
+		dropLog:        logutil.NewLimiter(time.Minute),
+		dropped:        dropped,
 		clients:        make(map[*Client]bool),
 		topicSubs:      make(map[string]map[*Client]bool),
 		clientTopics:   make(map[*Client]map[string]struct{}),
@@ -170,7 +192,20 @@ func (h *Hub) Broadcast(message []byte) {
 	select {
 	case h.broadcast <- message:
 	default:
-		slog.Warn("WebSocket broadcast channel full, message dropped")
+		if h.dropped != nil {
+			h.dropped.Add(context.Background(), 1)
+		}
+		// One Warn per interval: a full channel drops every message, and a
+		// line per message would flood the log.
+		if ok, suppressed := h.dropLog.Allow(); ok {
+			if suppressed > 0 {
+				slog.Warn("WebSocket broadcast channel full, message dropped", "suppressed", suppressed)
+			} else {
+				slog.Warn("WebSocket broadcast channel full, message dropped")
+			}
+		} else {
+			slog.Debug("WebSocket broadcast channel full, message dropped")
+		}
 	}
 }
 

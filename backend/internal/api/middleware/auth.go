@@ -175,27 +175,34 @@ func AuthRequiredWithOptions(opts JWTAuthOptions) gin.HandlerFunc {
 	jwtSecret := opts.JWTSecret
 	store := opts.SessionStore
 
+	errLog := newStoreErrorLog()
+
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
+			RecordJWTAuth(jwtOutcomeMissing)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": msgAuthHeaderRequired})
 			return
 		}
 
 		tokenStr, ok := bearerToken(authHeader)
 		if !ok {
+			RecordJWTAuth(jwtOutcomeMalformed)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": msgAuthHeaderFormat})
 			return
 		}
 
 		claims, err := ValidateJWT(tokenStr, jwtSecret)
 		if err != nil {
+			RecordJWTAuth(jwtOutcomeInvalid)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": msgAuthInvalid})
 			return
 		}
 
+		outcome := jwtOutcomeSuccess
 		revoked, lookupErr := RevocationStatus(c.Request.Context(), store, claims)
 		if revoked != nil {
+			RecordJWTAuth(jwtOutcomeRevoked)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": RevocationMessage(revoked)})
 			return
 		}
@@ -203,20 +210,25 @@ func AuthRequiredWithOptions(opts JWTAuthOptions) gin.HandlerFunc {
 		if lookupErr != nil {
 			if errors.Is(lookupErr, context.Canceled) {
 				slog.DebugContext(c.Request.Context(), "Revocation check cancelled by the client", "error", lookupErr)
+				RecordJWTAuth(jwtOutcomeCancelled)
 				c.AbortWithStatusJSON(statusClientClosedRequest, gin.H{"error": msgClientClosed})
 
 				return
 			}
 
-			slog.ErrorContext(c.Request.Context(), "Failed to check token, session or user blocklist",
+			errLog.log(c.Request.Context(), "Failed to check token, session or user blocklist",
 				"jti", claims.ID, "user_id", claims.UserID, "fail_closed", opts.FailClosedOnStoreError, "error", lookupErr)
 
 			if opts.FailClosedOnStoreError {
+				RecordJWTAuth(jwtOutcomeError)
 				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": msgInternalError})
 				return
 			}
+
+			outcome = jwtOutcomeSuccessUnchecked
 		}
 
+		RecordJWTAuth(outcome)
 		setJWTContext(c, claims)
 		c.Next()
 	}

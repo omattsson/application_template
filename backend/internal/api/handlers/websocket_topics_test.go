@@ -101,8 +101,12 @@ func TestHandleWebSocket_SubscribeTopic(t *testing.T) {
 
 	require.NoError(t, conn.WriteMessage(gorilla.TextMessage, []byte(`{"type":"subscribe","payload":{"topic":"items"}}`)))
 
-	// Publish until the subscription is in place; the other topic must never
-	// arrive.
+	// Wait for the subscription first: a read that times out ends a gorilla
+	// connection for good, and a testify that runs the Eventually condition
+	// at once (1.11 and later) would read before the hub has the topic.
+	require.Eventually(t, func() bool { return hub.TopicSubscriberCount("items") == 1 }, 3*time.Second, 5*time.Millisecond)
+
+	// The other topic must never arrive.
 	var received []string
 	require.Eventually(t, func() bool {
 		hub.BroadcastToTopic("other", []byte("wrong"))

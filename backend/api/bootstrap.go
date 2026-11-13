@@ -22,6 +22,7 @@ import (
 	"backend/internal/leader"
 	"backend/internal/models"
 	"backend/internal/sessionstore"
+	"backend/internal/telemetry"
 	"backend/internal/websocket"
 
 	"github.com/gin-gonic/gin"
@@ -109,8 +110,8 @@ type services struct {
 	// (*inflight.Tracker; see routerDeps.InFlight).
 	inFlight waiter
 	hub      hubShutdowner
-	// telemetryShutdown flushes the telemetry. A no-op until telemetry
-	// exists.
+	// telemetryShutdown flushes the telemetry (attachTelemetry sets
+	// Telemetry.Shutdown; a no-op until then).
 	telemetryShutdown func(ctx context.Context) error
 	rateLimiters      stopper
 	db                closer
@@ -135,6 +136,92 @@ func isNilInterface(v any) bool {
 // which deadlocks.
 func setupLoggingTo(w io.Writer, level slog.Level) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})))
+}
+
+// setupOTelLogging sends the logs also to the OTel log pipeline (OTLP to the
+// collector) when OTEL_ENABLED=true, with LOG_LEVEL as the level of both
+// outputs. Without a pipeline it changes nothing.
+//
+// The local output is a new slog text handler on stderr, never a wrapper of
+// the current default handler: that one writes through the log package, and
+// after slog.SetDefault the log package writes through the default logger
+// again, which deadlocks (for example on a log.Print of a library). Because
+// each call builds its own handler, calling it twice replaces the first setup
+// instead of stacking on it. With OTEL_ENABLED the local lines use the slog
+// text format (time=... level=...), as setupLoggingTo does.
+func setupOTelLogging(tel *telemetry.Telemetry, level slog.Level) {
+	setupOTelLoggingTo(tel, level, os.Stderr)
+}
+
+// setupOTelLoggingTo is setupOTelLogging with the local output as a parameter
+// (tests).
+func setupOTelLoggingTo(tel *telemetry.Telemetry, level slog.Level, local io.Writer) {
+	if tel == nil || tel.LoggerProvider == nil {
+		return
+	}
+	base := slog.NewTextHandler(local, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(tel.LogHandler(base, level)))
+}
+
+// initTelemetry starts OpenTelemetry (a no-op unless OTEL_ENABLED or
+// METRICS_ENABLED is true) and routes the logs through it. Call it after the
+// logger is set up and before anything that reads the global providers (the
+// router, the hub, the repositories). The caller flushes it with
+// attachTelemetry, or with Shutdown when the start fails.
+func initTelemetry(cfg *config.Config) (*telemetry.Telemetry, error) {
+	tel, err := telemetry.Init(cfg.Otel)
+	if err != nil {
+		return nil, err
+	}
+	setupOTelLogging(tel, cfg.LogLevel)
+	return tel, nil
+}
+
+// registerDBMetrics exposes the connection pool of the database as metrics
+// when telemetry is on. A failure is logged and the start goes on: the pool
+// metrics are not worth a process that does not start. A repository without a
+// database handle (a test double) is skipped.
+func registerDBMetrics(cfg *config.Config, repo models.Repository) {
+	if !cfg.Otel.Enabled && !cfg.Otel.MetricsEnabled {
+		return
+	}
+	withDB, ok := repo.(interface{ DB() *gorm.DB })
+	if !ok {
+		slog.Debug("Repository has no database handle, pool metrics not registered")
+		return
+	}
+	sqlDB, err := withDB.DB().DB()
+	if err != nil {
+		slog.Warn("Failed to read the database pool for metrics", "error", err)
+		return
+	}
+	if err := telemetry.StartDBMetrics(sqlDB); err != nil {
+		slog.Warn("Failed to register DB pool metrics", "error", err)
+	}
+}
+
+// attachTelemetry makes tel.Shutdown the telemetry step of the shutdown (see
+// shutdown: it runs after the services stopped, with its own budget, so the
+// flush covers the shutdown itself). A nil tel keeps the no-op step.
+func attachTelemetry(s *services, tel *telemetry.Telemetry) {
+	if tel == nil {
+		return
+	}
+	s.telemetryShutdown = tel.Shutdown
+}
+
+// startFailureFlushTimeout bounds the telemetry flush of a start that failed.
+const startFailureFlushTimeout = 5 * time.Second
+
+// flushTelemetry flushes tel for a process that ends because the start
+// failed (the normal shutdown flushes it in its own step). The error is
+// logged; the process exits either way.
+func flushTelemetry(tel *telemetry.Telemetry) {
+	ctx, cancel := context.WithTimeout(context.Background(), startFailureFlushTimeout)
+	defer cancel()
+	if err := tel.Shutdown(ctx); err != nil {
+		slog.Warn("Telemetry flush failed", "error", err)
+	}
 }
 
 // routerDeps holds the dependencies of the routes.
@@ -418,7 +505,8 @@ func stepBudget(ctx context.Context) time.Duration {
 //  4. In-flight work that outlives its request (inflight.Tracker).
 //  5. WebSocket hub: close the client connections; this also ends the
 //     revalidation loop of the open sockets.
-//  6. Telemetry: flush after the services stopped, so it covers the shutdown.
+//  6. Telemetry: flush the traces, metrics and logs after the services
+//     stopped, so it covers the shutdown.
 //  7. Rate limiters: stop their cleanup goroutines.
 //  8. Session store (auth on): stop its cleanup goroutine, after everything
 //     that reads it (requests, workers, the hub revalidation).
