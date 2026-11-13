@@ -6,18 +6,26 @@
 #   1. .claude/agents/ holds at least one agent file (*.md).
 #   2. Every agent file starts with a frontmatter block that has a non-empty
 #      name (equal to the file name without .md) and a non-empty description.
-#   3. No agent file mentions a memory-store MCP tool (the tool prefix in
-#      FORBIDDEN_TOOL below), in the tools list or anywhere else.
+#   3. No agent file mentions a memory-store MCP tool (the server name in
+#      FORBIDDEN_TOOL below, with or without a tool suffix), in the tools list
+#      or anywhere else.
 #   4. No agent file exists for a name in FORBIDDEN_AGENTS (agents of the
 #      project this template came from that do not belong in a template).
 #   5. .claude/skills/ship-issue/SKILL.md and .claude/settings.json exist, and
 #      neither them nor any agent file mentions a forbidden tool or agent name.
 #   6. Every agent named in the first column of a table in the skill has an
 #      agent file.
-#   7. The "allow" list of .claude/settings.json grants nothing that publishes
-#      or deletes: no git push, no gh api/pr create/pr merge/pr close, no
-#      npm install, no rm, no release or publish command. Those stay on the
-#      "ask" list or are not listed.
+#   7. .claude/settings.json is valid JSON (parsed with jq) and its "allow" list
+#      grants nothing that publishes, installs or deletes. An entry is rejected
+#      when it equals a banned command (BANNED_COMMANDS: git push, gh api,
+#      gh pr create/merge/close, gh release, npm install/i/add/publish,
+#      docker push, docker build --push, docker compose up, docker system
+#      prune, rm -r/-rf), when it starts with one (an exact entry with
+#      arguments), or when it is a wildcard prefix of one (git:*, gh:*, npm:*,
+#      rm:*, npm i:*, git *). A bare "Bash", Bash(*), a wildcard in the middle
+#      of a command, and any make entry with a wildcard are rejected too: make
+#      entries must be exact (a wildcard lets "make lint clean" through).
+#   8. The "ask" list still holds the six required entries (REQUIRED_ASK).
 #
 # The forbidden names are built from two parts below so that this script does
 # not trip scripts/check-domain-terms.sh itself.
@@ -31,7 +39,9 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-FORBIDDEN_TOOL="mcp__mem""palace__"
+FORBIDDEN_TOOL="mcp__mem""palace"
+BANNED_COMMANDS=("git push" "gh api" "gh pr create" "gh pr merge" "gh pr close" "gh release" "npm install" "npm i" "npm add" "npm publish" "docker push" "docker build --push" "docker compose up" "docker system prune" "rm -rf" "rm -r")
+REQUIRED_ASK=("Bash(git push:*)" "Bash(gh api:*)" "Bash(gh pr create:*)" "Bash(gh pr merge:*)" "Bash(gh pr close:*)" "Bash(npm install:*)")
 FORBIDDEN_AGENTS=("git-""provider" "hel""m-values")
 
 # frontmatter_value FILE KEY -> the value of KEY in the first frontmatter block
@@ -53,18 +63,75 @@ frontmatter_value() {
   ' "$1"
 }
 
-# has_frontmatter FILE -> 0 if line 1 is --- and a closing --- follows.
+# has_frontmatter FILE -> 0 if line 1 is --- and the closing --- is within the
+# next 30 lines (a --- far down in the body does not close the block).
 has_frontmatter() {
-  [ "$(sed -n '1p' "$1")" = "---" ] && sed -n '2,$p' "$1" | grep -qx -- '---'
+  [ "$(sed -n '1p' "$1")" = "---" ] && sed -n '2,31p' "$1" | grep -qx -- '---'
 }
 
-# allow_entries SETTINGS -> the lines of the "allow" array, one per line.
-allow_entries() {
-  awk '
-    /"allow"[[:space:]]*:[[:space:]]*\[/ { inallow = 1; next }
-    inallow && /\]/ { exit }
-    inallow { print }
-  ' "$1"
+# grant_violation ENTRY -> prints the reason and returns 0 if the allow entry
+# grants a banned command; returns 1 for an acceptable entry.
+grant_violation() {
+  local entry="$1" cmd banned wild=0
+  case "$entry" in
+    Bash)
+      echo "a bare Bash entry grants every command"
+      return 0
+      ;;
+    Bash\(*\))
+      cmd="${entry#Bash(}"
+      cmd="${cmd%)}"
+      ;;
+    *) return 1 ;; # another tool: out of scope
+  esac
+  case "$cmd" in
+    *:\*)
+      cmd="${cmd%:\*}"
+      wild=1
+      ;;
+    *\*)
+      cmd="${cmd%\*}"
+      wild=1
+      ;;
+  esac
+  cmd="${cmd%"${cmd##*[![:space:]]}"}"
+  if [ -z "$cmd" ]; then
+    echo "an empty or all-matching command grants every command"
+    return 0
+  fi
+  case "$cmd" in
+    *\**)
+      echo "a wildcard in the middle of a command cannot be checked"
+      return 0
+      ;;
+    make | make\ *)
+      if [ "$wild" -eq 1 ]; then
+        echo "make entries must be exact (no wildcard): a wildcard also runs make clean or make prune"
+        return 0
+      fi
+      ;;
+    *release* | *publish*)
+      echo "a release or publish command"
+      return 0
+      ;;
+  esac
+  for banned in "${BANNED_COMMANDS[@]}"; do
+    case "$cmd" in
+      "$banned" | "$banned "*)
+        echo "grants '$banned'"
+        return 0
+        ;;
+    esac
+    if [ "$wild" -eq 1 ]; then
+      case "$banned" in
+        "$cmd"*)
+          echo "covers '$banned'"
+          return 0
+          ;;
+      esac
+    fi
+  done
+  return 1
 }
 
 # run_checks ROOT -> prints one line per problem; returns 1 if any.
@@ -98,7 +165,7 @@ run_checks() {
       rc=1
     fi
     if grep -qF -- "$FORBIDDEN_TOOL" "$f"; then
-      echo "$f: mentions a memory-store MCP tool ($FORBIDDEN_TOOL*)"
+      echo "$f: mentions a memory-store MCP tool ($FORBIDDEN_TOOL...)"
       rc=1
     fi
     for forbidden in "${FORBIDDEN_AGENTS[@]}"; do
@@ -127,7 +194,7 @@ run_checks() {
       continue
     fi
     if grep -qF -- "$FORBIDDEN_TOOL" "$f"; then
-      echo "$f: mentions a memory-store MCP tool ($FORBIDDEN_TOOL*)"
+      echo "$f: mentions a memory-store MCP tool ($FORBIDDEN_TOOL...)"
       rc=1
     fi
     for forbidden in "${FORBIDDEN_AGENTS[@]}"; do
@@ -149,17 +216,37 @@ run_checks() {
     done < <(sed -nE 's/^\| ([a-z][a-z-]*) \|.*/\1/p' "$skill")
   fi
 
-  # Rule 7: nothing that publishes or deletes on the allow list.
+  # Rules 7 and 8: the allow list grants nothing broad, the ask list is intact.
   if [ -f "$settings" ]; then
-    if [ -z "$(allow_entries "$settings")" ]; then
-      echo "$settings: no \"allow\" list found"
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "$settings: jq is required to check the permissions"
       rc=1
+    elif ! jq -e . "$settings" >/dev/null 2>&1; then
+      echo "$settings: not valid JSON"
+      rc=1
+    else
+      local entries reason required
+      entries="$(jq -r '(.permissions.allow // [])[] | tostring' "$settings")"
+      if [ -z "$entries" ]; then
+        echo "$settings: no \"allow\" list found"
+        rc=1
+      fi
+      while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        if reason="$(grant_violation "$name")"; then
+          echo "$settings: the allow entry \"$name\" is too broad: $reason"
+          rc=1
+        fi
+      done <<EOF
+$entries
+EOF
+      for required in "${REQUIRED_ASK[@]}"; do
+        if ! jq -e --arg e "$required" '(.permissions.ask // []) | index($e)' "$settings" >/dev/null 2>&1; then
+          echo "$settings: the ask list lacks \"$required\""
+          rc=1
+        fi
+      done
     fi
-    while IFS= read -r name; do
-      [ -n "$name" ] || continue
-      echo "$settings: the allow list grants a publishing or deleting command: ${name#"${name%%[![:space:]]*}"}"
-      rc=1
-    done < <(allow_entries "$settings" | grep -E 'git push|gh api|gh pr (create|merge|close)|npm install|rm |release|publish|Bash\(\*' || true)
   fi
 
   return "$rc"
@@ -167,6 +254,9 @@ run_checks() {
 
 self_test() {
   local tmp failed=0
+  local ASK_ENTRIES e k entries sep
+  ASK_ENTRIES="$(printf '"%s",' "${REQUIRED_ASK[@]}")"
+  ASK_ENTRIES="${ASK_ENTRIES%,}"
   tmp="$(mktemp -d)" || return 1
 
   # mk_fixture NAME: a passing fixture under $tmp/NAME.
@@ -207,12 +297,16 @@ MD
 {
   "permissions": {
     "allow": [
-      "Bash(make lint:*)",
+      "Bash(make lint)",
       "Bash(git add:*)"
     ],
     "ask": [
       "Bash(git push:*)",
-      "Bash(gh pr merge:*)"
+      "Bash(gh api:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr close:*)",
+      "Bash(npm install:*)"
     ]
   }
 }
@@ -268,11 +362,11 @@ JSON
   expect description-in-body fail
 
   mk_fixture memory-tool
-  sed -i.bak "s/^tools:.*/tools: Read, ${FORBIDDEN_TOOL}search/" "$tmp/memory-tool/.claude/agents/alpha.md"
+  sed -i.bak "s/^tools:.*/tools: Read, ${FORBIDDEN_TOOL}__search/" "$tmp/memory-tool/.claude/agents/alpha.md"
   expect memory-tool fail
 
   mk_fixture memory-tool-in-body
-  printf 'Call %ssearch first.\n' "$FORBIDDEN_TOOL" >>"$tmp/memory-tool-in-body/.claude/agents/beta.md"
+  printf 'Call %s__search first.\n' "$FORBIDDEN_TOOL" >>"$tmp/memory-tool-in-body/.claude/agents/beta.md"
   expect memory-tool-in-body fail
 
   mk_fixture forbidden-agent-file
@@ -288,7 +382,7 @@ JSON
   expect forbidden-in-settings fail
 
   mk_fixture memory-tool-in-settings
-  sed -i.bak "s/make lint/${FORBIDDEN_TOOL}search/" "$tmp/memory-tool-in-settings/.claude/settings.json"
+  sed -i.bak "s/make lint/${FORBIDDEN_TOOL}__search/" "$tmp/memory-tool-in-settings/.claude/settings.json"
   expect memory-tool-in-settings fail
 
   mk_fixture skill-names-missing-agent
@@ -318,6 +412,100 @@ JSON
   mk_fixture allow-npm-install
   sed -i.bak 's/"Bash(git add:\*)"/"Bash(npm install:*)"/' "$tmp/allow-npm-install/.claude/settings.json"
   expect allow-npm-install fail
+
+  # write_settings FILE ASK_ENTRIES ALLOW_ENTRIES... : a settings.json with one
+  # entry per line (ASK_ENTRIES and the allow entries are JSON text).
+  write_settings() {
+    local file="$1" ask="$2" entries="" sep="" e
+    shift 2
+    for e in "$@"; do
+      entries="$entries$sep
+      $e"
+      sep=","
+    done
+    printf '{\n  "permissions": {\n    "allow": [%s\n    ],\n    "ask": [\n      %s\n    ]\n  }\n}\n' "$entries" "$ask" >"$file"
+  }
+
+  # settings NAME ALLOW_ENTRIES... : replace the settings.json of fixture NAME
+  # by one with these allow entries and the required ask entries.
+  settings() {
+    local name="$1"
+    shift
+    write_settings "$tmp/$name/.claude/settings.json" "$ASK_ENTRIES" "$@"
+  }
+
+  # new_settings NAME PASS|FAIL ALLOW_ENTRIES... : a fixture of its own.
+  new_settings() {
+    local name="$1" want="$2"
+    shift 2
+    mk_fixture "$name"
+    settings "$name" "$@"
+    expect "$name" "$want"
+  }
+
+  new_settings allow-gh-api fail '"Bash(gh api:*)"'
+  new_settings allow-gh-api-exact fail '"Bash(gh api repos/x/y)"'
+  new_settings allow-pr-create fail '"Bash(gh pr create:*)"'
+  new_settings allow-pr-close fail '"Bash(gh pr close:*)"'
+  new_settings allow-release fail '"Bash(gh release create:*)"'
+  new_settings allow-publish fail '"Bash(npm publish:*)"'
+  new_settings allow-docker-push fail '"Bash(docker push:*)"'
+  new_settings allow-docker-build fail '"Bash(docker build:*)"'
+  new_settings allow-star fail '"Bash(*)"'
+  new_settings allow-bare-bash fail '"Bash"'
+  new_settings allow-git-wild fail '"Bash(git:*)"'
+  new_settings allow-git-space-star fail '"Bash(git *)"'
+  new_settings allow-gh-wild fail '"Bash(gh:*)"'
+  new_settings allow-npm-wild fail '"Bash(npm:*)"'
+  new_settings allow-npm-i fail '"Bash(npm i:*)"'
+  new_settings allow-rm-wild fail '"Bash(rm:*)"'
+  new_settings allow-rm-exact fail '"Bash(rm -rf build)"'
+  new_settings allow-make-wild fail '"Bash(make:*)"'
+  new_settings allow-make-prefix fail '"Bash(make lint:*)"'
+  new_settings allow-middle-star fail '"Bash(git * push)"'
+  # An entry with a closing bracket must not hide the entries after it.
+  new_settings allow-bracket-entry fail '"Bash(git add:*)"' '"Bash(echo ]:*)"' '"Bash(git push:*)"'
+  new_settings allow-exact-make pass '"Bash(make lint)"' '"Bash(make test-backend-unit)"' '"Bash(git add:*)"'
+
+  # The first allow entry on the line of "allow": [ is read too.
+  mk_fixture allow-same-line
+  printf '{\n  "permissions": {\n    "allow": ["Bash(git push:*)",\n      "Bash(make lint)",\n      "Bash(git add:*)"\n    ],\n    "ask": [%s]\n  }\n}\n' "$ASK_ENTRIES" >"$tmp/allow-same-line/.claude/settings.json"
+  expect allow-same-line fail
+
+  mk_fixture settings-not-json
+  printf '{"permissions": {"allow": [\n' >"$tmp/settings-not-json/.claude/settings.json"
+  expect settings-not-json fail
+
+  # Each required ask entry is needed: drop one at a time.
+  for e in "${REQUIRED_ASK[@]}"; do
+    entries="" sep=""
+    for k in "${REQUIRED_ASK[@]}"; do
+      [ "$k" = "$e" ] && continue
+      entries="$entries$sep\"$k\""
+      sep=","
+    done
+    mk_fixture "ask-without-$e"
+    write_settings "$tmp/ask-without-$e/.claude/settings.json" "$entries" '"Bash(make lint)"'
+    expect "ask-without-$e" fail
+  done
+
+  mk_fixture no-ask-list
+  printf '{\n  "permissions": {\n    "allow": [\n      "Bash(make lint)"\n    ]\n  }\n}\n' >"$tmp/no-ask-list/.claude/settings.json"
+  expect no-ask-list fail
+
+  # The memory-store server name alone (no tool suffix) is rejected too.
+  mk_fixture memory-server-name
+  printf 'Uses %s only.\n' "${FORBIDDEN_TOOL%__}" >>"$tmp/memory-server-name/.claude/agents/alpha.md"
+  expect memory-server-name fail
+
+  # A closing --- far away in the body does not close the frontmatter.
+  mk_fixture unclosed-frontmatter
+  {
+    printf -- '---\nname: alpha\ndescription: x\n'
+    for _ in $(seq 1 40); do printf 'text\n'; done
+    printf -- '---\n'
+  } >"$tmp/unclosed-frontmatter/.claude/agents/alpha.md"
+  expect unclosed-frontmatter fail
 
   # git push on the ask list is the intended place and passes (good fixture).
 
