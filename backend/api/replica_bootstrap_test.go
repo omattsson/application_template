@@ -222,3 +222,59 @@ func TestReplicaProcessID(t *testing.T) {
 	assert.NotEqual(t, a, b)
 	assert.NotEmpty(t, a)
 }
+
+// A worker that ignores its context outlives the leader step: Close reports
+// it and does NOT release the lease. The election keeps renewing, so no
+// other replica can start while the worker runs; the lease expires only
+// after the renewals stop (the database closes, the process exits).
+func TestElectedLeaderKeepsLeaseWhileWorkersHang(t *testing.T) {
+	t.Parallel()
+	_, db := openSQLiteRepo(t)
+	require.NoError(t, db.AutoMigrate(&leader.LeaseRecord{}))
+	cfg := leader.LeaseConfig{Duration: 600 * time.Millisecond, RenewDeadline: 300 * time.Millisecond, RetryPeriod: 50 * time.Millisecond}
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+	var once sync.Once
+	g := leader.NewGroup(time.Second, leader.Worker{Name: "hung", Run: func(context.Context) {
+		once.Do(func() { close(started) })
+		<-release // ignores its ctx
+	}})
+	e := startElection(g, leader.NewLease(db, "workers", "me", cfg))
+	t.Cleanup(func() {
+		close(release)
+		e.cancel()
+		<-e.done
+	})
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("not leader")
+	}
+
+	assert.False(t, e.Close(100*time.Millisecond), "the hung worker is reported")
+	assert.False(t, g.Running())
+
+	// Held: this replica is still the holder and the expiry is in the
+	// future, also after more than one lease duration (the election renews).
+	time.Sleep(2 * cfg.Duration)
+	var held int64
+	require.NoError(t, db.Raw("SELECT COUNT(1) FROM leader_leases WHERE name = 'workers' AND holder = 'me' AND expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now')").Scan(&held).Error)
+	assert.Equal(t, int64(1), held, "the lease is not released while the worker runs")
+	select {
+	case <-e.done:
+		t.Fatal("the election ended")
+	default:
+	}
+	// Another replica cannot take it.
+	other := leader.NewLease(db, "workers", "other", cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	otherDone := make(chan struct{})
+	go func() {
+		defer close(otherDone)
+		other.Run(ctx, func(context.Context) { t.Error("another replica started while the worker runs") }, func() {})
+	}()
+	time.Sleep(3 * cfg.RetryPeriod)
+	cancel()
+	<-otherDone
+}

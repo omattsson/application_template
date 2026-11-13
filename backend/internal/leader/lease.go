@@ -207,12 +207,14 @@ func (l *Lease) campaign(ctx context.Context, c *campaigner) (time.Time, bool) {
 			switch {
 			case !ok:
 				slog.Debug("Leader lease held by another replica", "lease", l.name, "holder", holder)
-			case time.Since(sent) < l.cfg.RenewDeadline:
+			case time.Since(sent) < l.cfg.RenewDeadline-l.cfg.RetryPeriod:
 				return sent, true
 			default:
-				// Acquired, but the answer came too late to lead safely:
-				// the next attempt renews it (the row names this holder).
-				slog.Warn("Leader lease: acquisition answered after the renew deadline; retrying", "lease", l.name, "holder", l.holder)
+				// Acquired, but so late that the first renewal (one
+				// RetryPeriod from now) would be due after the renew
+				// deadline: the term would stop at once. The next attempt
+				// renews it (the row names this holder).
+				slog.Warn("Leader lease: acquisition answered too late to lead; retrying", "lease", l.name, "holder", l.holder)
 			}
 		}
 		if !sleepCtx(ctx, l.cfg.RetryPeriod) {

@@ -130,7 +130,8 @@ func (tr *tracker) notify() {
 }
 
 // callbacks returns onStarted and onStopped for replica id. onStarted
-// blocks until its ctx ends, like a k8s-style leader callback, so the test
+// blocks until its ctx ends, like a leader callback that blocks for the
+// whole term, so the test
 // also checks that the ctx is cancelled when leadership ends.
 func (tr *tracker) callbacks(t *testing.T, id string) (func(context.Context), func()) {
 	t.Helper()
@@ -643,4 +644,32 @@ func TestLeaseOnStartedContextEndsBeforeOnStopped(t *testing.T) {
 	cancel()
 	<-done
 	<-stopped
+}
+
+// An acquisition answered so late that the first renewal would be due after
+// the renew deadline is not used: the term would stop at once. The next
+// attempt acquires again (the row names this holder) and starts one stable
+// term.
+func TestLeaseLateAcquisitionIsNotUsed(t *testing.T) {
+	t.Parallel()
+	shared := newSharedDB(t)
+	r := shared.open(t)
+	var slowOnce atomic.Bool
+	slowOnce.Store(true)
+	delay := testLeaseConfig.RenewDeadline - testLeaseConfig.RetryPeriod/2
+	require.NoError(t, r.db.Callback().Raw().Before("gorm:raw").Register("test:slow", func(*gorm.DB) {
+		if slowOnce.Swap(false) {
+			time.Sleep(delay) // the first UPDATE answers just before RenewDeadline
+		}
+	}))
+	tr := newTracker()
+	start := time.Now()
+	startReplica(t, tr, r, "workers", "a", testLeaseConfig)
+	tr.waitFor(t, 3*time.Second, "a leads", func() bool { return len(tr.leaders()) == 1 })
+	terms, _ := tr.snapshot("a")
+	assert.GreaterOrEqual(t, terms[0].started.Sub(start), delay+testLeaseConfig.RetryPeriod, "the late answer did not start a term")
+	time.Sleep(3 * testLeaseConfig.RetryPeriod)
+	terms, _ = tr.snapshot("a")
+	assert.Len(t, terms, 1, "no term that stops at once")
+	assert.True(t, terms[0].stopped.IsZero())
 }

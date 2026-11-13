@@ -374,22 +374,34 @@ func startElection(group *leader.Group, lease leaseRunner) *electedLeader {
 // Close is the leader step of shutdown. It stops the workers first (and
 // keeps the group from starting again), then ends the election, which
 // releases the lease so another replica takes over at once. The whole call
-// takes at most timeout; when the election does not end in time the lease
+// takes at most timeout.
+//
+// When the workers did not stop within timeout (a worker ignores its
+// context), Close returns false WITHOUT ending the election: the lease is
+// not released, and Run keeps renewing it while the database is open, so no
+// other replica starts while these workers still run. Once the database
+// closes (the last shutdown step) the renewals fail and the lease expires
+// Duration after the last one, after this process has exited. The closed
+// group cannot start again even if the election reacquires the lease. When
+// the workers stopped but the election does not end in time, the lease
 // expires on its own.
 func (e *electedLeader) Close(timeout time.Duration) bool {
 	start := time.Now()
-	ok := e.group.Close(timeout)
+	if !e.group.Close(timeout) {
+		slog.Error("Leader workers did not stop in time; the lease is kept until the process exits")
+		return false
+	}
 	e.cancel()
 	timer := time.NewTimer(max(timeout-time.Since(start), 0))
 	defer timer.Stop()
 	select {
 	case <-e.done:
-		return ok
+		return true
 	default:
 	}
 	select {
 	case <-e.done:
-		return ok
+		return true
 	case <-timer.C:
 		slog.Warn("Leader election did not end in time; the lease expires on its own")
 		return false
@@ -646,7 +658,9 @@ func stepBudget(ctx context.Context) time.Duration {
 //  10. Database: close the connection pool last.
 //
 // With LEADER_ELECTION_ENABLED the leader step (3) also ends the election
-// and releases the lease, within the same budget (electedLeader.Close).
+// and releases the lease, within the same budget (electedLeader.Close);
+// when a worker did not stop in time the lease is kept until the process
+// exits, so no other replica starts while that worker runs.
 //
 // Budgets: the diagnostics step gets auxShutdownTimeout. The HTTP step, the
 // audit step, the leader step, the in-flight step and the telemetry step each
