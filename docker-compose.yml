@@ -38,8 +38,9 @@ services:
       - "${BACKEND_PORT:-8081}:8081"
     # The ordered shutdown runs up to five steps of SERVER_SHUTDOWN_TIMEOUT
     # each (HTTP drain, audit log writes with AUTH_ENABLED=true, leader
-    # workers, in-flight work, telemetry): 5 x 30s with the default, plus a
-    # margin. Raise it with SERVER_SHUTDOWN_TIMEOUT.
+    # workers, in-flight work, telemetry): 5 x 30s with the default, plus 2s
+    # for the metrics and pprof servers, plus a margin. Raise it with
+    # SERVER_SHUTDOWN_TIMEOUT.
     stop_grace_period: 170s
     environment:
       - APP_NAME=${APP_NAME:-application}

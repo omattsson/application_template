@@ -1,4 +1,4 @@
-.PHONY: test-e2e test-e2e-auth gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs check-agents test-backend-unit dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
+.PHONY: test-e2e test-e2e-auth gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs check-agents test-backend-unit dev dev-backend dev-frontend dev-otel mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
 
 # MySQL service management
 mysql-start:
@@ -43,6 +43,12 @@ dev-backend:
 # Development mode for frontend only (also starts the backend it depends on)
 dev-frontend:
 	$(DEV_ENV) docker compose up --build frontend
+
+# Development mode with the observability setup (OpenTelemetry Collector,
+# Prometheus, Tempo, Grafana on http://localhost:3001). Development only: see
+# docker-compose.otel.yml and "Observability setup" in docs/claude/operations.md.
+dev-otel:
+	$(DEV_ENV) docker compose -f docker-compose.yml -f docker-compose.otel.yml up --build
 
 # Production mode for both services
 prod:

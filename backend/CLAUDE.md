@@ -20,7 +20,7 @@ Packages in `internal/`:
 - `sessionstore`: token and session blocklist and OIDC login state. `SESSION_STORE=mysql` is the default; `memory` is for tests and one replica.
 - `websocket`: hub, clients, topics, revalidation, message types.
 
-The entry point is `api/main.go`. The helpers (database, services, router, HTTP server, ordered shutdown) are in `api/bootstrap.go`.
+The entry point is `api/main.go`. The helpers (database, services, router, HTTP server, ordered shutdown) are in `api/bootstrap.go`; the metrics and pprof servers are in `api/servers.go`.
 
 ## Handler Pattern
 
@@ -79,7 +79,8 @@ Key groups:
 - `SERVER_*`, `RATE_LIMIT` (default 100 per minute), `LOGIN_RATE_LIMIT` (default 10 per minute), `TRUSTED_PROXIES` (validated by `config.ParseTrustedProxies` at load, applied by `routes.Setup`), `ENABLE_SWAGGER`.
 - `LOG_LEVEL`: `debug`, `info` (default), `warn` or `error`. `main` applies it to the default `slog` logger, which writes text to stderr. GORM SQL errors and slow queries (200 ms or more) go through `slog`; with `APP_DEBUG=false` the SQL values are replaced with `?`.
 - `GIN_MODE` wins when set. Otherwise the mode is debug when `APP_DEBUG` is true and release when it is false. The code default of `APP_DEBUG` is `true`: set `false` in production.
-- `OTEL_ENABLED` (default false), `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACE_SAMPLE_RATE`, `METRICS_ENABLED` (default false). The two switches are strict booleans; the other three are read and validated only with `OTEL_ENABLED=true`.
+- `OTEL_ENABLED` (default false), `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACE_SAMPLE_RATE`, `METRICS_ENABLED` (default false), `METRICS_ADDR` (default `:9090`, read with `METRICS_ENABLED=true`). The two switches are strict booleans; the other three are read and validated only with `OTEL_ENABLED=true`.
+- `PPROF_ENABLED` (default false, strict), `PPROF_ADDR` (default `127.0.0.1:6060`), `PPROF_ALLOW_NON_LOOPBACK`, `PPROF_MUTEX_FRACTION`, `PPROF_BLOCK_RATE`. The metrics and pprof servers are in `api/servers.go`, on ports of their own (never the API router), and `shutdown` stops them first. pprof refuses a non-loopback address unless `PPROF_ALLOW_NON_LOOPBACK=true`: a heap dump exposes secrets. `/metrics` has no authentication: keep it on a private network.
 - `CORS_ALLOWED_ORIGINS` (default `*`, development only). It also gates the WebSocket `Origin` header.
 
 ## Migrations

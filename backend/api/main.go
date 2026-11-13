@@ -66,6 +66,9 @@ func main() {
 	}
 	attachTelemetry(s, tel)
 	startFailureHook = func() { flushTelemetry(tel) }
+	// The metrics and pprof servers have ports of their own and start only
+	// when enabled (servers.go).
+	addAuxServers(s, startMetricsServer(cfg, tel), startPprofServer(cfg))
 	s.servers = append(s.servers, startHTTPServer(cfg, router))
 
 	quit := make(chan os.Signal, 1)

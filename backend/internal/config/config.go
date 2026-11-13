@@ -271,6 +271,16 @@ type ServerConfig struct {
 	// with X-Forwarded-For or X-Real-IP (TRUSTED_PROXIES, see
 	// ParseTrustedProxies); nil = no proxy is trusted.
 	TrustedProxies []string
+	// PprofAddr is PPROF_ADDR (default 127.0.0.1:6060): where the pprof server
+	// listens. LoadConfig refuses a non-loopback address unless
+	// PprofAllowNonLoopback is true. Read only with PprofEnabled.
+	PprofAddr string
+	// PprofMutexFraction is PPROF_MUTEX_FRACTION (default 0, off):
+	// runtime.SetMutexProfileFraction. Read only with PprofEnabled.
+	PprofMutexFraction int
+	// PprofBlockRate is PPROF_BLOCK_RATE in nanoseconds (default 0, off):
+	// runtime.SetBlockProfileRate. Read only with PprofEnabled.
+	PprofBlockRate int
 	// 4-byte fields
 	// RateLimit is RATE_LIMIT: requests per minute per client IP (default 100).
 	RateLimit int32
@@ -280,6 +290,12 @@ type ServerConfig struct {
 	// 1-byte fields
 	// EnableSwagger is ENABLE_SWAGGER (default false).
 	EnableSwagger bool
+	// PprofEnabled is PPROF_ENABLED (default false): serve net/http/pprof on
+	// its own port (PprofAddr), never on the API port.
+	PprofEnabled bool
+	// PprofAllowNonLoopback is PPROF_ALLOW_NON_LOOPBACK (default false): allow
+	// a PprofAddr that is not loopback. The server then logs a warning.
+	PprofAllowNonLoopback bool
 }
 
 // LogConfig holds logging configuration
@@ -336,6 +352,11 @@ type OtelConfig struct {
 	// traces that are recorded, 0 to 1. A request that arrives with a
 	// sampled traceparent is always recorded.
 	SampleRate float64
+	// MetricsAddr is METRICS_ADDR (default :9090): where the Prometheus
+	// /metrics server listens. It is separate from the API port, has no
+	// authentication and must stay on a private network. Read only with
+	// MetricsEnabled.
+	MetricsAddr string
 	// Enabled is OTEL_ENABLED (default false): traces, metrics and logs go
 	// to the collector.
 	Enabled bool
@@ -600,6 +621,10 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	if err = loadPprofConfig(&cfg.Server); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	trustedProxies, err := ParseTrustedProxies(getEnv("TRUSTED_PROXIES", ""))
 	if err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
@@ -707,7 +732,14 @@ func loadOtelConfig() (OtelConfig, error) {
 		MetricsEnabled: metrics,
 		Endpoint:       strings.TrimSpace(getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")),
 		ServiceName:    getEnv("OTEL_SERVICE_NAME", "backend-api"),
+		MetricsAddr:    strings.TrimSpace(getEnv("METRICS_ADDR", DefaultMetricsAddr)),
 		SampleRate:     1,
+	}
+
+	if metrics {
+		if err = validateListenAddr("METRICS_ADDR", cfg.MetricsAddr); err != nil {
+			return OtelConfig{}, err
+		}
 	}
 
 	if !enabled {

@@ -20,7 +20,7 @@ The security rules are in `CLAUDE.md` ("Security Rules") and `docs/claude/auth-s
 
 ## Graceful shutdown
 
-`api/main.go` waits for `SIGINT` or `SIGTERM`; `shutdown` in `api/bootstrap.go` stops the services in this order: HTTP server, audit recorder drain (auth on), leader worker group, in-flight work, WebSocket hub, telemetry, rate limiters, session store (auth on), database. Every step runs even when an earlier one failed.
+`api/main.go` waits for `SIGINT` or `SIGTERM`; `shutdown` in `api/bootstrap.go` stops the services in this order: metrics and pprof servers (when enabled), HTTP server, audit recorder drain (auth on), leader worker group, in-flight work, WebSocket hub, telemetry, rate limiters, session store (auth on), database. Every step runs even when an earlier one failed.
 
-- The HTTP step gets `SERVER_SHUTDOWN_TIMEOUT` (default 30s; 5s when set to 0). The audit, leader, in-flight and telemetry steps each get their own detached budget of the same length, so a hung request does not starve them. The worst case is about five times `SERVER_SHUTDOWN_TIMEOUT`: the stop grace period must be longer (`docker-compose.yml`: `stop_grace_period: 170s` for the default).
+- The HTTP step gets `SERVER_SHUTDOWN_TIMEOUT` (default 30s; 5s when set to 0). The audit, leader, in-flight and telemetry steps each get their own detached budget of the same length, so a hung request does not starve them. The metrics and pprof servers stop first, together within a fixed 2 s. The worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus those 2 s (152 s by default): the stop grace period must be longer (`docker-compose.yml`: `stop_grace_period: 170s` for the default).
 - Periodic work is a `leader.Worker` passed to `leader.NewGroup` before `workers.Start`. Work that outlives its request starts with `inflight.Tracker.Go` (it returns `false` once shutdown has begun). All background work respects cancellation.

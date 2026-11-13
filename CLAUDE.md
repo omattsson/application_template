@@ -22,6 +22,7 @@ signal -> shutdown              # ordered, see below
 
 **Graceful shutdown** (`SIGINT` or `SIGTERM`), in this order; every step runs even when an earlier one failed:
 
+0. Metrics and pprof servers (when enabled): stopped first, within a fixed 2 s.
 1. HTTP server: no new requests, wait for the open ones (`SERVER_SHUTDOWN_TIMEOUT`).
 2. Audit recorder (auth on): drain the pending audit writes.
 3. Leader worker group: stop the background workers.
@@ -32,7 +33,7 @@ signal -> shutdown              # ordered, see below
 8. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
 9. Database: close the pool last.
 
-The steps after the HTTP step have their own budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT`. The orchestrator's stop grace period must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s. Details: `docs/claude/operations.md`.
+The steps after the HTTP step have their own budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0. The orchestrator's stop grace period must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s. Details: `docs/claude/operations.md`.
 
 **Gin mode.** `GIN_MODE` wins when it is set. Otherwise the mode is debug when `APP_DEBUG` is true and release when it is false. The code default of `APP_DEBUG` is `true` and nothing warns about it: set `APP_DEBUG=false` in production (`make prod*` does).
 

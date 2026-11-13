@@ -121,6 +121,9 @@ type services struct {
 	rateLimiters      stopper
 	db                closer
 	servers           []httpServer
+	// auxServers are the metrics and pprof servers (servers.go). shutdown
+	// stops them first, within auxShutdownTimeout.
+	auxServers []httpServer
 }
 
 // isNilInterface reports whether v is nil or holds a nil pointer. A typed nil
@@ -503,6 +506,10 @@ func stepBudget(ctx context.Context) time.Duration {
 
 // shutdown stops the services in this order:
 //
+//  0. Metrics and pprof servers (auxServers): first, together within
+//     auxShutdownTimeout (2 s), and closed when they are not done by then.
+//     A pprof profile request can run for 30 s and must not take time from
+//     the steps below.
 //  1. HTTP servers: no new requests; wait for the open requests. A server
 //     whose Shutdown fails (deadline) is closed, so its handlers do not run
 //     on while the database closes.
@@ -525,9 +532,9 @@ func stepBudget(ctx context.Context) time.Duration {
 // minStepBudget), detached from ctx with ctxutil.Detach. A hung request that
 // uses up ctx therefore does not starve them: the leader workers still get
 // time to stop and the telemetry flush still gets a live context. The worst
-// case is about five budgets (each of the five steps hangs); keep the grace
-// period of the orchestrator above that, or SERVER_SHUTDOWN_TIMEOUT below a
-// fifth of it.
+// case is about five budgets (each of the five steps hangs) plus
+// auxShutdownTimeout; keep the grace period of the orchestrator above that,
+// or SERVER_SHUTDOWN_TIMEOUT below a fifth of it.
 //
 // Every step runs even when an earlier step failed. shutdown returns the
 // errors of all steps; a step that ran out of time wraps
@@ -535,6 +542,19 @@ func stepBudget(ctx context.Context) time.Duration {
 func shutdown(ctx context.Context, s *services) error {
 	budget := stepBudget(ctx) // measured before the HTTP step uses ctx up
 	var errs []error
+
+	if len(s.auxServers) > 0 {
+		auxCtx, cancel := ctxutil.Detach(ctx, auxShutdownTimeout)
+		for _, srv := range s.auxServers {
+			if err := srv.Shutdown(auxCtx); err != nil {
+				errs = append(errs, fmt.Errorf("diagnostics server: %w", err))
+				if cerr := srv.Close(); cerr != nil {
+					errs = append(errs, fmt.Errorf("close diagnostics server: %w", cerr))
+				}
+			}
+		}
+		cancel()
+	}
 
 	for _, srv := range s.servers {
 		if err := srv.Shutdown(ctx); err != nil {

@@ -13,6 +13,8 @@ Where things are. Run `ls` when a file is missing here: the tree below lists the
 ├── README.md, WIKI.md         # Human getting-started docs
 ├── Makefile                   # Every developer and CI command (make help is not defined: read the file)
 ├── docker-compose.yml         # db, backend, frontend; networks backend-net and frontend-net
+├── docker-compose.otel.yml    # override: collector, Prometheus, Tempo, Grafana (make dev-otel)
+├── config/otel/               # collector, Prometheus, Tempo and Grafana provisioning files
 ├── backend/                   # Go service
 ├── frontend/                  # React app
 ├── docs/claude/               # Reference docs that CLAUDE.md links to

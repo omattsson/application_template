@@ -1,0 +1,129 @@
+# Local observability setup: OpenTelemetry Collector, Prometheus, Tempo and
+# Grafana. An override of docker-compose.yml; `make dev-otel` runs both:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.otel.yml up --build
+#
+# DEVELOPMENT ONLY. The backend sends OTLP to the collector over plain gRPC
+# (no TLS) on the private Compose network, which the backend logs as a
+# warning at start, and the Grafana admin password below is a documented dev
+# value. For anything else, run a collector on a trusted network and set your
+# own credentials.
+#
+# Host ports are published on 127.0.0.1 only (set the *_PORT variables when a
+# port is in use):
+#   Grafana     http://localhost:3001  (GRAFANA_PORT)  login admin / GRAFANA_ADMIN_PASSWORD
+#   Prometheus  http://localhost:9090  (PROMETHEUS_PORT)
+#   Tempo API   http://localhost:3200  (TEMPO_PORT)
+#   OTLP        localhost:4317 gRPC and :4318 HTTP (OTLP_GRPC_PORT, OTLP_HTTP_PORT)
+# The backend's /metrics port (9090) and pprof are NOT published: Prometheus
+# scrapes the backend over the Compose network. pprof stays off; to profile,
+# see "Profiling" in docs/claude/operations.md.
+services:
+  backend:
+    environment:
+      - OTEL_ENABLED=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-backend-api}
+      # Prometheus text format on :9090 of the container (config/otel/prometheus.yml
+      # scrapes it). A port of its own, not published to the host.
+      - METRICS_ENABLED=true
+      - METRICS_ADDR=:9090
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${OTLP_GRPC_PORT:-4317}:4317"   # OTLP gRPC (loopback only)
+      - "127.0.0.1:${OTLP_HTTP_PORT:-4318}:4318"   # OTLP HTTP (loopback only)
+    volumes:
+      - ./config/otel/collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      tempo:
+        condition: service_healthy
+    # The image has no shell or wget: the check validates the configuration.
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "validate", "--config", "/etc/otelcol-contrib/config.yaml"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - backend-net
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./config/otel/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"   # Tempo HTTP API (loopback only)
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3200/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - backend-net
+
+  prometheus:
+    image: prom/prometheus:v3.3.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"   # Prometheus UI (loopback only)
+    volumes:
+      - ./config/otel/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - backend-net
+
+  grafana:
+    image: grafana/grafana:12.3.1
+    restart: unless-stopped
+    ports:
+      # 3001 on the host: the web UI of the application uses 3000.
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SECURITY_ADMIN_USER=admin
+      # DEV ONLY default: set GRAFANA_ADMIN_PASSWORD to your own value. It is
+      # read at the first start of an empty grafana_data volume; a later
+      # change needs `docker compose down -v` or a reset in Grafana.
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-devonly-change-me}
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_METRICS_ENABLED=true
+    volumes:
+      - ./config/otel/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - backend-net
+
+volumes:
+  tempo_data:
+  prometheus_data:
+  grafana_data:

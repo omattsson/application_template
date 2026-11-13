@@ -1,0 +1,51 @@
+# OpenTelemetry Collector for the local development setup (docker-compose.otel.yml).
+# Dev only: the receivers listen on every interface of the private Compose
+# network and the backend connects without TLS.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  # Traces go to Tempo.
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      insecure: true
+  # Logs and OTLP metrics are logged by the collector (docker compose logs
+  # otel-collector). The application metrics are not stored from here:
+  # Prometheus scrapes the backend's /metrics endpoint directly, so each series
+  # exists once.
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+service:
+  telemetry:
+    metrics:
+      address: "0.0.0.0:8888"
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

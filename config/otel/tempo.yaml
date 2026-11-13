@@ -1,0 +1,19 @@
+# Grafana Tempo for the local development setup (docker-compose.otel.yml):
+# single binary, traces on the local disk of the tempo_data volume.
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
