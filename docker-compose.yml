@@ -31,8 +31,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       target: ${GO_ENV:-production}
-    # Host port of the API (the browser in development calls
-    # http://localhost:8081). The container always listens on 8081.
+    # Host port of the API, for direct calls (curl, Swagger). The browser
+    # calls the web UI origin, which proxies /api. The container always
+    # listens on 8081.
     ports:
       - "${BACKEND_PORT:-8081}:8081"
     # The ordered shutdown runs up to five steps of SERVER_SHUTDOWN_TIMEOUT
@@ -42,6 +43,9 @@ services:
     stop_grace_period: 170s
     environment:
       - APP_NAME=${APP_NAME:-application}
+      # Product name in GET /api/v1/ui-config (the login page shows it). Empty
+      # means the backend default.
+      - APP_TITLE=${APP_TITLE:-}
       - APP_ENV=${GO_ENV:-production}
       # APP_DEBUG drives the Gin mode (true: debug, false: release).
       # GIN_MODE, when set, wins; empty leaves the choice to APP_DEBUG.
@@ -166,8 +170,10 @@ volumes:
   backend_go_mod:
   frontend_node_modules:
 
-# Container and network names are scoped by the Compose project, so two
-# checkouts (or another project with the same service names) do not collide.
+# Network and volume names are scoped by the Compose project. Two checkouts
+# still collide on the host ports (3000, 8081, 3306) and on the fixed subnet
+# below: change BACKEND_PORT, FRONTEND_PORT, MYSQL_PORT, FRONTEND_NET_SUBNET
+# and FRONTEND_PROXY_IP for the second one.
 networks:
   backend-net:
   frontend-net:

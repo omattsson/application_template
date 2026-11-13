@@ -4,93 +4,14 @@ applyTo: "**/*.go"
 
 # Go Backend Instructions
 
-## Project Layout
-All backend code lives under `backend/`. The module is `backend` (see `go.mod`). Use `backend/internal/` for private packages and `backend/pkg/` for shared utilities.
+The backend rules are in `backend/CLAUDE.md`; the repository-wide rules are in `CLAUDE.md`. This file lists what Copilot must not get wrong.
 
-## Handler Pattern
-HTTP handlers live in `internal/api/handlers/`. Resource handlers use the `Handler` struct with repository injection:
-```go
-type Handler struct {
-    repository models.Repository
-}
-func NewHandler(repository models.Repository) *Handler { ... }
-func (h *Handler) CreateItem(c *gin.Context) { ... }
-```
-Register new handlers in `internal/api/routes/routes.go` under the `/api/v1` Gin route group.
-
-## Repository Interface
-All data access goes through `models.Repository` (defined in `internal/models/models.go`):
-```go
-type Repository interface {
-    Create(interface{}) error
-    FindByID(id uint, dest interface{}) error
-    Update(interface{}) error
-    Delete(interface{}) error
-    List(dest interface{}, conditions ...interface{}) error
-    Ping() error
-}
-```
-The implementation is `GenericRepository` (GORM/MySQL). The factory in `internal/database/repository.go` initializes it.
-
-## Models
-Define models in `internal/models/models.go`. Embed `Base` for ID, timestamps, and soft-delete:
-```go
-type Item struct {
-    Base
-    Name    string  `gorm:"size:255;not null" json:"name"`
-    Price   float64 `json:"price"`
-    Version uint    `gorm:"not null;default:0" json:"version"`
-}
-```
-Add validation methods implementing `Validator` interface in `internal/models/validation.go`.
-
-## Error Handling
-Use the custom error types in `internal/database/errors.go` and `pkg/dberrors/errors.go`:
-- Sentinel errors: `ErrNotFound`, `ErrDuplicateKey`, `ErrValidation`, `ErrConnectionFailed`
-- Wrap with context: `NewDatabaseError("operation", err)`
-- Check with: `errors.As(err, &dbErr)` and `errors.Is(dbErr.Err, database.ErrNotFound)`
-- See `handleDBError()` in `handlers/items.go` for the HTTP status mapping pattern.
-
-## Testing
-- Use `testify/assert` — never `testing` alone for assertions.
-- Use **table-driven tests** with `tests := []struct{...}` and `t.Run(tt.name, ...)`.
-- Always call `t.Parallel()` on both the parent test and subtests.
-- Capture range variables: `tt := tt` before `t.Run`.
-- Use `MockRepository` from `handlers/mock_repository.go` for unit tests (no DB needed).
-- Test setup pattern: `gin.SetMode(gin.TestMode)` + `httptest.NewRecorder()` + `setupTestRouter()`.
-- Validate JSON responses with `gojsonschema` against schemas in `handlers/test_schemas.go`.
-- Integration test naming: `TestDatabase*` (MySQL).
-- Run unit tests: `cd backend && go test ./... -v -short`
-- Run with coverage (80% threshold): `cd backend && make test-coverage`
-
-## Swagger/OpenAPI
-Add godoc-style annotations above handler methods:
-```go
-// CreateItem godoc
-// @Summary Create a new item
-// @Tags items
-// @Accept json
-// @Produce json
-// @Param item body models.Item true "Item object"
-// @Success 201 {object} models.Item
-// @Router /api/v1/items [post]
-```
-Regenerate docs: `cd backend && make docs` (runs `swag init -g api/main.go`).
-
-## Struct Field Alignment
-This project optimizes struct field ordering for memory alignment. Place 8-byte fields (pointers, `time.Duration`, strings, `int64`) before smaller fields. Use `//nolint:govet` when intentional.
-
-## Migrations
-Add versioned migrations in `internal/database/migrations.go` using `schema.Migrator`:
-```go
-migrator.AddMigration(schema.Migration{
-    Version: "20231201000001",
-    Name:    "create_base_tables",
-    Up:      func(tx *gorm.DB) error { return tx.AutoMigrate(&models.Item{}) },
-    Down:    func(tx *gorm.DB) error { return tx.Migrator().DropTable(&models.Item{}) },
-})
-```
-Migrations run automatically on startup.
-
-## Configuration
-All config via env vars, loaded by `config.LoadConfig()` with `.env` fallback (godotenv). Key vars: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `PORT`, `APP_ENV`, `DB_TYPE` (`mysql` or `sqlite`). See `internal/config/config.go` for all fields and defaults.
+- The module is `backend` (`backend/go.mod`, Go 1.27). Private packages are in `backend/internal/`, shared ones in `backend/pkg/`.
+- `models.Repository` (Items) and the other repository interfaces take `context.Context` as the first parameter of every method. Pass `c.Request.Context()` for reads; use `detachedCtx(c)` (and `defer cancel()`) for a write whose effects follow the commit.
+- Handlers: bind with `ShouldBindJSON` and answer a failure with `respondBindError` (413 or 400); map repository errors with `mapError(err, "Entity")` (404, 409, 400, 499, 500). A 500 never exposes the cause: `"Internal server error"`.
+- Repositories built on `BaseRepository` write through `Write` or `Tx` (deadlock retry). Never interpolate user input into SQL.
+- Never use a bare `context.WithoutCancel`: use `ctxutil.Detach`.
+- Tests: `testify/assert`, table-driven, `t.Parallel()` on the parent and the subtests, `tt := tt`, `MockRepository` for Items, schemas in `handlers/test_schemas.go`. Integration tests carry the `integration` build tag and run one package at a time.
+- Swagger annotations on every handler (`@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Router`); regenerate with `make docs`.
+- Order struct fields for memory alignment (8-byte fields first).
+- Configuration is read from environment variables in `internal/config`; a new variable goes into `backend/.env.example`, `backend/config/.env.example` and `docs/claude/operations.md`.

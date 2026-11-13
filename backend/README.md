@@ -37,7 +37,7 @@ backend/
 
 ## Prerequisites
 
-- Go 1.24 or later
+- Go 1.27 or later (see `go.mod`)
 - Docker and Docker Compose (for containerized development)
 - Make (optional, for using Makefile commands)
 
@@ -108,10 +108,11 @@ The service provides health check endpoints:
 
 Configuration is handled through environment variables:
 
-- `GO_ENV` - Environment (development/production)
+- `GO_ENV` - Environment label (default `development`; nothing branches on it; Compose uses it to pick the image target)
 - `APP_DEBUG` - Gin debug mode when true, release mode when false
 - `GIN_MODE` - Optional; when set it wins over `APP_DEBUG`
-- `PORT` - Server port inside the process or container (default: 8081)
+- `SERVER_PORT` - Server port inside the process or container (default: 8081)
+- `AUTH_ENABLED` - Optional authentication, off by default; see the root README "Authentication"
 - `TRUSTED_PROXIES`, `RATE_LIMIT`, `LOGIN_RATE_LIMIT` - Client IP behind a proxy and the per-IP limits; see "Behind a proxy" in the root README and `.env.example`
 - `LOG_LEVEL` - Logging level (debug/info/warn/error)
 - `ENABLE_SWAGGER` - Serve the Swagger UI at `/swagger/index.html` (default: false)

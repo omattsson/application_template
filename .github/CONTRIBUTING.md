@@ -44,7 +44,7 @@ By participating in this project, you agree to abide by our Code of Conduct. Ple
 ### Prerequisites
 
 - Docker and Docker Compose
-- Go 1.24 or later (for backend development)
+- Go 1.27 or later (for backend development)
 - Node.js 22.12 or later (for frontend development)
 
 ### Setup Steps

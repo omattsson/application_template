@@ -1,0 +1,192 @@
+# Operations
+
+How to run, configure and stop the backend. Read it before you change configuration, the shutdown order, the Compose file or anything that runs on more than one replica. The auth behaviour is in `docs/claude/auth-sessions.md`.
+
+## Requirements
+
+- MySQL 8.0.17 or later. Migration `20260101000002` gives `session_entries.entry_key` the collation `utf8mb4_0900_bin`, which MySQL has from 8.0.17. `docker-compose.yml` runs `mysql:8.0`.
+- The backend runs the migrations at every start (`database.NewRepository`). Replicas that start together serialize on the MySQL advisory lock `schema_migrations.<database>` (`GET_LOCK`). A replica that cannot get it waits up to 5 minutes (300 s), then the start fails with "timed out waiting for the migration lock". A migration that hangs therefore holds the other replicas for up to 5 minutes. Integration tests run one package at a time (`-p 1`) for the same reason: the packages share one database.
+- Upgraders: migration `20260101000001` drops the old `users` table (the unused one with a numeric ID and no `password_hash` column) without copying its rows, then creates `users`, `refresh_tokens`, `api_keys` and `audit_logs`. The tables exist whether or not `AUTH_ENABLED` is true.
+- Compose is a development setup. It publishes MySQL on host port `MYSQL_PORT` (3306) with the default credentials `MYSQL_PASSWORD=apppass` and `MYSQL_ROOT_PASSWORD=rootpass`. These are dev-only values: set your own, or do not publish the port, anywhere else.
+
+## Configuration reference
+
+`internal/config/config.go` and `oidc.go` read every variable below. `backend/.env.example` has the same list with comments, and `scripts/check-env-docs.sh` (`make check-env-docs`, part of `make lint`) fails when a variable of the code is missing here or in the example files, or when the example documents one that no code reads. Add a variable to the code, `backend/.env.example`, `backend/config/.env.example` and this table together.
+
+An unset or empty variable has its default. A duration is a Go duration such as `15m` or `12h`. With `AUTH_ENABLED=true` a set but invalid boolean or duration of the auth and OIDC settings stops the start; with auth off they are read leniently (the default on an invalid value) because nothing uses them. `RATE_LIMIT` and `LOGIN_RATE_LIMIT` are strict in both modes.
+
+### Application
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ENV_FILE` | `.env` | Dotenv file to load; a missing file is fine. A variable already in the process environment wins. |
+| `APP_NAME` | `backend-api` | Required non-empty. |
+| `GO_ENV` | `development` | Required non-empty; nothing branches on it. Compose uses the same name for the image target. |
+| `APP_TITLE` | `Application Template` | Product name in `GET /api/v1/ui-config`. |
+| `APP_DEBUG` | `true` | Gin debug mode and SQL values in the log. Set `false` in production (`make prod*` does). |
+| `GIN_MODE` | not set | When set, wins over `APP_DEBUG`. |
+
+### Authentication and sessions
+
+| Variable | Default | Notes |
+|---|---|---|
+| `AUTH_ENABLED` | `false` | Strict boolean. With `false` the API is open and the auth, API key, user and audit log routes answer 404. |
+| `JWT_SECRET` | none | Required with auth on, 16 or more characters (surrounding whitespace does not count). Never logged. |
+| `ADMIN_USERNAME` | `admin` | The bootstrap admin, a service account (see `auth-sessions.md`). Use a non-default name. |
+| `ADMIN_PASSWORD` | none | Empty: no admin is created. With auth on a set value needs 8 or more characters and at most 72 bytes, or the start fails. Used once at creation. |
+| `SELF_REGISTRATION` | `false` | Anyone can create a local account with the role `user`. |
+| `SECURE_COOKIES` | `true` | `__Host-` cookie names and the `Secure` attribute. Plain HTTP on a host other than `localhost` needs `false`. Strict boolean with auth on. |
+| `JWT_EXPIRATION` | `24h` | Token outside a refresh session. |
+| `ACCESS_TOKEN_EXPIRATION` | `15m` | Must be shorter than `SESSION_IDLE_TIMEOUT`. |
+| `SESSION_IDLE_TIMEOUT` | `30m` | At most `SESSION_MAX_LIFETIME`. |
+| `SESSION_MAX_LIFETIME` | `12h` | Absolute session lifetime. |
+| `REFRESH_TOKEN_EXPIRATION` | `168h` | Capped by the session deadline, so at most 12 h with the defaults. |
+| `REFRESH_REUSE_GRACE` | `30s` | `0` to `5m`; `0` turns the grace window off. |
+| `SESSION_STORE` | `mysql` | `mysql` or `memory`. `memory` is for one replica in development. |
+
+### OpenID Connect
+
+Needs `AUTH_ENABLED=true`; with auth off the OIDC routes answer 404 and the settings are not validated.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `OIDC_ENABLED` | `false` | |
+| `OIDC_ISSUER` | none | Required with OIDC on. https, no credentials, query or fragment. |
+| `OIDC_CLIENT_ID` | none | Required with OIDC on. |
+| `OIDC_CLIENT_SECRET` | none | Required with OIDC on. Never logged. |
+| `OIDC_REDIRECT_URL` | none | Required with OIDC on. https, or http for a loopback host. Behind the bundled nginx or the Vite dev server it is `<origin>/api/api/v1/auth/oidc/callback` (both strip one `/api`). |
+| `OIDC_SCOPES` | `openid,profile,email` | Must include `openid`. |
+| `OIDC_ROLE_CLAIM` | `roles` | Top-level claim, a string or a list of strings; at most 200 values. |
+| `OIDC_ADMIN_ROLES` | empty | Exact, case-sensitive names. Empty: nobody is an admin through OIDC. |
+| `OIDC_DEVOPS_ROLES` | empty | Same for the role `devops`; an admin role wins. |
+| `OIDC_LOCAL_AUTH` | `false` | `true`: every local user may still use the password login. |
+| `OIDC_STATE_TTL` | `5m` | `30s` to `1h`. |
+| `OIDC_FRONTEND_PATH` | `/auth/callback` | Fixed web UI path after the callback. |
+
+### Database
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DB_TYPE` | `mysql` | `sqlite` only in unit tests; the production factory always builds MySQL. |
+| `DB_HOST` | `localhost` | `db` inside Compose. |
+| `DB_PORT` | `3306` | |
+| `DB_USER` | `root` | Compose passes `appuser`. |
+| `DB_PASSWORD` | empty | Compose passes `apppass`: a dev-only value. |
+| `DB_NAME` | `app` | |
+| `DB_MAX_OPEN_CONNS` | `25` | |
+| `DB_MAX_IDLE_CONNS` | `5` | Compose passes 25. |
+| `DB_CONN_MAX_LIFETIME` | `5m` | |
+
+The DSN sets `sql_mode`, `time_zone` (UTC) and `foreign_key_checks` as driver parameters (`config.MySQLSessionParams`), so every pooled connection has them. Never set them with a `SET` statement after connecting.
+
+### Server
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SERVER_HOST` | empty | All interfaces. |
+| `SERVER_PORT` | `8081` | The images, the proxies and the health checks expect 8081. |
+| `SERVER_READ_TIMEOUT` | `10s` | Compose passes `15s`. |
+| `SERVER_WRITE_TIMEOUT` | `0s` | Off on purpose (WebSocket); Compose passes `15s`. |
+| `SERVER_IDLE_TIMEOUT` | `30s` | |
+| `SERVER_SHUTDOWN_TIMEOUT` | `30s` | Budget of each shutdown step; `0` means 5 s. See "Shutdown". |
+| `TRUSTED_PROXIES` | empty | See "Client IP and proxies". |
+| `RATE_LIMIT` | `100` | Requests per minute per client IP on `/api/v1`; must be positive. |
+| `LOGIN_RATE_LIMIT` | `10` | Attempts per minute per client IP on each of login, register, OIDC login and OIDC callback; must be positive. |
+| `ENABLE_SWAGGER` | `false` | Swagger UI at `/swagger/index.html`. |
+
+### Logging and CORS
+
+| Variable | Default | Notes |
+|---|---|---|
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` (or `warning`), `error`; invalid stops the start. Applies to the default `slog` logger, which writes text to stderr. |
+| `LOG_FILE` | empty | Read but not used: logs go to stderr. |
+| `CORS_ALLOWED_ORIGINS` | `*` | `*` or a comma-separated list. `*` is for development only. It also gates the WebSocket `Origin` header. The other `CORS_*` names in old files are not read: methods and headers are fixed in `middleware.CORS`. |
+
+### Compose and Makefile variables
+
+These are read by `docker-compose.yml`, the Makefile or the scripts, not by the backend.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `GO_ENV`, `NODE_ENV` | `production` | Image targets (`development` or `production`). `make dev*` sets development, `make prod*` production. |
+| `BACKEND_PORT`, `FRONTEND_PORT` | 8081, 3000 | Host ports (`make prod*`: 8080 and 80). |
+| `FRONTEND_CONTAINER_PORT` | `3000` | `8080` for the unprivileged nginx of `make prod*`. |
+| `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | 3306, `app`, `appuser`, `apppass`, `rootpass` | Dev-only credentials. |
+| `FRONTEND_PROXY_IP`, `FRONTEND_NET_SUBNET` | `172.30.80.10`, `172.30.80.0/24` | Fixed proxy address on `frontend-net` and its subnet; change both together. |
+| `VITE_API_URL` | `http://localhost:8081` | Target of the Vite dev proxy; Compose sets `http://backend:8081`. |
+
+`docker-compose.yml` also passes `APP_ENV`, `PORT`, `API_VERSION`, `API_PREFIX`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS` and `CORS_MAX_AGE` to the backend. The backend reads none of them (it reads `GO_ENV`, `SERVER_PORT` and `CORS_ALLOWED_ORIGINS`), so they have no effect. Set the listening port with `SERVER_PORT`, never `PORT`. The development frontend does not read a `PORT` either: the Vite server is fixed to port 3000.
+
+Two checkouts, or another project, collide on the fixed host ports 3000, 8081 and 3306 and on the subnet `172.30.80.0/24`. Change the ports with the variables above and the subnet with `FRONTEND_NET_SUBNET` and `FRONTEND_PROXY_IP`. `make test-e2e` uses its own Compose project and MySQL on host port 13306 (`E2E_MYSQL_PORT`), and the backend and the Vite server on the ports `E2E_BACKEND_PORT` and `E2E_FRONTEND_PORT` (8081 and 3000): a port in use is an error.
+
+## Client IP and proxies
+
+- The per-IP rate limits and the audit entries use `c.ClientIP()`. Only a peer in `TRUSTED_PROXIES` may set the client IP with `X-Forwarded-For` or `X-Real-IP`; otherwise it is the TCP peer. Behind a proxy with an empty list every request has the proxy's address, so all users share one rate-limit bucket.
+- Compose sets `TRUSTED_PROXIES=${TRUSTED_PROXIES:-${FRONTEND_PROXY_IP:-172.30.80.10}}`. The `:-` fallback means an empty value in the environment is replaced by the proxy address: the list cannot be emptied through Compose. Edit the Compose file to run with no trusted proxy.
+- Trust proxy addresses, never a whole network: on some Docker setups the network gateway is the source of traffic from the host, and a trusted gateway lets a client pick its IP.
+- `SecurityHeaders` sends `Strict-Transport-Security` when the connection is TLS or the first `X-Forwarded-Proto` value is `https`. The backend reads that header from any client, trusted proxy or not, so a client that talks to the backend directly can make its own response carry HSTS (self-affecting only). Terminate TLS at a proxy and let it set the header.
+- The bundled nginx (`frontend/nginx.conf`) and the Vite dev server both strip one `/api` prefix: the browser calls `/api/api/v1/...` and the backend sees `/api/v1/...`. The IdP redirect URI therefore is `<origin>/api/api/v1/auth/oidc/callback`.
+- `/ws` carries the access token as `?token=` (a browser WebSocket cannot send headers). The backend removes it before its own logging (`RedactWSToken`), and the bundled nginx has `access_log off` for `/ws`. Any other proxy in front must not log the query of `/ws` either. The nginx `error_log` can still show the request line, including the token, on an upstream error. The token is a short-lived access token (15 minutes by default); the sockets close when it expires.
+
+## Rate limiting
+
+A sliding window per client IP, in memory, per replica. `/api/v1` gets `RATE_LIMIT`; `POST /auth/login`, `POST /auth/register`, `GET /auth/oidc/login` and `GET /auth/oidc/callback` each get their own `LOGIN_RATE_LIMIT` budget on top. `POST /auth/refresh` has no dedicated limiter: only `RATE_LIMIT` applies, because several tabs and page loads refresh often. `/ws` uses `RATE_LIMIT` with auth on and no limiter with auth off (connections are long-lived). `/health/*` is not limited. A limited request gets 429 `rate limit exceeded`.
+
+The username login throttle is separate and in memory per replica: 5 failed logins for one username in 15 minutes lock that username for 15 minutes (429 with `Retry-After`). With N replicas an attacker gets up to N times 5 guesses. The lock also stops the owner, which is a denial of service on the bootstrap admin: set a non-default `ADMIN_USERNAME` and a strong `ADMIN_PASSWORD`. The lock disappears at the next restart of the replica. Details: `auth-sessions.md`.
+
+## Shutdown
+
+`SIGINT` or `SIGTERM` starts `shutdown` (`backend/api/bootstrap.go`). Every step runs even when an earlier step failed:
+
+1. HTTP server: no new requests, wait for the open ones (budget `SERVER_SHUTDOWN_TIMEOUT`, the time of `ctx`). A server that does not finish is closed.
+2. Audit recorder (auth on): no new entries, wait for the writes of finished requests. Own budget.
+3. Leader worker group: stop the background workers. Own budget.
+4. In-flight work (`inflight.Tracker`): work that outlives its request. Own budget.
+5. WebSocket hub: close the client connections and end the revalidation loop.
+6. Telemetry flush (a no-op today). Own budget.
+7. Rate limiters: stop their cleanup goroutines.
+8. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
+9. Database: close the pool last.
+
+Steps 2, 3, 4 and 6 get their own budget of the length that was left on the shutdown context when shutdown began (at least 100 ms), detached from it, so a hung request cannot starve them. With the HTTP step that is five budgeted steps, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT`. The stop grace period of the orchestrator must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s. Raise both together. Work that outlives its request starts with `inflight.Tracker.Go`; a periodic job is a `leader.Worker`.
+
+The API-key last-used update runs in a goroutine that shutdown does not wait for.
+
+## Replicas
+
+- Shared through MySQL: all data, the token blocklist and OIDC login states (`SESSION_STORE=mysql`), the refresh-token families and the audit log. A logout on one replica is seen by all others at their next request. A WebSocket on another replica closes at the next revalidation pass (every `websocket.DefaultRevalidateInterval`) or at token expiry.
+- Per replica, in memory: the rate limiters, the username login throttle, the WebSocket hub and its connections. WebSocket broadcasts reach only the sockets of the replica that sent them.
+- `SESSION_STORE=memory` is for one replica: a restart forgets every revocation and a second replica does not see any.
+- There is no leader election yet: each process starts the leader workers itself (`refresh-token-cleanup`, hourly, and `session-store-cleanup`, every 15 minutes). Both only delete expired rows, so several replicas running them is safe.
+- `EnsureAdminUser` is safe when replicas start together: it never changes an existing user and treats a duplicate key as success.
+
+## Health
+
+`GET /health/live` always answers 200 with the uptime. `GET /health/ready` runs the registered checks (the database ping) and answers 503 when one fails. `GET /health` is the old plain check (`{"status":"ok"}`). The three are public and not rate limited. Register a check for every new external dependency with `healthChecker.AddCheck`. The Compose backend check is `wget -q -O /dev/null http://localhost:8081/health/live` (the Alpine image has `wget`, not `curl`).
+
+## Logging
+
+Structured text on stderr through `slog`, at `LOG_LEVEL`. Failed logins log `reason`, the capped username, `client_ip` and `request_id` at Warn, never the password or hash. `RequestID` accepts a client `X-Request-ID` of 1 to 64 characters `[A-Za-z0-9._-]` and returns it; anything else is replaced. GORM errors and slow queries (200 ms or more) go through `slog`; with `APP_DEBUG=false` the SQL values are replaced with `?`. Keep `APP_DEBUG=false` in production.
+
+## Audit log
+
+With auth on, every successful `POST`, `PUT`, `PATCH` or `DELETE` of an authenticated user writes an entry (action, entity, user, route, status, client IP, request ID), after the response, on a context the client cannot cancel (30 s). Failed requests, reads, unauthenticated requests and everything under `/auth/` are not recorded: there is no audit entry for login, logout or a password change (there is no self-service password change; an admin resets it through `PUT /users/:id`, which is audited). At most 64 writes run at once; an entry over that bound is dropped with an Error log. `GET /api/v1/audit-logs` (admin session) pages with `limit` and `offset`, or with `next_cursor`; a cursor page has `total: -1`. There is no audit log page in the web UI.
+
+## Swagger
+
+With `ENABLE_SWAGGER=true` the UI is at `/swagger/index.html` and stays open even with `AUTH_ENABLED=true`: the spec lists every route. Keep it off in production. Regenerate the spec with `make docs`.
+
+## End-to-end tests
+
+`make test-e2e` (auth off) and `make test-e2e-auth` (auth on) run `scripts/e2e.sh`: MySQL in its own Compose project, a natively built backend, the Vite dev server and Playwright (Chromium). The run sets `RATE_LIMIT=10000` and `LOGIN_RATE_LIMIT=1000` for the backend, because every request comes from 127.0.0.1.
+
+| Variable | Meaning |
+|---|---|
+| `E2E_AUTH` | `1` when the backend runs with `AUTH_ENABLED=true` (`make test-e2e-auth` sets it). `global-setup.ts` fails the run when this and the backend disagree. `auth.spec.ts` skips itself without it. |
+| `A11Y_REQUIRE_AUTH` | `1` makes the accessibility spec fail, instead of skip, a page whose precondition is missing (Login, Admin Users). `make test-e2e-auth` sets it, so those pages are really checked. |
+| `E2E_SECURE_COOKIES` | `false` (default) runs the backend with `SECURE_COOKIES=false` (cookie `refresh_token`); `true` checks the production cookie (`__Host-refresh_token`, `Secure`) in Chromium on `http://localhost`. CI runs both. |
+| `E2E_ADMIN_USERNAME`, `E2E_ADMIN_PASSWORD`, `E2E_JWT_SECRET` | Test values of the throwaway backend, set by the Makefile. They are not defaults of the application and must never be used anywhere else. |
+| `E2E_RETRIES` | Playwright retries; the default is 2 on CI and 0 otherwise. |
+| `E2E_MYSQL_PORT`, `E2E_BACKEND_PORT`, `E2E_FRONTEND_PORT` | Host ports of the run (13306, 8081, 3000). A port in use is an error. |
+
+`global-setup.ts` creates a non-admin account (`e2e-user`, random password per run) so that a test of a wrong password never counts toward the throttle of the administrator (5 failures lock a name, see `auth-sessions.md`). Keep every new failed-login test on that account, and do not raise `--repeat-each` beyond what the throttle allows. In CI, `e2e.yml` runs three passes: auth off, auth on, and auth on with `E2E_SECURE_COOKIES=true`.

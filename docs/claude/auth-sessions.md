@@ -1,0 +1,89 @@
+# Authentication, sessions and WebSocket auth
+
+Read this before you change login, tokens, sessions, roles, API keys, the audit log or the `/ws` upgrade. Variable names and defaults: `docs/claude/operations.md`. Code: `internal/api/handlers/auth*.go`, `oidc.go`, `users.go`, `api_keys.go`, `internal/api/middleware/`, `internal/auth/`, `internal/sessionstore/`, `internal/websocket/`.
+
+## Modes
+
+| Mode | Switch | What exists |
+|---|---|---|
+| Off (default) | `AUTH_ENABLED=false` | No auth middleware. Items, `/ws` and ping are open whatever credentials a request carries. The auth, API key, user and audit log routes answer 404. The web UI shows no login and no Users page. |
+| Local login | `AUTH_ENABLED=true` | Username and password, access token plus refresh session, API keys, user administration, audit log. The bootstrap admin comes from `ADMIN_USERNAME` and `ADMIN_PASSWORD`. |
+| OIDC | `AUTH_ENABLED=true` and `OIDC_ENABLED=true` | Single sign-on added to the local login. The password form is hidden unless `OIDC_LOCAL_AUTH=true`. |
+
+`GET /api/v1/ui-config` is public in every mode and tells the web UI which flows to show (`auth_enabled`, `oidc_enabled`, `local_auth_enabled`). Do not leave `AUTH_ENABLED=false` on anything that is reachable by people you do not trust: the API is open.
+
+## Roles
+
+`user` < `devops` < `admin` (`models.RoleUser`, `RoleDevOps`, `RoleAdmin`). `middleware.RequireRole` closes the gate for an unknown role and for a gate with no known role. The user, key and audit routes need a login session and the `admin` role; the handlers also check the role against the database (the route gate is a second layer). `devops` has no gate of its own yet. The web UI hides what the API refuses (`ProtectedRoute roles={[...]}`), a hint only.
+
+The **bootstrap admin** is created at start when `ADMIN_PASSWORD` is set and no user has the name `ADMIN_USERNAME`. It is a **service account** (`service_account=true`): the break-glass local account that can still sign in with a password when OIDC is the only interactive login (`OIDC_LOCAL_AUTH=false`). Every other local user is refused the password login in that mode. An existing user of that name is never changed (not the password, not the role); a warning says when it is not an enabled admin. Consequences:
+
+- Keep a strong, unique `ADMIN_PASSWORD` (8 to 72 bytes; there is no higher minimum) and a non-default `ADMIN_USERNAME`. Remove the password setting from the deployment when the account is not needed; the account stays.
+- With `ADMIN_PASSWORD` empty and no OIDC admin, nobody can administer the system. Self-registration creates only `user` accounts.
+- The last enabled admin cannot be demoted, disabled or deleted through the API (409). An OIDC login can lower an admin without that check (see "OIDC").
+
+## Tokens and sessions
+
+- **Access token**: HS256 JWT signed with `JWT_SECRET`, lives `ACCESS_TOKEN_EXPIRATION` (15 m) in a login session. It carries `jti` and `sid` (the session ID). The web UI keeps it in memory only, never in storage or a cookie.
+- **Refresh token**: 256 random bits, opaque, stored only as its SHA-256 (`refresh_tokens`). It travels in an httpOnly cookie named `refresh_token`, or `__Host-refresh_token` with `SECURE_COOKIES=true` (default). Attributes: `Path=/`, host only, `SameSite=Strict`, `Secure` with `SECURE_COOKIES`. `Path=/` is required: the bundled proxies strip an `/api` prefix, so a narrower path would never be sent.
+- **Session** = a refresh-token family (`family_id`, `session_started_at`). It ends `SESSION_MAX_LIFETIME` (12 h) after the login or `SESSION_IDLE_TIMEOUT` (30 m) after the last login or refresh. Rotation never extends it and an access token never outlives it. A user has at most 10 active sessions; a login beyond that ends the oldest.
+- **Refresh** (`POST /api/v1/auth/refresh`) rotates the token: the old one is consumed and a new cookie is set. Every refusal answers the same 401 and deletes the cookie. A session that started before a user block (logout-all, role change, disable, delete) is refused and revoked.
+- **Grace window** (`REFRESH_REUSE_GRACE`, 30 s): a token consumed less than the grace ago gets one more access token, once, without a new cookie. This covers two tabs that refresh at the same time. Any other reuse of a consumed token revokes the whole session and blocks its access tokens. Three or more tabs that refresh the same cookie at once can still end the session. The web UI serializes refreshes across tabs (Web Locks plus a `BroadcastChannel`) to avoid it.
+- **CSRF**: login (when it sets the cookie), refresh, logout and logout-all need the header `X-Requested-With` (any value) and refuse a cross-site request with 403. Login also needs `Content-Type: application/json` (415). The CORS middleware must never allow `X-Requested-With` or send `Access-Control-Allow-Credentials`: that is what makes the header a CSRF proof (`TestCORSNeverEnablesCookieCSRFHeader`).
+- **Cookie notes**: `SECURE_COOKIES` defaults to `true`, unlike many templates. Plain HTTP on a host other than `localhost` needs `SECURE_COOKIES=false`; otherwise the browser drops the cookie and the session cannot be restored. Chromium accepts `Secure` and `__Host-` cookies on `http://localhost` (the e2e run with `E2E_SECURE_COOKIES=true` checks it). `SECURE_COOKIES=false` is for local development only.
+- Without a refresh repository (not wired in this service) a login would issue only an access token of `JWT_EXPIRATION`; the production wiring always has one.
+
+## Login rules
+
+- Every credential failure (unknown user, wrong password, disabled account, SSO-only account, locked account) answers the same 401 `Invalid username or password`, and costs one bcrypt compare, so timing does not tell.
+- **Per-username throttle** (`handlers/login_failure.go`, in memory, per replica): 5 failed logins for one submitted name within 15 minutes lock that name for 15 minutes. Only the submitted name answers 429 (with `Retry-After`); the account behind it answers the generic 401 when it is locked or busy. At most 5 attempts for one name run at the same time: while they use up the slots, a further attempt gets 429 with `Retry-After: 1`. A successful login clears the failures of its keys.
+- **Variant lock**: the account key is the user ID, so guesses at any spelling of the name (`Admin`, `ádmin`; the MySQL collation ignores case and accents) count against the account. After 5 such failures the owner gets the generic 401 even with the correct password until the lock ends (15 minutes or a restart of the replica). This is a deliberate trade-off, not a bug.
+- **Lockout DoS of the break-glass admin**: anyone who knows the admin name can lock it by failing 5 logins. That is why `ADMIN_USERNAME` should not be `admin`, and why the per-IP `LOGIN_RATE_LIMIT` (10 per minute) exists. With N replicas an attacker gets up to N times 5 guesses, and each replica has its own lock.
+- Passwords: 8 or more characters, at most 72 bytes (bcrypt reads 72). bcrypt runs in at most `NumCPU` goroutines; a wait ends with the request.
+- A disabled user cannot log in or refresh, and the OIDC login is refused with 403.
+
+## Logout and revocation
+
+- `POST /auth/logout` (public route, authenticates itself from the cookie and a valid bearer token): revokes the refresh tokens of the session, blocks the session (`sid`) and the presented access token, closes the sockets opened with it, deletes the cookie. A repeated or empty logout answers 200. When a step fails the others still run and the answer is 500.
+- `POST /auth/logout-all` (session only, an API key is refused): revokes every refresh token of the user, blocks every session that may hold a live access token, writes a user block (rejects every access token issued up to now), closes all the user's sockets.
+- Admin actions that end a user's sessions the same way: change role, disable, delete, password reset through `PUT /users/:id`. API keys survive a role change (and use the new role at once) and stop working while the owner is disabled.
+- The session store (`SESSION_STORE=mysql`, table `session_entries`) holds `token_block`, `session_block`, `user_block` and `oidc_state` rows with an expiry. A store error fails closed in the production wiring (`FailClosedOnStoreError`): a REST request answers 500, a WebSocket upgrade 500, and the revalidation closes sockets it cannot verify after three runs in a row. With the store or database down, logged-in users are therefore refused rather than let through.
+- **A custom session store must honour `ctx`**: every method takes the request context first, a cancelled context must end the call with an error that matches `context.Canceled`, and a block must be visible to every replica. Implement `sessionstore.SessionStore` and pass it through `newSessionStore` in `api/bootstrap.go`.
+- The REST path checks the **blocklists**, not the user row. A user disabled or deleted **directly in the database** (without the admin API) keeps working on REST routes until their access token expires (15 minutes by default); the refresh, the password login, API keys, the `/ws` upgrade and the socket revalidation do read the row. Use `PUT /users/:id/disabled` so a user block is written.
+
+## API keys
+
+`POST /api/v1/api-keys` (login session only) returns the raw key once: `sk_` plus 64 hex characters, stored as SHA-256. An expiry is required (`expires_at` or `expires_in_days`, at most 365 days by default); a user can have 25 active keys. A key is read only from the `X-API-Key` header, never the query string or `Authorization`. A request with both a bearer token and a key is 400. A key has the owner's current role. Keys cannot manage keys, users or the audit log and cannot call logout-all (403).
+
+## OIDC
+
+- Authorization code flow with PKCE (S256), a random state and a nonce. State, verifier and nonce live in `session_entries` for `OIDC_STATE_TTL` and work once. A cookie `oidc_binding` (`__Host-oidc_binding` with `SECURE_COOKIES`, `Path=/`, `SameSite=Lax`) ties the login to the browser that started it. After the callback the browser is redirected to `OIDC_FRONTEND_PATH` with the refresh cookie set and no token in the URL; the web UI then calls `POST /auth/refresh`.
+- **Redirect URI behind the bundled proxies**: nginx and the Vite dev server strip one `/api`, so the URI to register at the provider and to put in `OIDC_REDIRECT_URL` is `<origin>/api/api/v1/auth/oidc/callback`. `OIDC_REDIRECT_URL` is not checked against the proxy path or the cookie host.
+- An account is found by issuer and `sub`. A first login creates it (username = the verified email, else `oidc_` plus 16 random hex characters). An existing local account is never linked or taken over by email or name.
+- **Roles**: `OIDC_ROLE_CLAIM` must be a top-level claim holding a string or a list of strings (other values are ignored, at most 200 values are read). A nested claim path is not supported. A provider that sends no claim for a large group list (Microsoft Entra group overage) gives the role `user`. A name matches exactly and case-sensitively against `OIDC_ADMIN_ROLES` (admin) or `OIDC_DEVOPS_ROLES` (devops); the admin list wins.
+- **idp_managed**: the role of an OIDC user follows the claim **at every login**, a demotion included. An admin who changes the role of such a user through `PUT /users/:id/role` gets `idp_managed: true` in the answer; the change is reverted at the next login. With `OIDC_ADMIN_ROLES` empty nobody is an admin through OIDC, so an admin promotion is always reverted, and an OIDC admin that logs in is lowered to `user` (a warning is logged). If the bootstrap admin was removed and no OIDC role maps to admin, no admin remains: delete the row or let `ADMIN_PASSWORD` recreate the bootstrap admin (it creates only when no user of that name exists) and restart.
+- A token-endpoint refusal of the client credentials answers 502 and logs an Error (check `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`); a request or ID-token refusal answers a generic 400 `Login failed`. The OIDC login, callback, register and password login each have their own `LOGIN_RATE_LIMIT` budget per IP.
+
+## Audit log
+
+With auth on, `middleware.AuditRecorder` writes an entry for every successful `POST`, `PUT`, `PATCH` or `DELETE` of an authenticated user, after the response. Not recorded: reads, failed requests, unauthenticated requests and everything under `/auth/` (so no login, logout or refresh events, and no self-service password change exists). A handler that changed nothing calls `middleware.SkipAudit`; one that committed a change and then answers with an error calls `middleware.AuditCommitted`. A route that is not plain CRUD needs an entry in `auditRoutes` (`middleware/audit.go`); add new actions and entity types to `KnownAuditActions` and `KnownAuditEntityTypes` (a routes test fails for a mutating route with an unknown one). `GET /audit-logs` is admin only with a login session; `limit` and `offset` give an exact `total`, a `cursor` page has `total: -1`. See `operations.md` for the write bound and shutdown drain.
+
+## WebSocket
+
+- `GET /ws` with auth off: open, any topic. With auth on: one credential (`Authorization: Bearer`, `X-API-Key`, or `?token=` for browsers), the same checks as the HTTP auth plus the user row, the `RATE_LIMIT` budget, and a re-check after the socket is registered.
+- `?token=` is moved out of the URL by `RedactWSToken` before logging; `WebSocketQueryToken` turns it into a bearer header on `/ws` only. The bundled nginx does not access-log `/ws`; see `operations.md` for proxies and the `error_log`.
+- Topics are authorised, deny by default (`DefaultTopicAuthorizer`): `items` and `item:<id>` for every role, `user:<id>` for that user and admins, `admin:<name>` for admins. At most 64 topics per client, 128 bytes each.
+- The hub closes a socket (code 1008) on logout, logout-all, disable, delete, role change, password reset, a deleted key, and when its credential expires. It revalidates all open sockets every minute, which also catches a revocation made on another replica; a socket that stays unverified for three runs in a row while the store fails is closed. The web UI reconnects with a new token after every refresh.
+- Hub messages: `{"type": "...", "payload": ...}`. Items sends `item.created`, `item.updated` and `item.deleted` to every socket (`Broadcast`); client messages are `subscribe` and `unsubscribe` with `{"topic": "..."}`.
+
+## Frontend
+
+`src/api/session.ts` holds the mode and the in-memory access token and announces tokens and logouts to the other tabs. `src/api/refresh.ts` refreshes once per tab and once across tabs, never aborts a refresh request, and does not retry on its own failure. `src/api/client.ts` adds the bearer header, and on a 401 refreshes once and retries once. `AuthProvider` restores the session at page load with `POST /auth/refresh` and schedules the next refresh before expiry. `ProtectedRoute` shows a loading state while the session restores, sends an anonymous visitor to `/login?next=<page>`, and shows Access denied for a missing role. `safeReturnPath` accepts only same-origin paths. Errors are logged through `summarizeRequestError`, never the full Axios error (it holds the password body and the bearer header).
+
+## Known limits
+
+- The username lock and the rate limiters are per replica and in memory.
+- `POST /auth/refresh` is under the general `RATE_LIMIT` (100 per minute per IP) only. Many users behind one NAT share that budget.
+- Disabling a user directly in the database is not seen by REST requests until the access token expires.
+- There is no password change for the signed-in user and no audit entry for authentication events.
+- The API-key last-used update runs in a goroutine that shutdown does not wait for.

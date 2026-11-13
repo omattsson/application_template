@@ -88,7 +88,6 @@ VITE_API_URL=http://localhost:8081  # Backend that the dev server proxies /api a
 Available environment variables:
 
 - `VITE_API_URL` - Target of the Vite dev proxy (default `http://localhost:8081`; Compose sets `http://backend:8081`). The browser always calls the API same-origin through `/api` (dev server or nginx), which the optional login needs for its httpOnly refresh cookie.
-- `PORT` - Development server port (default: 3000)
 
 ## API Integration
 

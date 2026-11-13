@@ -45,6 +45,9 @@ jobs:
           scripts/check-trivyignore.sh --self-test
           scripts/check-trivyignore.sh
 
+      - name: Environment variable docs
+        run: make check-env-docs
+
       - name: Domain terms
         run: |
           git config --global user.email ci@example.com

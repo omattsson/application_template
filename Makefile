@@ -1,4 +1,4 @@
-.PHONY: test-e2e test-e2e-auth gosec lint-backend lint-frontend lint-docs check-workflows test-backend-unit dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
+.PHONY: test-e2e test-e2e-auth gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs test-backend-unit dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
 
 # MySQL service management
 mysql-start:
@@ -21,9 +21,9 @@ mysql-logs:
 mysql-shell:
 	docker compose exec db mysql -u$${MYSQL_USER:-appuser} -p$${MYSQL_PASSWORD:-apppass} $${MYSQL_DATABASE:-app}
 
-# Host ports: the web UI on FRONTEND_PORT and the API on BACKEND_PORT. The
-# development frontend calls the API at http://localhost:8081, so keep
-# BACKEND_PORT=8081 in development. APP_DEBUG drives the Gin mode (debug in
+# Host ports: the web UI on FRONTEND_PORT and the API on BACKEND_PORT (for
+# direct calls: the browser reaches the API through the proxy of the web UI).
+# APP_DEBUG drives the Gin mode (debug in
 # development, release in production); GIN_MODE, when set, wins.
 FRONTEND_PORT_DEV ?= 3000
 BACKEND_PORT_DEV ?= 8081
@@ -155,7 +155,7 @@ fmt:
 	cd backend && go fmt ./...
 	cd frontend && npm run format
 
-lint: lint-backend lint-frontend check-workflows
+lint: lint-backend lint-frontend check-workflows check-env-docs
 
 lint-backend:
 	cd backend && go vet ./...
@@ -168,6 +168,13 @@ lint-frontend:
 check-workflows:
 	scripts/check-workflows.sh --self-test
 	scripts/check-workflows.sh
+
+# Every variable the config package reads is documented in backend/.env.example
+# (both copies) and docs/claude/operations.md, and nothing else is documented,
+# with the checker's own fixture tests first. CI runs it too.
+check-env-docs:
+	scripts/check-env-docs.sh --self-test
+	scripts/check-env-docs.sh
 
 # Markdown lint (rules: .markdownlint.yml, ignores: .markdownlint-cli2.jsonc;
 # markdownlint-cli2 does not read .markdownlintignore).

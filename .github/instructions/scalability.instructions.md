@@ -4,56 +4,15 @@ applyTo: "**"
 
 # Scalability Instructions
 
-## Connection Pooling
-MySQL connection pool is configured via env vars in `docker-compose.yml` and applied in `internal/database/factory.go`:
-- `DB_MAX_OPEN_CONNS` (default: 25) — maximum concurrent connections
-- `DB_MAX_IDLE_CONNS` (default: 5) — kept-alive idle connections
-- `DB_CONN_MAX_LIFETIME` (default: 5m) — max lifetime per connection
+Details: `docs/claude/operations.md`. Rules: `CLAUDE.md` ("Scalability Rules").
 
-These are set on the `sql.DB` pool via `SetMaxOpenConns`, `SetMaxIdleConns`, `SetConnMaxLifetime`. Tune based on expected load — idle conns reduce latency for burst traffic, but MySQL has a `max_connections` limit (see `config/mysql/my.cnf`).
-
-## Database Retry Logic
-`NewFromAppConfig()` in `internal/database/factory.go` retries DB connections up to 5 times with 2-second delays. This handles container startup ordering and transient network issues. Extend the retry pattern for any new external service connections.
-
-## Swappable Data Store
-The `models.Repository` interface keeps handlers independent of the storage backend. The factory in `internal/database/repository.go` builds the repository. When adding new storage backends, implement the `Repository` interface and add a case in `NewRepository()`.
-
-## Docker Network Isolation
-`docker-compose.yml` uses two networks:
-- `backend-net` — connects db and backend (backend services only)
-- `frontend-net` — connects backend and frontend
-
-This prevents the frontend container from directly accessing the database. Maintain this separation when adding new services.
-
-## Health Checks for Orchestration
-The health system in `internal/health/health.go` supports multiple dependency checks:
-```go
-healthChecker.AddCheck("database", db.Ping)
-healthChecker.AddCheck("cache", cacheClient.Ping)  // example for new dependency
-```
-Orchestrators and load balancers use `/health/live` (liveness) and `/health/ready` (readiness). Readiness gates on all registered dependency checks. Always register health checks for new external dependencies.
-
-## Optimistic Locking
-`Item` has a `Version` field for optimistic locking — concurrent updates are detected via version mismatch, returning `409 Conflict`. Use this pattern for any model that may be updated concurrently:
-```go
-type MyModel struct {
-    Base
-    Version uint `gorm:"not null;default:0" json:"version"`
-    // ... fields
-}
-```
-The handler checks `updateItem.Version != currentItem.Version` before persisting.
-
-## Database Indexing
-Indexes are added via versioned migrations in `internal/database/migrations.go`. The existing `idx_items_name_price` composite index optimizes the Items list filter queries. When adding new query patterns, add corresponding indexes as new migration versions. Always check `information_schema.statistics` for existence before creating (see the idempotent pattern in migration `20231201000002`).
-
-## Server Timeouts
-HTTP server timeouts are configurable in `internal/config/config.go`:
-- `SERVER_READ_TIMEOUT` (default: 10s) — max time to read request
-- `SERVER_WRITE_TIMEOUT` (default: 10s) — max time to write response
-- `SERVER_SHUTDOWN_TIMEOUT` (default: 30s) — graceful shutdown window
-
-These prevent slow clients from consuming connections. Set via env vars in production based on expected request sizes.
-
-## Pagination
-The `models.Pagination` struct and List handler support server-side pagination via `?limit=N&offset=M` query params. Always implement pagination for list endpoints to avoid unbounded result sets.
+- **Connection pool**: `DB_MAX_OPEN_CONNS` (25), `DB_MAX_IDLE_CONNS` (5), `DB_CONN_MAX_LIFETIME` (5m), applied in `internal/database/factory.go`. MySQL has its own `max_connections` (`backend/config/mysql/my.cnf`).
+- **Replicas**: all data and revocations are shared through MySQL. The rate limiters, the username login throttle and the WebSocket hub are per replica and in memory. A background job must be safe on several replicas (there is no leader election yet).
+- **Migrations** run at every start under a MySQL advisory lock that a replica waits for up to 5 minutes.
+- **Pagination**: every list endpoint uses `ListPaged` with `limit` and `offset`, selects only the columns it needs and has an index that covers its filter and order (a new migration adds it).
+- **Optimistic locking**: `Item` has `Version`; a stale update is 409. Other models use targeted or conditional writes.
+- **Health**: register every external dependency with `healthChecker.AddCheck`. `/health/live` and `/health/ready` serve orchestrators.
+- **Background work**: a periodic job is a `leader.Worker`; work that outlives its request starts with `inflight.Tracker.Go`.
+- **Shutdown**: HTTP drain, audit drain, leader group, in-flight work, hub, telemetry, rate limiters, session store, database. The steps after HTTP have their own budgets, so the stop grace period must exceed five times `SERVER_SHUTDOWN_TIMEOUT` (Compose: 170 s).
+- **Networks**: `backend-net` (db and backend) and `frontend-net` (backend and frontend). The frontend container must not reach the database.
+- **Server timeouts**: `SERVER_READ_TIMEOUT` (10s), `SERVER_WRITE_TIMEOUT` (0, off: a server write timeout would end idle WebSockets), `SERVER_IDLE_TIMEOUT` (30s).
