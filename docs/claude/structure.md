@@ -18,6 +18,7 @@ Where things are. Run `ls` when a file is missing here: the tree below lists the
 ├── docs/claude/               # Reference docs that CLAUDE.md links to
 ├── docs/superpowers/          # Design specs and plans of the template itself
 ├── scripts/                   # Check and test scripts (see below)
+├── .claude/                   # Claude Code agents (agents/), the ship-issue skill (skills/), permissions (settings.json)
 └── .github/                   # Workflows, templates, Copilot instructions, agents
 ```
 
@@ -91,6 +92,7 @@ frontend/
 | `scripts/check-domain-terms.sh` (+ `.test.sh`, `domain-terms.allowlist`) | Keeps domain terms of the project this template came from out of the tree | `scripts/check-domain-terms.sh` |
 | `scripts/check-env-docs.sh` | Environment variables of the code equal the example files and `operations.md` | `make check-env-docs` |
 | `scripts/check-workflows.sh` | Workflow hygiene: pinned actions, permissions, timeouts, `main` trigger | `make check-workflows` |
+| `scripts/check-agents.sh` | `.claude/agents/*.md` have frontmatter, no forbidden tools or agents, and `.claude/settings.json` allows nothing that publishes | `make check-agents` |
 | `scripts/check-dockerfiles.sh` | Production stage non-root, pinned images, Go version equals `go.mod` | `scripts/check-dockerfiles.sh` |
 | `scripts/check-trivyignore.sh` | Every `.trivyignore` entry has a reason and an expiry within 90 days | `scripts/check-trivyignore.sh` |
 | `scripts/gosec.sh` | Pinned gosec run inside `backend/` | `make gosec` |

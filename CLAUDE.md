@@ -60,10 +60,11 @@ The steps after the HTTP step have their own budgets, so the worst case is about
 | Swagger docs | `make docs` (runs `swag init -g api/main.go` in `backend`) |
 | Coverage (80% threshold) | `cd backend && make test-coverage` |
 | Format | `make fmt` |
-| Lint (go vet, ESLint, workflow and env docs checks) | `make lint` |
+| Lint (go vet, ESLint, workflow, env docs and agent checks) | `make lint` |
 | Markdown lint | `make lint-docs` |
 | Security scan (backend) | `make gosec` |
 | Environment variable docs match the code | `make check-env-docs` |
+| Claude agents, skill and settings are consistent | `make check-agents` |
 | Domain terms check | `scripts/check-domain-terms.sh` |
 | Install dependencies | `make install` |
 

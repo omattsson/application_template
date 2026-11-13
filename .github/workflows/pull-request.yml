@@ -48,6 +48,9 @@ jobs:
       - name: Environment variable docs
         run: make check-env-docs
 
+      - name: Claude agents and settings
+        run: make check-agents
+
       - name: Domain terms
         run: |
           git config --global user.email ci@example.com

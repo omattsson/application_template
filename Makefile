@@ -1,4 +1,4 @@
-.PHONY: test-e2e test-e2e-auth gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs test-backend-unit dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
+.PHONY: test-e2e test-e2e-auth gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs check-agents test-backend-unit dev dev-backend dev-frontend mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
 
 # MySQL service management
 mysql-start:
@@ -155,7 +155,7 @@ fmt:
 	cd backend && go fmt ./...
 	cd frontend && npm run format
 
-lint: lint-backend lint-frontend check-workflows check-env-docs
+lint: lint-backend lint-frontend check-workflows check-env-docs check-agents
 
 lint-backend:
 	cd backend && go vet ./...
@@ -175,6 +175,14 @@ check-workflows:
 check-env-docs:
 	scripts/check-env-docs.sh --self-test
 	scripts/check-env-docs.sh
+
+# The Claude Code agents, the ship-issue skill and .claude/settings.json are
+# well formed and consistent (frontmatter, no forbidden tools or agents, nothing
+# that publishes on the allow list), with the checker's own fixture tests
+# first. CI runs it too.
+check-agents:
+	scripts/check-agents.sh --self-test
+	scripts/check-agents.sh
 
 # Markdown lint (rules: .markdownlint.yml, ignores: .markdownlint-cli2.jsonc;
 # markdownlint-cli2 does not read .markdownlintignore).
