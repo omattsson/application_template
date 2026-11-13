@@ -526,21 +526,23 @@ func stepBudget(ctx context.Context) time.Duration {
 //     that reads it (requests, workers, the hub revalidation).
 //  9. Database: close the connection pool last.
 //
-// Budgets: the HTTP step uses ctx. The audit step, the leader step, the
-// in-flight step and the telemetry step each get their own budget
-// (stepBudget: the time left on ctx when shutdown starts, at least
-// minStepBudget), detached from ctx with ctxutil.Detach. A hung request that
-// uses up ctx therefore does not starve them: the leader workers still get
-// time to stop and the telemetry flush still gets a live context. The worst
-// case is about five budgets (each of the five steps hangs) plus
-// auxShutdownTimeout; keep the grace period of the orchestrator above that,
-// or SERVER_SHUTDOWN_TIMEOUT below a fifth of it.
+// Budgets: the diagnostics step gets auxShutdownTimeout. The HTTP step, the
+// audit step, the leader step, the in-flight step and the telemetry step each
+// get their own budget (stepBudget: the time left on ctx when shutdown
+// starts, at least minStepBudget), detached from ctx with ctxutil.Detach. A
+// hung request that uses up its budget therefore does not starve the later
+// steps, and the diagnostics step does not shorten the HTTP drain: the leader
+// workers still get time to stop and the telemetry flush still gets a live
+// context. The worst case is auxShutdownTimeout plus five budgets (each of
+// the five steps hangs), 152 s with the default 30 s; keep the grace period
+// of the orchestrator above that, or SERVER_SHUTDOWN_TIMEOUT below a fifth of
+// it.
 //
 // Every step runs even when an earlier step failed. shutdown returns the
 // errors of all steps; a step that ran out of time wraps
 // context.DeadlineExceeded.
 func shutdown(ctx context.Context, s *services) error {
-	budget := stepBudget(ctx) // measured before the HTTP step uses ctx up
+	budget := stepBudget(ctx) // measured before any step uses ctx up
 	var errs []error
 
 	if len(s.auxServers) > 0 {
@@ -556,14 +558,19 @@ func shutdown(ctx context.Context, s *services) error {
 		cancel()
 	}
 
+	// The HTTP step has a budget of its own too: the diagnostics step above
+	// used up to auxShutdownTimeout of the wall clock, which ctx (a deadline)
+	// would have lost the drain.
+	httpCtx, cancelHTTP := ctxutil.Detach(ctx, budget)
 	for _, srv := range s.servers {
-		if err := srv.Shutdown(ctx); err != nil {
+		if err := srv.Shutdown(httpCtx); err != nil {
 			errs = append(errs, fmt.Errorf("http server: %w", err))
 			if cerr := srv.Close(); cerr != nil {
 				errs = append(errs, fmt.Errorf("close http server: %w", cerr))
 			}
 		}
 	}
+	cancelHTTP()
 
 	if !isNilInterface(s.auditRecorder) {
 		auditCtx, cancel := ctxutil.Detach(ctx, budget)

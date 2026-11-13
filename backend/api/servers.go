@@ -7,6 +7,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	// Importing net/http/pprof registers its handlers on http.DefaultServeMux
+	// (in init). A server of this process must therefore NEVER be started with
+	// a nil Handler: it would serve pprof on its own port. Every server here
+	// has an explicit mux; TestEveryServerHasAnExplicitHandler checks it.
 	"net/http/pprof"
 	"runtime"
 	"time"
@@ -45,6 +49,8 @@ func startMetricsServer(cfg *config.Config, tel *telemetry.Telemetry) *http.Serv
 		return nil
 	}
 
+	noteMetricsAddr(cfg.Otel.MetricsAddr)
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", tel.MetricsHandler)
 
@@ -56,6 +62,18 @@ func startMetricsServer(cfg *config.Config, tel *telemetry.Telemetry) *http.Serv
 		WriteTimeout:      metricsWriteTimeout,
 		IdleTimeout:       auxIdleTimeout,
 	}, "metrics server")
+}
+
+// noteMetricsAddr reminds the operator, at Info, that /metrics has no
+// authentication when its address is not loopback. It is an Info and not a
+// Warn on purpose: the default :9090 is not loopback either, and the Compose
+// setup uses it on its private network, so a Warn would fire on every start.
+func noteMetricsAddr(addr string) {
+	if config.IsLoopbackAddr(addr) {
+		return
+	}
+	slog.Info("metrics endpoint is unauthenticated: keep this port on a private network and never publish it to the internet",
+		"addr", addr)
 }
 
 // checkPprofAddr enforces the pprof address policy again at start (LoadConfig
@@ -124,14 +142,24 @@ func serveOptional(srv *http.Server, name string) *http.Server {
 	}
 	srv.Addr = ln.Addr().String()
 	slog.Info(name+" starting", "addr", srv.Addr)
+	serveListener(srv, ln, name)
 
+	return srv
+}
+
+// serveListener serves srv on ln in a goroutine that ends when the server is
+// closed or Serve fails (logged at Error). The returned channel is closed
+// when the goroutine ends.
+func serveListener(srv *http.Server, ln net.Listener, name string) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error(name+" failed", "error", err)
 		}
 	}()
 
-	return srv
+	return done
 }
 
 // addAuxServers registers the diagnostics servers for shutdown. A nil server

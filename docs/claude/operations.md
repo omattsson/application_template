@@ -168,7 +168,7 @@ The username login throttle is separate and in memory per replica: 5 failed logi
 `SIGINT` or `SIGTERM` starts `shutdown` (`backend/api/bootstrap.go`). Every step runs even when an earlier step failed:
 
 0. Metrics and pprof servers (only the ones that run): stopped first, together within a fixed 2 s (`auxShutdownTimeout`), and closed when they are still busy (a pprof profile can run for 30 s). Prometheus sees the target go away at the start of the drain.
-1. HTTP server: no new requests, wait for the open ones (budget `SERVER_SHUTDOWN_TIMEOUT`, the time of `ctx`). A server that does not finish is closed.
+1. HTTP server: no new requests, wait for the open ones (own budget, `SERVER_SHUTDOWN_TIMEOUT`, which starts after step 0 ends). A server that does not finish is closed.
 2. Audit recorder (auth on): no new entries, wait for the writes of finished requests. Own budget.
 3. Leader worker group: stop the background workers. Own budget.
 4. In-flight work (`inflight.Tracker`): work that outlives its request. Own budget.
@@ -178,7 +178,7 @@ The username login throttle is separate and in memory per replica: 5 failed logi
 8. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
 9. Database: close the pool last.
 
-Steps 2, 3, 4 and 6 get their own budget of the length that was left on the shutdown context when shutdown began (at least 100 ms), detached from it, so a hung request cannot starve them. With the HTTP step that is five budgeted steps, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0 (152 s with the default 30 s). The stop grace period of the orchestrator must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s, which still covers it. Raise both together. Work that outlives its request starts with `inflight.Tracker.Go`; a periodic job is a `leader.Worker`.
+Steps 1, 2, 3, 4 and 6 each get their own budget of the length that was left on the shutdown context when shutdown began (at least 100 ms), detached from it, so a hung request cannot starve a later step and the 2 s of step 0 do not shorten the HTTP drain. That is five budgeted steps, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0 (152 s with the default 30 s). The stop grace period of the orchestrator must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s, which still covers it. Raise both together. Work that outlives its request starts with `inflight.Tracker.Go`; a periodic job is a `leader.Worker`.
 
 The API-key last-used update runs in a goroutine that shutdown does not wait for.
 
@@ -199,7 +199,7 @@ Repeated errors do not flood the log. A lookup that fails on every request (the 
 
 Both run on ports of their own, started by `main` (`backend/api/servers.go`) and stopped first by `shutdown`. Neither is ever on the API router.
 
-- Metrics: `METRICS_ENABLED=true` serves `GET /metrics` (only that path) on `METRICS_ADDR` (`:9090`). The endpoint has no authentication and lists the route patterns, status codes and runtime figures. Keep the port on a private network (a Compose network, a an internal service of the platform): publish it to the host on `127.0.0.1` at most, and never to the internet.
+- Metrics: `METRICS_ENABLED=true` serves `GET /metrics` (only that path) on `METRICS_ADDR` (`:9090`). The endpoint has no authentication and lists the route patterns, status codes and runtime figures. Keep the port on a private network (a Compose network or an internal service of the platform): publish it to the host on `127.0.0.1` at most, and never to the internet. A `METRICS_ADDR` that is not loopback (the default `:9090` is not) logs an Info line at start that says so; it is not a Warn because the Compose setup uses the default on its private network.
 - pprof: `PPROF_ENABLED=true` serves `/debug/pprof/` (`profile`, `trace`, `heap`, `goroutine`, `mutex`, `block`, `cmdline`, `symbol`) on `PPROF_ADDR`, loopback by default. The mutex and block profiles stay empty until `PPROF_MUTEX_FRACTION` and `PPROF_BLOCK_RATE` are set. Leave it off in production; when you need it, reach the loopback port with a port-forward or an SSH tunnel and turn it off again. `LoadConfig` refuses a non-loopback `PPROF_ADDR` unless `PPROF_ALLOW_NON_LOOPBACK=true`, and `startPprofServer` checks it again.
 - A port that cannot be bound is logged at Error and the API starts without that server (it is a diagnostic, not worth a process that does not start). Check the log after a start with either switch on.
 - Profile from the host with `go tool pprof http://127.0.0.1:6060/debug/pprof/heap`. `docker-compose.yml` does not publish the pprof port; to profile a container, run it with `PPROF_ENABLED=true PPROF_ADDR=0.0.0.0:6060 PPROF_ALLOW_NON_LOOPBACK=true` and publish the port as `127.0.0.1:6060:6060` in a local override file.

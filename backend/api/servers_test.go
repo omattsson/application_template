@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,12 +14,15 @@ import (
 
 	"backend/internal/config"
 	"backend/internal/health"
+	"backend/internal/sessionstore"
 	"backend/internal/telemetry"
 	"backend/internal/websocket"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"gorm.io/gorm"
 )
 
 // metricsTelemetry builds a Telemetry with the Prometheus handler
@@ -341,4 +345,236 @@ func TestMetricsServerTimeoutsAreSet(t *testing.T) {
 	assert.Positive(t, srv.ReadTimeout)
 	assert.Positive(t, srv.WriteTimeout)
 	assert.Positive(t, srv.IdleTimeout)
+}
+
+// deadlineServer records how much time its Shutdown context has left.
+type deadlineServer struct {
+	remaining time.Duration
+}
+
+func (d *deadlineServer) Shutdown(ctx context.Context) error {
+	if dl, ok := ctx.Deadline(); ok {
+		d.remaining = time.Until(dl)
+	}
+	return nil
+}
+
+func (d *deadlineServer) Close() error { return nil }
+
+// A slow diagnostics step must not shorten the drain of the API: the HTTP
+// step has a budget of its own, not what is left of ctx.
+func TestShutdownHTTPStepKeepsItsFullBudget(t *testing.T) {
+	// Not parallel: it replaces the package-level aux budget.
+	prev := auxShutdownTimeout
+	auxShutdownTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { auxShutdownTimeout = prev })
+
+	rec := &callRecorder{}
+	api := &deadlineServer{}
+	s := &services{
+		auxServers: []httpServer{&fakeServer{rec: rec, name: "pprof", hang: true}},
+		servers:    []httpServer{api},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := shutdown(ctx, s)
+
+	require.Error(t, err, "the hung diagnostics server is reported")
+	assert.Greater(t, api.remaining, 900*time.Millisecond,
+		"the HTTP drain still gets its whole budget after the 300 ms diagnostics step")
+}
+
+// closeFailServer is a server whose Shutdown and Close fail.
+type closeFailServer struct {
+	shutdownErr, closeErr error
+}
+
+func (c *closeFailServer) Shutdown(context.Context) error { return c.shutdownErr }
+func (c *closeFailServer) Close() error                   { return c.closeErr }
+
+func TestShutdownReportsServersThatCannotBeClosed(t *testing.T) {
+	t.Parallel()
+	shutdownErr := errors.New("drain failed")
+	closeErr := errors.New("close failed")
+	s := &services{
+		auxServers: []httpServer{&closeFailServer{shutdownErr: shutdownErr, closeErr: closeErr}},
+		servers:    []httpServer{&closeFailServer{shutdownErr: shutdownErr, closeErr: closeErr}},
+	}
+
+	err := shutdown(context.Background(), s)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, shutdownErr)
+	assert.ErrorIs(t, err, closeErr)
+	assert.Contains(t, err.Error(), "close diagnostics server")
+	assert.Contains(t, err.Error(), "close http server")
+}
+
+// failingListener accepts nothing: Serve returns its error at once.
+type failingListener struct{ net.Listener }
+
+func (failingListener) Accept() (net.Conn, error) { return nil, errors.New("accept boom") }
+func (failingListener) Close() error              { return nil }
+func (failingListener) Addr() net.Addr            { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)} }
+
+func TestServeListenerLogsAServeError(t *testing.T) {
+	// Not parallel: it captures the default logger.
+	buf := captureLog(t)
+	srv := &http.Server{Handler: http.NewServeMux(), ReadHeaderTimeout: time.Second}
+
+	done := serveListener(srv, failingListener{}, "test server")
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the serve goroutine did not end")
+	}
+	assert.Contains(t, buf.String(), "level=ERROR")
+	assert.Contains(t, buf.String(), "test server failed")
+	assert.Contains(t, buf.String(), "accept boom")
+}
+
+func TestMetricsAddrReminder(t *testing.T) {
+	// Not parallel: it captures the default logger.
+	tests := []struct {
+		name     string
+		addr     string
+		wantNote bool
+	}{
+		{name: "default, all interfaces", addr: ":9090", wantNote: true},
+		{name: "any interface", addr: "0.0.0.0:9090", wantNote: true},
+		{name: "a private address", addr: "10.0.0.5:9090", wantNote: true},
+		{name: "loopback", addr: "127.0.0.1:9090"},
+		{name: "localhost", addr: "localhost:9090"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			buf := captureLog(t)
+			noteMetricsAddr(tt.addr)
+
+			if !tt.wantNote {
+				assert.NotContains(t, buf.String(), "unauthenticated")
+				return
+			}
+			assert.Contains(t, buf.String(), "level=INFO", "an Info, not a Warn: the Compose default is :9090")
+			assert.NotContains(t, buf.String(), "level=WARN")
+			assert.Contains(t, buf.String(), "unauthenticated")
+			assert.Contains(t, buf.String(), "private network")
+			assert.Contains(t, buf.String(), tt.addr)
+		})
+	}
+}
+
+func TestStartMetricsServerLogsTheReminderOnlyBeyondLoopback(t *testing.T) {
+	// Not parallel: it installs the global OTel providers and captures the logger.
+	tel := metricsTelemetry(t)
+	buf := captureLog(t)
+	cfg := bootstrapTestConfig()
+	cfg.Otel.MetricsEnabled = true
+	cfg.Otel.MetricsAddr = "127.0.0.1:0"
+
+	srv := startMetricsServer(cfg, tel)
+	require.NotNil(t, srv)
+	t.Cleanup(func() { _ = srv.Close() })
+
+	assert.NotContains(t, buf.String(), "unauthenticated")
+}
+
+// net/http/pprof registers its handlers on http.DefaultServeMux in init: a
+// server with a nil Handler would serve them on its port. Every server of the
+// process therefore needs an explicit handler, and pprof lives only on its
+// own port.
+func TestEveryServerHasAnExplicitHandler(t *testing.T) {
+	// Not parallel: it installs the global OTel providers, sets the Gin mode and
+	// the profile rates.
+	t.Setenv("GIN_MODE", gin.TestMode)
+	tel := metricsTelemetry(t)
+	t.Cleanup(func() {
+		runtime.SetMutexProfileFraction(0)
+		runtime.SetBlockProfileRate(0)
+	})
+	cfg := bootstrapTestConfig()
+	cfg.Otel.MetricsEnabled = true
+	cfg.Otel.MetricsAddr = "127.0.0.1:0"
+	cfg.Server.PprofEnabled = true
+	cfg.Server.PprofAddr = "127.0.0.1:0"
+
+	router, res, err := buildRouter(cfg, routerDeps{HealthChecker: health.New(), Hub: websocket.NewHub()})
+	require.NoError(t, err)
+	t.Cleanup(res.RateLimiters.Stop)
+
+	apiSrv := startHTTPServer(cfg, router)
+	metricsSrv := startMetricsServer(cfg, tel)
+	pprofSrv := startPprofServer(cfg)
+	require.NotNil(t, metricsSrv)
+	require.NotNil(t, pprofSrv)
+	for _, srv := range []*http.Server{apiSrv, metricsSrv, pprofSrv} {
+		srv := srv
+		t.Cleanup(func() { _ = srv.Close() })
+		assert.NotNil(t, srv.Handler, "%s must not fall back to http.DefaultServeMux", srv.Addr)
+	}
+
+	httpGet(t, "http://"+apiSrv.Addr+"/debug/pprof/", http.StatusNotFound)
+	httpGet(t, "http://"+apiSrv.Addr+"/metrics", http.StatusNotFound)
+}
+
+// failingShutdownSpans is a span processor whose Shutdown fails.
+type failingShutdownSpans struct{ sdktrace.SpanProcessor }
+
+func (failingShutdownSpans) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
+func (failingShutdownSpans) OnEnd(sdktrace.ReadOnlySpan)                     {}
+func (failingShutdownSpans) ForceFlush(context.Context) error                { return nil }
+func (failingShutdownSpans) Shutdown(context.Context) error                  { return errors.New("export boom") }
+
+func TestFlushTelemetry(t *testing.T) {
+	// Not parallel: it captures the default logger and installs the global providers.
+	t.Run("a flush that works logs nothing", func(t *testing.T) {
+		buf := captureLog(t)
+		flushTelemetry(&telemetry.Telemetry{})
+		assert.NotContains(t, buf.String(), "Telemetry flush failed")
+	})
+
+	t.Run("a failed flush is logged and does not panic", func(t *testing.T) {
+		buf := captureLog(t)
+		tel, err := telemetry.InitWithBackends(config.OtelConfig{Enabled: true, ServiceName: "flush-test", SampleRate: 1},
+			telemetry.Backends{Spans: failingShutdownSpans{}})
+		require.NoError(t, err)
+		t.Cleanup(func() { _, _ = telemetry.Init(config.OtelConfig{}) })
+
+		require.NotPanics(t, func() { flushTelemetry(tel) })
+
+		assert.Contains(t, buf.String(), "level=WARN")
+		assert.Contains(t, buf.String(), "Telemetry flush failed")
+		assert.Contains(t, buf.String(), "export boom")
+	})
+}
+
+func TestBuildRouterRefusesAuthWithoutStores(t *testing.T) {
+	// Not parallel: buildRouter sets the process-wide Gin mode.
+	t.Setenv("GIN_MODE", gin.TestMode)
+	cfg := authModeConfig(true)
+
+	router, res, err := buildRouter(cfg, routerDeps{HealthChecker: health.New(), Hub: websocket.NewHub()})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "build the router")
+	assert.Nil(t, router)
+	assert.Nil(t, res)
+}
+
+func TestOpenAuthStoresReturnsTheStoreError(t *testing.T) {
+	// Not parallel: it replaces newSessionStore.
+	prev := newSessionStore
+	t.Cleanup(func() { newSessionStore = prev })
+	storeErr := errors.New("store boom")
+	newSessionStore = func(string, *gorm.DB) (sessionstore.SessionStore, error) { return nil, storeErr }
+
+	repo, _ := openSQLiteRepo(t)
+	deps, err := openAuthStores(authModeConfig(true), repo)
+
+	require.ErrorIs(t, err, storeErr)
+	assert.Nil(t, deps)
 }
