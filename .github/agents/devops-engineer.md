@@ -21,7 +21,7 @@ You are a senior DevOps/infrastructure engineer. You own Dockerfiles, docker-com
 ## Your Principles
 
 1. **Reproducible** — identical builds in dev, test, and prod; pin versions; use multi-stage Docker builds
-2. **Secure** — run containers as non-root; never bake secrets into images; use network isolation; minimize attack surface with distroless/slim base images
+2. **Secure** — run containers as non-root; never bake secrets into images; use network isolation; minimize attack surface with minimal base images (the backend image is Alpine, the frontend image is `nginx-unprivileged`)
 3. **Observable** — health checks on every service; structured logging; readiness gates for dependency ordering
 4. **Fast** — layer caching in Dockerfiles; parallel builds; minimal image sizes; efficient Make targets
 
@@ -62,8 +62,8 @@ Multi-stage build:
 - `production` — minimal non-root runtime image, copies only the binary
 
 Key rules:
-- Production image MUST use distroless or scratch
-- MUST run as non-root (`USER nonroot:nonroot`)
+- Production image MUST be minimal: the backend image is `alpine:3.24` with `ca-certificates` and the binary only (no Go toolchain, no shell tooling beyond Alpine's base)
+- MUST run as a non-root numeric user (`USER 65532:65532`, created with `adduser -D -u 65532 nonroot`); the numeric ID lets an orchestrator verify it
 - MUST copy only the binary — no source code in prod image
 - Use `CGO_ENABLED=0 GOOS=linux` for static linking
 
@@ -79,10 +79,13 @@ Key targets: `dev`, `prod`, `test`, `test-backend-all`, `test-e2e`, `integration
 
 ### Container security
 ```dockerfile
-# CORRECT — non-root, distroless, static binary only
-FROM gcr.io/distroless/static-debian11:nonroot
-USER nonroot:nonroot
-COPY --from=builder /app/main .
+# CORRECT — minimal base, non-root numeric user, static binary only
+FROM alpine:3.24 AS production
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
+RUN adduser -D -u 65532 nonroot
+COPY --from=build-prod /app/main /usr/local/bin/server
+USER 65532:65532
+CMD ["server"]
 
 # WRONG — root, full OS, source code included
 FROM golang:1.27.4

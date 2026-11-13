@@ -98,7 +98,7 @@ When reviewing code:
 - [ ] `afterEach` with `vi.clearAllMocks()` + `vi.restoreAllMocks()`
 
 ### Infrastructure
-- [ ] Multi-stage Dockerfiles; prod images distroless/non-root
+- [ ] Multi-stage Dockerfiles; prod images minimal (Alpine) and non-root (numeric USER)
 - [ ] Network isolation maintained (backend-net / frontend-net separation)
 - [ ] Health checks on all services
 - [ ] No secrets baked into images; new env vars documented

@@ -86,7 +86,7 @@ The DSN sets `sql_mode`, `time_zone` (UTC) and `foreign_key_checks` as driver pa
 | `SERVER_HOST` | empty | All interfaces. |
 | `SERVER_PORT` | `8081` | The images, the proxies and the health checks expect 8081. |
 | `SERVER_READ_TIMEOUT` | `10s` | Compose passes `15s`. |
-| `SERVER_WRITE_TIMEOUT` | `0s` | Off on purpose (WebSocket); Compose passes `15s`. |
+| `SERVER_WRITE_TIMEOUT` | `0s` | Off by default: a stalled client can then hold a REST connection open. A positive value is safe for WebSockets: `net/http` clears the connection deadlines when the upgrade hijacks the connection (`TestServerWriteTimeoutDoesNotEndAWebSocket`), and the socket write pump sets its own per-write deadline. Compose therefore passes `15s` for slow-client protection. |
 | `SERVER_IDLE_TIMEOUT` | `30s` | |
 | `SERVER_SHUTDOWN_TIMEOUT` | `30s` | Budget of each shutdown step; `0` means 5 s. See "Shutdown". |
 | `TRUSTED_PROXIES` | empty | See "Client IP and proxies". |

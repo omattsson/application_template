@@ -256,14 +256,11 @@ type DatabaseConfig struct {
 type ServerConfig struct {
 	// 8-byte aligned fields first
 	ReadTimeout time.Duration
-	// WriteTimeout is 0 (disabled) at the server level. Per-write deadlines are
-	// enforced inside the WebSocket write pump (websocket/client.go), so a
-	// server-level write timeout must be disabled to prevent premature
-	// termination of idle WebSocket connections. Standard REST handlers complete
-	// quickly in practice, but setting WriteTimeout to 0 does mean slow or
-	// stalled clients can hold a connection indefinitely. Operators who want
-	// protection against slow clients should set SERVER_WRITE_TIMEOUT to a
-	// positive value (e.g. 30s); per-handler context deadlines can also be applied.
+	// WriteTimeout is 0 (disabled) by default. A positive value does not end
+	// WebSockets: net/http clears the connection deadlines when the upgrade
+	// hijacks the connection, and the write pump (websocket/client.go) sets
+	// its own per-write deadline. With 0 a slow or stalled client can hold a
+	// REST connection indefinitely; Compose sets 15s against that.
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration

@@ -13,7 +13,7 @@ The security rules are in `CLAUDE.md` ("Security Rules") and `docs/claude/auth-s
 - **Authentication** is optional and off by default. With `AUTH_ENABLED=false` the API is open: never expose it to people you do not trust. With it on, the access token lives in memory in the browser and the refresh token is an httpOnly cookie. `SECURE_COOKIES` defaults to `true`; `false` is for plain-HTTP development on a host other than `localhost`.
 - **CORS**: `CORS_ALLOWED_ORIGINS=*` (the default) is for development only. The bundled UI is same-origin and needs no entry. The CORS middleware must never allow `X-Requested-With` or send `Access-Control-Allow-Credentials`.
 - **Rate limiting**: per client IP (`RATE_LIMIT`, `LOGIN_RATE_LIMIT`). The client IP comes from `X-Forwarded-For` only for peers in `TRUSTED_PROXIES`; never trust a whole network.
-- **Never remove** the `SecurityHeaders`, `Recovery` or `RedactWSToken` middleware. `/ws` carries the token as `?token=`: a proxy in front must not log its query (the bundled nginx does not access-log `/ws`; its `error_log` can still show the request line).
+- **Never remove** the `SecurityHeaders`, `Recovery` or `RedactWSToken` middleware. `/ws` carries the token as `?token=`: a proxy in front must not log its query (the bundled nginx neither access-logs `/ws` nor writes its errors below `crit`, so an ordinary upstream error does not log the request line; see `docs/claude/operations.md`).
 - **Swagger** (`ENABLE_SWAGGER=true`) stays open with auth on: keep it off in production.
 - **Audit**: with auth on, every successful mutating request of an authenticated user is recorded; `/auth/*` is not.
 - **Hard deletes**: `Base.DeletedAt` is a plain field, not `gorm.DeletedAt`; `Delete` removes the row.
