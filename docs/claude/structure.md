@@ -104,11 +104,11 @@ frontend/
 | `scripts/check-trivyignore.sh` | Every `.trivyignore` entry has a reason and an expiry within 90 days | `scripts/check-trivyignore.sh` |
 | `scripts/gosec.sh` | Pinned gosec run inside `backend/` | `make gosec` |
 | `scripts/e2e.sh` | MySQL in Docker, backend, Playwright | `make test-e2e`, `make test-e2e-auth` |
-| `scripts/check-make-targets.sh` | The ops make targets exist, are `.PHONY` and can be planned with `make -n` (also without k6) | `make check-make-targets` |
+| `scripts/check-make-targets.sh` | The ops make targets exist, are `.PHONY` and can be planned with `make -n` and print a recipe (also without k6) | `make check-make-targets` |
 | `scripts/coverage-gate.sh` | Per-package coverage gate over `backend/coverage-packages.txt` | `make test-coverage` |
 | `scripts/seed-dev-data.sh` | Creates sample Items through the API of a running backend | `make seed` |
 | `loadtest/` | k6 scripts (`k6-api.js`, `k6-websocket.js`, `k6-stress.js`, `lib/`) | `make loadtest`, `make loadtest-stress` |
 
-Each `check-*.sh` takes `--self-test` (except `check-domain-terms.sh`, which has `check-domain-terms.test.sh`, and `check-make-targets.sh`, which only runs).
+Each `check-*.sh` takes `--self-test` (except `check-domain-terms.sh`, which has `check-domain-terms.test.sh`).
 
 Workflows in `.github/workflows/`: `pull-request.yml` (repository checks, backend, frontend, Markdown lint), `pr-title.yml` (conventional PR title), `docker-build.yml` (both production images, not pushed), `security-scan.yml` (Trivy), `codeql.yml`, `e2e.yml` (Playwright, three passes). Details: `RELEASING.md`.

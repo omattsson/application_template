@@ -162,7 +162,7 @@ seed:
 
 # k6 load tests of the Items API and /ws against a RUNNING backend: a local k6
 # binary (https://grafana.com/docs/k6/latest/set-up/install-k6/, the load tests
-# are written for k6 1.x) runs loadtest/k6-api.js and loadtest/k6-websocket.js.
+# use only the standard k6 modules) runs loadtest/k6-api.js and loadtest/k6-websocket.js.
 # k6 is looked up only when the recipe runs, so make -n works without it. K6
 # is the binary to run. The target must be local; LOADTEST_ALLOW_REMOTE=1 allows
 # another one. A crossed threshold (error rate, p95/p99 latency) makes k6, and
@@ -279,8 +279,9 @@ check-agents:
 
 # The ops targets (test-coverage, test-backend-repeat, seed, loadtest,
 # loadtest-stress) exist, are .PHONY and can be planned with make -n (also
-# without k6). CI runs it too.
+# without k6), with the checker's own fixture tests first. CI runs it too.
 check-make-targets:
+	scripts/check-make-targets.sh --self-test
 	scripts/check-make-targets.sh
 
 # Markdown lint (rules: .markdownlint.yml, ignores: .markdownlint-cli2.jsonc;

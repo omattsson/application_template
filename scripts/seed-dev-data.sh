@@ -119,7 +119,10 @@ for i in $(seq 1 "$SEED_COUNT"); do
       continue
       ;;
   esac
-  if [ "$found" != '[]' ]; then
+  # The item exists when the answer is a JSON array with at least one element
+  # (an Item is an object). [], null and an empty body mean it does not.
+  compact=$(printf '%s' "$found" | tr -d '[:space:]')
+  if [[ $compact == '[{'* ]]; then
     existing=$((existing + 1))
     continue
   fi

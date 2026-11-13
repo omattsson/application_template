@@ -290,7 +290,11 @@ None of the variables in this section is read by the backend: they are Make and 
 
 ### Coverage gate
 
-`make test-coverage` runs the unit tests (`-short`, no database) with `-coverpkg` over the packages of `backend/coverage-packages.txt` and fails when any listed package has less than `COVERAGE_MIN` percent (default 80) on its own; an average would hide a weak package. `-coverpkg` credits a package for what any test binary runs, so the `api` main package is measured through its bootstrap tests (its `main()` is not testable). The list holds every package with non-test Go code added or changed since the backport began; the file says what is left out (generated `docs`, the test helper `auth/authtest`) and how it was derived. Add a package to the list in the change that adds it. Reports: `backend/coverage/coverage.html` and `coverage-summary.txt`. The logic is in `scripts/coverage-gate.sh`.
+`make test-coverage` runs the unit tests (`-short`, no database) with `-coverpkg` over the packages of `backend/coverage-packages.txt` and fails when any listed package has less than `COVERAGE_MIN` percent (default 80) on its own; an average would hide a weak package. `-coverpkg` credits a package for what any test binary runs, so the `api` main package is measured through its bootstrap tests (its `main()` is not testable). The list holds every package with non-test Go code added or changed since the backport began; the file says what is left out (the generated `docs`) and how it was derived. Add a package to the list in the change that adds it. Reports: `backend/coverage/coverage.html` and `coverage-summary.txt`. The logic is in `scripts/coverage-gate.sh`.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `COVERAGE_MIN` | `80` | Minimum percent per package for `make test-coverage`. |
 
 ### Repeated tests
 
@@ -300,7 +304,6 @@ None of the variables in this section is read by the backend: they are Make and 
 |---|---|---|
 | `REPEAT_COUNT` | `3` | Positive integer. |
 | `REPEAT_BASE` | `origin/main` | Any ref, for example `main` or a commit. |
-| `COVERAGE_MIN` | `80` | Minimum percent per package for `make test-coverage`. |
 
 ### Sample data
 
@@ -317,7 +320,7 @@ With auth off no credential is needed.
 
 ### Load tests
 
-`make loadtest` runs two k6 scripts against a **running** backend with the `k6` binary on your machine (install: <https://grafana.com/docs/k6/latest/set-up/install-k6/>; the scripts are written for k6 1.x and checked with 2.4). There is no Docker variant: one tool, one way to run it. `make -n loadtest` works without k6; only running it needs the binary (`K6=/path/to/k6` picks another one).
+`make loadtest` runs two k6 scripts against a **running** backend with the `k6` binary on your machine (install: <https://grafana.com/docs/k6/latest/set-up/install-k6/>; the scripts use only the standard k6 modules). There is no Docker variant: one tool, one way to run it. `make -n loadtest` works without k6; only running it needs the binary (`K6=/path/to/k6` picks another one).
 
 - `loadtest/k6-api.js`: two scenarios for `LOADTEST_DURATION`: `browse` (`LOADTEST_VUS` users list, filter and read Items) and `crud` (half as many users create, read, update and delete an Item). `SCENARIO=browse` or `SCENARIO=crud` runs one.
 - `loadtest/k6-websocket.js`: `LOADTEST_VUS` clients open `/ws` and subscribe to `items` while one writer creates and deletes Items, so every listener receives the broadcasts.

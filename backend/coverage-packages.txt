@@ -9,13 +9,13 @@
 #
 # Not listed, on purpose:
 #   ./docs                                 generated Swagger spec (swag init), no logic
-#   ./internal/auth/authtest               test helper for other packages' tests
 #
 ./api
 ./internal/api/handlers
 ./internal/api/middleware
 ./internal/api/routes
 ./internal/auth
+./internal/auth/authtest
 ./internal/config
 ./internal/ctxutil
 ./internal/database
