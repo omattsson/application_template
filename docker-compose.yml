@@ -142,11 +142,11 @@ services:
       target: ${NODE_ENV:-production}
       args:
         - NODE_ENV=${NODE_ENV:-production}
-    # Host port of the web UI. The container listens on 3000 (Vite dev
-    # server) or 8080 (unprivileged nginx, production): make prod sets
-    # FRONTEND_CONTAINER_PORT=8080.
+    # Host port of the web UI. The container listens on 8080 (unprivileged
+    # nginx, the default production image) or 3000 (Vite dev server): make
+    # dev sets FRONTEND_CONTAINER_PORT=3000 together with NODE_ENV=development.
     ports:
-      - "${FRONTEND_PORT:-3000}:${FRONTEND_CONTAINER_PORT:-3000}"
+      - "${FRONTEND_PORT:-3000}:${FRONTEND_CONTAINER_PORT:-8080}"
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - VITE_API_URL=http://backend:8081

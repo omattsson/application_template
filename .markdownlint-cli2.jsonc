@@ -10,7 +10,7 @@
     "frontend/test-results/**",
     "coverage/**",
     // Agent worktrees and planning scratch space
-    ".claude/**",
+    ".claude/worktrees/**",
     ".superpowers/**"
   ]
 }

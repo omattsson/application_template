@@ -57,7 +57,7 @@ frontend/
    With Docker (recommended):
 
    ```bash
-   docker compose up frontend
+   make dev-frontend   # from the repository root
    ```
 
    Without Docker:
@@ -75,14 +75,14 @@ frontend/
 - `npm run preview` - Preview production build
 - `npm run test` - Run tests
 - `npm run lint` - Run ESLint
-- `npm run format` - Format code with Prettier
+- `npm run format` - Fix lint issues with ESLint (`eslint --fix`)
 
 ## Environment Variables
 
-Create a `.env` file in the root directory:
+`vite.config.ts` reads `VITE_API_URL` from the process environment, not from a `.env` file, so export it in the shell before `npm run dev`:
 
-```text
-VITE_API_URL=http://localhost:8081  # Backend that the dev server proxies /api and /ws to
+```bash
+export VITE_API_URL=http://localhost:8081  # Backend that the dev server proxies /api and /ws to
 ```
 
 Available environment variables:
@@ -134,23 +134,23 @@ Tests are written using Vitest and React Testing Library:
 npm test
 
 # Run tests in watch mode
-npm test:watch
+npm run test:watch
 ```
 
 ## Docker Support
 
 The project includes multi-stage Dockerfile for both development and production:
 
-Development:
+Development (from the repository root):
 
 ```bash
-docker compose up frontend
+make dev-frontend
 ```
 
-Production:
+Production (nginx on host port 80):
 
 ```bash
-docker compose -f docker-compose.prod.yml up frontend
+make prod-frontend
 ```
 
 ## Contributing

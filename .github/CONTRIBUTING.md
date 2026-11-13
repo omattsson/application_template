@@ -54,11 +54,11 @@ By participating in this project, you agree to abide by our Code of Conduct. Ple
 git clone https://github.com/your-username/application_template.git
 cd application_template
 
-# Set up development environment
-make setup
+# Install the backend and frontend dependencies
+make install
 
-# Run the application locally
-make run
+# Run the application locally (Docker Compose, development mode)
+make dev
 ```
 
 ### Running Tests
@@ -79,7 +79,7 @@ make test-frontend
 ### Go Code
 
 - Follow the standard Go code style (run `gofmt` before committing)
-- Ensure code passes `golint` and `go vet`
+- Ensure `make lint` (`go vet`, ESLint and the repository checks) and `make gosec` pass
 - Follow the project's architecture pattern
 
 ### TypeScript/React Code

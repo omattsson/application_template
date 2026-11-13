@@ -19,4 +19,9 @@ describe('frontend/nginx.conf', () => {
     // Errors are still logged (error_log is not turned off).
     expect(ws).not.toMatch(/error_log\s+off/);
   });
+
+  it('keeps the /ws error log at crit (an upstream error logs the request line, token included)', () => {
+    const ws = locationBlock(conf, '/ws');
+    expect(ws).toMatch(/^\s*error_log\s+\/dev\/stderr\s+crit;/m);
+  });
 });

@@ -190,7 +190,7 @@ make lint                                 # Full lint (backend + frontend)
 
 ## When in doubt
 - Read `internal/api/handlers/items.go` — it is the reference implementation
-- Read `.github/instructions/` — they contain detailed patterns for security, scalability, API extension, and Go conventions
+- Read `CLAUDE.md` and `backend/CLAUDE.md` first (the repository conventions), then `.github/instructions/` for patterns on security, scalability, API extension, and Go conventions
 - Match existing patterns exactly rather than inventing new ones
 
 ## Handoff

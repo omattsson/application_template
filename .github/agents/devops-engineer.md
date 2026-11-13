@@ -57,10 +57,9 @@ Three services:
 ### Backend Dockerfile (`backend/Dockerfile`)
 
 Multi-stage build:
-- `builder` — Go 1.24.3 base
-- `development` — installs `air` for hot reload, used with `GO_ENV=development`
-- `production` — builds static binary with `CGO_ENABLED=0`
-- `prod-final` — distroless non-root image, copies only the binary
+- `development` — `golang:1.27.4` base (the Go version in `backend/go.mod`), installs `air` for hot reload, used with `GO_ENV=development`
+- `build-prod` — `golang:1.27.4`, builds the static binary with `CGO_ENABLED=0`
+- `production` — minimal non-root runtime image, copies only the binary
 
 Key rules:
 - Production image MUST use distroless or scratch
@@ -86,7 +85,7 @@ USER nonroot:nonroot
 COPY --from=builder /app/main .
 
 # WRONG — root, full OS, source code included
-FROM golang:1.24.3
+FROM golang:1.27.4
 COPY . .
 CMD ["go", "run", "main.go"]
 ```
@@ -141,7 +140,7 @@ make test-e2e                             # E2e tests (starts full stack)
 - Read `backend/Dockerfile` and `frontend/Dockerfile` — build configurations
 - Read `frontend/nginx.conf` — reverse proxy rules
 - Read `Makefile` — all available automation targets
-- Read `.github/instructions/scalability.instructions.md` — connection pooling, timeouts, health checks
+- Read `CLAUDE.md` and `backend/CLAUDE.md` first (the repository conventions), then `.github/instructions/scalability.instructions.md` — connection pooling, timeouts, health checks
 
 ## Handoff
 

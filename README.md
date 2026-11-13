@@ -164,7 +164,7 @@ Frontend:
 
 - `NODE_ENV` - Image target (development: Vite dev server on container port 3000; production: unprivileged nginx on container port 8080)
 - `FRONTEND_PORT` - Host port of the web UI (default: 3000; `make prod*`: 80)
-- `FRONTEND_CONTAINER_PORT` - Container port of the web UI (default: 3000; `make prod*` sets 8080 for nginx)
+- `FRONTEND_CONTAINER_PORT` - Container port of the web UI (default: 8080, the unprivileged nginx of the production image; `make dev*` sets 3000 for the Vite dev server, `make prod*` sets 8080)
 - `VITE_API_URL` - Target of the Vite dev proxy for `/api` and `/ws` (default `http://localhost:8081`; Compose sets `http://backend:8081`). The browser always calls the web UI origin.
 
 ### Behind a proxy

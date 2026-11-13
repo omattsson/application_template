@@ -110,7 +110,7 @@ These are read by `docker-compose.yml`, the Makefile or the scripts, not by the 
 |---|---|---|
 | `GO_ENV`, `NODE_ENV` | `production` | Image targets (`development` or `production`). `make dev*` sets development, `make prod*` production. |
 | `BACKEND_PORT`, `FRONTEND_PORT` | 8081, 3000 | Host ports (`make prod*`: 8080 and 80). |
-| `FRONTEND_CONTAINER_PORT` | `3000` | `8080` for the unprivileged nginx of `make prod*`. |
+| `FRONTEND_CONTAINER_PORT` | `8080` | The unprivileged nginx of the production image. `make dev*` sets `3000` for the Vite dev server (set it too when running `NODE_ENV=development docker compose` by hand). |
 | `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | 3306, `app`, `appuser`, `apppass`, `rootpass` | Dev-only credentials. |
 | `FRONTEND_PROXY_IP`, `FRONTEND_NET_SUBNET` | `172.30.80.10`, `172.30.80.0/24` | Fixed proxy address on `frontend-net` and its subnet; change both together. |
 | `VITE_API_URL` | `http://localhost:8081` | Target of the Vite dev proxy; Compose sets `http://backend:8081`. |
@@ -126,7 +126,7 @@ Two checkouts, or another project, collide on the fixed host ports 3000, 8081 an
 - Trust proxy addresses, never a whole network: on some Docker setups the network gateway is the source of traffic from the host, and a trusted gateway lets a client pick its IP.
 - `SecurityHeaders` sends `Strict-Transport-Security` when the connection is TLS or the first `X-Forwarded-Proto` value is `https`. The backend reads that header from any client, trusted proxy or not, so a client that talks to the backend directly can make its own response carry HSTS (self-affecting only). Terminate TLS at a proxy and let it set the header.
 - The bundled nginx (`frontend/nginx.conf`) and the Vite dev server both strip one `/api` prefix: the browser calls `/api/api/v1/...` and the backend sees `/api/v1/...`. The IdP redirect URI therefore is `<origin>/api/api/v1/auth/oidc/callback`.
-- `/ws` carries the access token as `?token=` (a browser WebSocket cannot send headers). The backend removes it before its own logging (`RedactWSToken`), and the bundled nginx has `access_log off` for `/ws`. Any other proxy in front must not log the query of `/ws` either. The nginx `error_log` can still show the request line, including the token, on an upstream error. The token is a short-lived access token (15 minutes by default); the sockets close when it expires.
+- `/ws` carries the access token as `?token=` (a browser WebSocket cannot send headers). The backend removes it before its own logging (`RedactWSToken`), and the bundled nginx has `access_log off` for `/ws`. Any other proxy in front must not log the query of `/ws` either. The bundled nginx also sets `error_log /dev/stderr crit` for `/ws`: an upstream error would otherwise write the request line, token included, so only crit and worse is logged there, and upstream failures stay visible through the `/api/` location. A proxy of your own needs the same for `/ws`. The token is a short-lived access token (15 minutes by default); the sockets close when it expires.
 
 ## Rate limiting
 

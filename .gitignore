@@ -68,3 +68,5 @@ Thumbs.db
 
 # Claude Code local worktrees
 .claude/worktrees/
+# Personal permission grants: never committed (.claude/settings.json is)
+.claude/settings.local.json

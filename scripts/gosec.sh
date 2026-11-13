@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/gosec.sh
 # Runs the gosec security scanner on the backend module. CI (pull-request.yml,
-# job security-scan) and `make gosec` both use this script, so they report the
+# job Backend, step Gosec) and `make gosec` both use this script, so they report the
 # same findings.
 #
 # Why a build from source instead of the securego/gosec Docker action:

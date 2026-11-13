@@ -42,8 +42,11 @@ backend_bin="$root/backend/tmp/e2e-main"
 backend_log="$root/backend/tmp/e2e-backend-$mode.log"
 backend_pid=""
 
+# The shell environment wins over a developer's root .env, so Compose and the
+# backend below use the same database name, user and password.
 compose() {
-  MYSQL_PORT=$mysql_port docker compose -p "$project" -f "$root/docker-compose.yml" "$@"
+  MYSQL_PORT=$mysql_port MYSQL_DATABASE=$db_name MYSQL_USER=$db_user MYSQL_PASSWORD=$db_password \
+    docker compose -p "$project" -f "$root/docker-compose.yml" "$@"
 }
 
 port_in_use() {

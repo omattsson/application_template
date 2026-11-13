@@ -71,7 +71,7 @@ With auth on, `middleware.AuditRecorder` writes an entry for every successful `P
 ## WebSocket
 
 - `GET /ws` with auth off: open, any topic. With auth on: one credential (`Authorization: Bearer`, `X-API-Key`, or `?token=` for browsers), the same checks as the HTTP auth plus the user row, the `RATE_LIMIT` budget, and a re-check after the socket is registered.
-- `?token=` is moved out of the URL by `RedactWSToken` before logging; `WebSocketQueryToken` turns it into a bearer header on `/ws` only. The bundled nginx does not access-log `/ws`; see `operations.md` for proxies and the `error_log`.
+- `?token=` is moved out of the URL by `RedactWSToken` before logging; `WebSocketQueryToken` turns it into a bearer header on `/ws` only. The bundled nginx neither access-logs `/ws` nor writes its errors below crit (an upstream error would log the request line, token included); see `operations.md` for proxies.
 - Topics are authorised, deny by default (`DefaultTopicAuthorizer`): `items` and `item:<id>` for every role, `user:<id>` for that user and admins, `admin:<name>` for admins. At most 64 topics per client, 128 bytes each.
 - The hub closes a socket (code 1008) on logout, logout-all, disable, delete, role change, password reset, a deleted key, and when its credential expires. It revalidates all open sockets every minute, which also catches a revocation made on another replica; a socket that stays unverified for three runs in a row while the store fails is closed. The web UI reconnects with a new token after every refresh.
 - Hub messages: `{"type": "...", "payload": ...}`. Items sends `item.created`, `item.updated` and `item.deleted` to every socket (`Broadcast`); client messages are `subscribe` and `unsubscribe` with `{"topic": "..."}`.

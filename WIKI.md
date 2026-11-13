@@ -85,10 +85,11 @@ npm run dev
 ### Docker Compose
 
 ```bash
-docker compose up --build
+make dev    # development: Vite dev server on http://localhost:3000
+make prod   # production: nginx on http://localhost:80
 ```
 
-`make dev` and `make prod` set the image targets and ports for you (see `README.md`).
+These set the image targets and ports for you (see `README.md`); a plain `docker compose up --build` starts the production images with the web UI on host port 3000. Use `make dev-frontend` or `make prod-frontend` for the web UI alone (the backend it depends on starts too).
 
 ### Authentication
 

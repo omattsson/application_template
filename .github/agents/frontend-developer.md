@@ -55,7 +55,7 @@ frontend/src/
   App.tsx                            # Layout wrapper + AppRoutes
   routes.tsx                         # All route definitions
   api/
-    config.ts                        # API_BASE_URL: localhost:8081 (dev) | /api (prod)
+    config.ts                        # API_BASE_URL: always /api (same-origin)
     client.ts                        # Axios instance + service objects
   components/
     Layout/index.tsx                 # AppBar + nav buttons + footer shell
@@ -311,8 +311,7 @@ Key e2e patterns:
 ### API integration
 - All API calls go through the `api` axios instance from `src/api/client.ts`
 - Service objects group related endpoints (e.g., `orderService.list`, `orderService.create`)
-- `API_BASE_URL` switches automatically between dev (`localhost:8081`) and prod (`/api`)
-- Vite proxy handles `/api` in dev Docker environment
+- `API_BASE_URL` is always `/api`: the browser calls the web UI origin and the Vite dev server (or nginx in production) proxies `/api` to the backend. Never call the backend port directly: the SameSite=Strict refresh cookie is only sent to the page origin
 
 ### Component file structure
 ```
@@ -334,7 +333,7 @@ make test-e2e                    # E2e tests (needs Docker infra)
 - Read `src/pages/Health/index.tsx` — it is the reference for data-fetching pages
 - Read `src/pages/Health/__tests__/Health.test.tsx` — it is the reference for testing async components
 - Read `src/api/client.ts` — it shows the service object pattern
-- Read `.github/instructions/typescript.instructions.md` — it has all TypeScript/React conventions
+- Read `CLAUDE.md` and `frontend/CLAUDE.md` first (the repository conventions), then `.github/instructions/typescript.instructions.md` for the TypeScript/React conventions
 - Match existing patterns exactly rather than inventing new ones
 
 ## Handoff
