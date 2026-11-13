@@ -93,9 +93,18 @@ type refreshSession struct {
 	isNew     bool      // at login: the first token uses familyID as its ID
 }
 
+// sessionStartNow is the start time of a new session: the wall clock cut to
+// the millisecond. The column is DATETIME(3) and MySQL rounds a finer value
+// (up to 0.5 ms later), so a session that began in the millisecond of a user
+// block could read as started after it and escape the inclusive check on
+// refresh. A whole millisecond is stored as it is.
+func sessionStartNow() time.Time {
+	return time.Now().UTC().Truncate(time.Millisecond)
+}
+
 // newRefreshSession starts a new session at login.
 func newRefreshSession() refreshSession {
-	return refreshSession{familyID: uuid.New().String(), startedAt: time.Now().UTC(), isNew: true}
+	return refreshSession{familyID: uuid.New().String(), startedAt: sessionStartNow(), isNew: true}
 }
 
 // continuedSession is the session of a stored token.
@@ -576,7 +585,7 @@ func (h *AuthHandler) createRefreshToken(ctx context.Context, c *gin.Context, re
 	now := time.Now().UTC()
 	start := sess.startedAt
 	if start.IsZero() {
-		start = now
+		start = sessionStartNow()
 	}
 	lifetime := h.cfg.RefreshTokenExpiration
 	if lifetime <= 0 {

@@ -499,6 +499,29 @@ func TestLoginStartsARefreshSession(t *testing.T) {
 	assert.Equal(t, http.StatusOK, s.me(t, resp.Token))
 }
 
+// The session start is written to a DATETIME(3) column, and MySQL rounds a
+// finer value to the millisecond: up to 0.5 ms later than the Go value. A
+// session that started in the millisecond of a user block (logout-all) could
+// then read as started after the block and escape the inclusive check on
+// refresh. So a session starts on a whole millisecond, and the stored value
+// is the Go value.
+func TestSessionStartIsAWholeMillisecond(t *testing.T) {
+	t.Parallel()
+	for i := 0; i < 50; i++ {
+		start := newRefreshSession().startedAt
+		require.Equal(t, start.Truncate(time.Millisecond), start, "run %d: %s", i, start.Format(time.RFC3339Nano))
+	}
+
+	s := newSessionHarness(t, nil)
+	for i := 0; i < 3; i++ {
+		w := s.post(t, "/api/v1/auth/login", loginBody(t, "alice", testPassword))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		row := s.row(t, refreshCookieOf(t, w).Value)
+		assert.Equal(t, row.SessionStartedAt.Truncate(time.Millisecond), row.SessionStartedAt,
+			"login %d: the stored session start has no sub-millisecond part", i+1)
+	}
+}
+
 // Two logins never share a refresh token or a session.
 func TestLoginSessionsAreDistinct(t *testing.T) {
 	t.Parallel()
