@@ -137,7 +137,7 @@ Send from a handler through the `BroadcastSender` (`Broadcast`, to every socket)
 
 ## Adding a background job
 
-A periodic job is a `leader.Worker` with a restartable `Run(ctx)` (use `periodicWorker(name, interval, fn)` in `api/bootstrap.go`). Add it to the `leaderWorkers` list in `buildServices`, before `workers.Start`. There is no leader election yet, so every process runs it: the job must be idempotent and safe on several replicas. Keep state that must survive in the database. Work that outlives its request starts with `inflight.Tracker.Go` and must respect cancellation. A new external dependency gets `healthChecker.AddCheck`.
+A periodic job is a `leader.Worker` with a restartable `Run(ctx)` (use `periodicWorker(name, interval, fn)` in `api/bootstrap.go`). Add it to the `leaderWorkers` list in `buildServices`, before the group starts. With `LEADER_ELECTION_ENABLED=false` (the default) every process runs it; with `true` only the lease holder does, but a paused or cut-off leader can overlap its successor briefly, so the job must be idempotent and safe on several replicas either way, and must return within 5 s after its context is cancelled. Keep state that must survive in the database. Work that outlives its request starts with `inflight.Tracker.Go` and must respect cancellation. A new external dependency gets `healthChecker.AddCheck`.
 
 ## Adding a configuration variable
 

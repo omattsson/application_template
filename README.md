@@ -154,7 +154,7 @@ Backend:
 - `TRUSTED_PROXIES` - Proxies allowed to set the client IP (default in Compose: the frontend container, see [Behind a proxy](#behind-a-proxy))
 - `RATE_LIMIT` - API requests per minute per client IP (default: 100)
 - `LOGIN_RATE_LIMIT` - Login attempts per minute per client IP (default: 10)
-- `SERVER_SHUTDOWN_TIMEOUT` - Budget of each shutdown step (default: 30s). Compose gives the backend `stop_grace_period: 170s` (5 steps x 30s plus a margin); raise both together.
+- `SERVER_SHUTDOWN_TIMEOUT` - Budget of each shutdown step (default: 30s). Compose gives the backend `stop_grace_period: 170s` (5 steps x 30s, plus 2s each for the diagnostics servers and the replica heartbeat, plus a margin); raise both together.
 - `AUTH_ENABLED`, `JWT_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SECURE_COOKIES`, `OIDC_*` - Optional authentication, see [Authentication](#authentication)
 - `CORS_ALLOWED_ORIGINS` - Allowed origins (default `*`: for development only; the bundled web UI is same-origin and needs no entry)
 

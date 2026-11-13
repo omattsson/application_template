@@ -7,7 +7,7 @@ applyTo: "**"
 Details: `docs/claude/operations.md`. Rules: `CLAUDE.md` ("Scalability Rules").
 
 - **Connection pool**: `DB_MAX_OPEN_CONNS` (25), `DB_MAX_IDLE_CONNS` (5), `DB_CONN_MAX_LIFETIME` (5m), applied in `internal/database/factory.go`. MySQL has its own `max_connections` (`backend/config/mysql/my.cnf`).
-- **Replicas**: all data and revocations are shared through MySQL. The rate limiters, the username login throttle and the WebSocket hub are per replica and in memory. A background job must be safe on several replicas (there is no leader election yet).
+- **Replicas**: all data and revocations are shared through MySQL. The rate limiters, the username login throttle and the WebSocket hub are per replica and in memory. A background job must be safe on several replicas: with `LEADER_ELECTION_ENABLED=true` only the MySQL lease holder runs the leader workers, but the lease is not a fencing token, and with the default `false` every process runs them.
 - **Migrations** run at every start under a MySQL advisory lock that a replica waits for up to 5 minutes.
 - **Pagination**: every list endpoint uses `ListPaged` with `limit` and `offset`, selects only the columns it needs and has an index that covers its filter and order (a new migration adds it).
 - **Optimistic locking**: `Item` has `Version`; a stale update is 409. Other models use targeted or conditional writes.

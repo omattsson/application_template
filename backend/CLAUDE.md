@@ -13,9 +13,10 @@ Packages in `internal/`:
 - `database`: connection factory, migrations (`schema/` is the migrator), the GORM repositories of the auth entities, `BaseRepository` (lock retry), the GORM logger.
 - `health`: liveness and readiness checks.
 - `inflight`: `Tracker` for work that outlives its request.
-- `leader`: `Worker` and `Group` for leader-only background jobs.
-- `models`: Item, User, RefreshToken, APIKey, AuditLog, validation, repository interfaces, `GenericRepository`, `RetryOnLock`.
+- `leader`: `Worker` and `Group` for leader-only background jobs; `Lease`, the MySQL row lease that elects the leader.
+- `models`: Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, validation, repository interfaces, `GenericRepository`, `RetryOnLock`.
 - `logutil`: `Limiter`, one log line per interval for an error that repeats on every request.
+- `replica`: `ProcessID` (host name plus a random suffix) and `Heartbeat`, the per-process row in `replica_heartbeats`.
 - `telemetry`: OpenTelemetry (`Init`, `Shutdown`, `LogHandler`, `StartDBMetrics`). Off by default and then a true no-op.
 - `sessionstore`: token and session blocklist and OIDC login state. `SESSION_STORE=mysql` is the default; `memory` is for tests and one replica.
 - `websocket`: hub, clients, topics, revalidation, message types.
@@ -82,6 +83,7 @@ Key groups:
 - `OTEL_ENABLED` (default false), `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACE_SAMPLE_RATE`, `METRICS_ENABLED` (default false), `METRICS_ADDR` (default `:9090`, read with `METRICS_ENABLED=true`). The two switches are strict booleans; the other three are read and validated only with `OTEL_ENABLED=true`.
 - `PPROF_ENABLED` (default false, strict), `PPROF_ADDR` (default `127.0.0.1:6060`), `PPROF_ALLOW_NON_LOOPBACK`, `PPROF_MUTEX_FRACTION`, `PPROF_BLOCK_RATE`. The metrics and pprof servers are in `api/servers.go`, on ports of their own (never the API router), and `shutdown` stops them first. pprof refuses a non-loopback address unless `PPROF_ALLOW_NON_LOOPBACK=true`: a heap dump exposes secrets. `/metrics` has no authentication: keep it on a private network.
 - `CORS_ALLOWED_ORIGINS` (default `*`, development only). It also gates the WebSocket `Origin` header.
+- `LEADER_ELECTION_ENABLED` and `REPLICA_HEARTBEAT_ENABLED` (both default false, strict booleans). The lease timing is fixed in code (`leader.DefaultLeaseConfig`).
 
 ## Migrations
 
@@ -89,9 +91,10 @@ Key groups:
 
 ## Background Workers
 
-- Leader-only workers are built in `buildServices` (`api/bootstrap.go`) and run in a `leader.Group`. With auth on they are `refresh-token-cleanup` (hourly) and `session-store-cleanup` (every 15 minutes). There is no leader election yet: every process runs them, so a job must be safe on several replicas.
+- Leader-only workers are built in `buildServices` (`api/bootstrap.go`) and run in a `leader.Group`. With auth on they are `refresh-token-cleanup` (hourly) and `session-store-cleanup` (every 15 minutes); with `REPLICA_HEARTBEAT_ENABLED=true` also `replica-heartbeat-cleanup` (every 15 minutes). With `LEADER_ELECTION_ENABLED=false` (the default) every process runs them. With `true` the group runs only on the replica that holds the MySQL lease (`leader.Lease`, table `leader_leases`, database clock; `electedLeader` in the bootstrap): it starts on acquisition and stops when renewals fail for the renew deadline (10 s, 5 s before the 15 s lease expires) or another holder appears. A job must still be idempotent and safe on several replicas (no fencing token), and return within 5 s after its context is cancelled. Details: `docs/claude/operations.md` ("Leader election").
+- With `REPLICA_HEARTBEAT_ENABLED=true` `replica.Heartbeat` upserts this process's row in `replica_heartbeats` every 30 s and deletes it in the shutdown step before the database closes.
 - A worker has `Run(ctx)`. It blocks until `ctx` is done and must work again after it returned: no closed stop channels, no one-shot state. Use `periodicWorker` for an interval job.
-- Add a new periodic job as a `leader.Worker` passed to `leader.NewGroup` before `workers.Start` (`Group.Add` takes effect only at the next term), not as a goroutine in `main.go`. Keep state that must survive a leader change in the database.
+- Add a new periodic job as a `leader.Worker` passed to `leader.NewGroup` before the group starts (`Group.Add` takes effect only at the next term), not as a goroutine in `main.go`. Keep state that must survive a leader change in the database.
 - Work that outlives its request or worker run starts with `inflight.Tracker.Go(fn)`. It returns `false` once shutdown has begun; the caller then does the work inline or drops it. Never add work after `Wait`. A panic in tracked work is recovered and logged.
 
 ## Middleware Order

@@ -86,6 +86,7 @@ func registerMigrations(migrator *schema.Migrator) {
 	migrator.AddMigration(updateItemsVersionDefaultMigration())
 	migrator.AddMigration(replaceUsersAndAddAuthTablesMigration())
 	migrator.AddMigration(createSessionEntriesMigration())
+	migrator.AddMigration(createReplicaTablesMigration())
 }
 
 // legacyUser is the users table of migrations 20231201000001 and
@@ -368,4 +369,46 @@ func createSessionEntriesUp(tx *gorm.DB) error {
 		return nil
 	}
 	return tx.Exec("ALTER TABLE session_entries MODIFY entry_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL").Error
+}
+
+// replicaHeartbeatV1 is replica_heartbeats as 20260101000003 creates it, a
+// frozen copy of models.ReplicaHeartbeat: a model change needs a new
+// migration (TestReplicaTablesMatchModels fails without one).
+type replicaHeartbeatV1 struct {
+	LastSeen time.Time `gorm:"type:datetime(3);not null;index:idx_replica_heartbeats_last_seen"`
+	ID       string    `gorm:"primaryKey;size:253"`
+}
+
+func (replicaHeartbeatV1) TableName() string { return "replica_heartbeats" }
+
+// leaderLeaseV1 is leader_leases as 20260101000003 creates it, a frozen copy
+// of leader.LeaseRecord.
+type leaderLeaseV1 struct {
+	ExpiresAt time.Time `gorm:"column:expires_at;type:datetime(3);not null"`
+	Name      string    `gorm:"column:name;primaryKey;size:64"`
+	Holder    string    `gorm:"column:holder;size:253;not null"`
+}
+
+func (leaderLeaseV1) TableName() string { return "leader_leases" }
+
+// createReplicaTablesMigration creates the two tables of the replica
+// coordination: replica_heartbeats (one row per running process, written by
+// replica.Heartbeat with REPLICA_HEARTBEAT_ENABLED=true) and leader_leases
+// (one row per lease name, the leader election of leader.Lease with
+// LEADER_ELECTION_ENABLED=true). The times are DATETIME(3) and are only ever
+// written and compared with the database clock (UTC_TIMESTAMP(3)). The
+// tables exist whether or not the switches are on, so a switch never needs
+// a migration. Both directions are idempotent.
+func createReplicaTablesMigration() schema.Migration {
+	return schema.Migration{
+		Version:     "20260101000003",
+		Name:        "create_replica_heartbeats_and_leader_leases",
+		Description: "Create replica_heartbeats and leader_leases for the replica heartbeat and the leader election",
+		Up: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&replicaHeartbeatV1{}, &leaderLeaseV1{})
+		},
+		Down: func(tx *gorm.DB) error {
+			return dropTables(tx, "leader_leases", "replica_heartbeats")
+		},
+	}
 }

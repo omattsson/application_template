@@ -49,7 +49,7 @@ func TestMigrationRunsTwice(t *testing.T) {
 	t.Parallel()
 	db := openMigratedDB(t)
 	first := appliedVersions(t, db)
-	assert.Equal(t, []string{"20231201000001", "20231201000002", "20231201000003", "20260101000001", "20260101000002"}, first)
+	assert.Equal(t, []string{"20231201000001", "20231201000002", "20231201000003", "20260101000001", "20260101000002", "20260101000003"}, first)
 
 	// A user written between the runs survives: the second run applies nothing.
 	u := &models.User{ID: uuid.New().String(), Username: "keep-me", Role: models.RoleAdmin, AuthProvider: models.AuthProviderLocal}
@@ -78,7 +78,7 @@ func TestMigrationOnDatabaseWithOldUsersTable(t *testing.T) {
 
 	require.NoError(t, (&Database{DB: db}).AutoMigrate())
 
-	assert.Len(t, appliedVersions(t, db), 5)
+	assert.Len(t, appliedVersions(t, db), 6)
 	for _, col := range []string{"id", "username", "email", "password_hash", "display_name", "role", "auth_provider", "external_id", "disabled", "service_account", "created_at", "updated_at"} {
 		assert.True(t, db.Migrator().HasColumn("users", col), "users.%s", col)
 	}
@@ -102,6 +102,7 @@ func TestReplaceUsersMigrationDownRestoresOldTable(t *testing.T) {
 	m := schema.NewMigrator(db)
 	registerMigrations(m)
 
+	require.NoError(t, m.MigrateDown(), "roll back 20260101000003")
 	require.NoError(t, m.MigrateDown(), "roll back 20260101000002")
 	require.NoError(t, m.MigrateDown(), "roll back 20260101000001")
 
@@ -116,7 +117,7 @@ func TestReplaceUsersMigrationDownRestoresOldTable(t *testing.T) {
 
 	// Up again replaces the table once more.
 	require.NoError(t, m.MigrateUp())
-	assert.Len(t, appliedVersions(t, db), 5)
+	assert.Len(t, appliedVersions(t, db), 6)
 	assert.True(t, db.Migrator().HasColumn("users", "password_hash"))
 	assert.True(t, db.Migrator().HasTable("audit_logs"))
 }
@@ -194,7 +195,8 @@ func TestSessionEntriesMigrationDownKeepsTheAuthTables(t *testing.T) {
 	m := schema.NewMigrator(db)
 	registerMigrations(m)
 
-	require.NoError(t, m.MigrateDown())
+	require.NoError(t, m.MigrateDown(), "roll back 20260101000003")
+	require.NoError(t, m.MigrateDown(), "roll back 20260101000002")
 
 	assert.Len(t, appliedVersions(t, db), 4)
 	assert.False(t, db.Migrator().HasTable("session_entries"))

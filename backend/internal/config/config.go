@@ -59,6 +59,9 @@ type Config struct {
 	Logging LogConfig
 	// Otel holds the telemetry settings (OTEL_*, METRICS_ENABLED).
 	Otel OtelConfig
+	// Replica holds the multi-replica switches (LEADER_ELECTION_ENABLED,
+	// REPLICA_HEARTBEAT_ENABLED).
+	Replica ReplicaConfig
 	// LogLevel is LOG_LEVEL parsed to a slog level; main applies it to the
 	// default slog logger. An invalid value makes LoadConfig fail.
 	LogLevel slog.Level
@@ -622,6 +625,10 @@ func LoadConfig() (*Config, error) {
 	}
 
 	if err = loadPprofConfig(&cfg.Server); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	if cfg.Replica, err = loadReplicaConfig(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 

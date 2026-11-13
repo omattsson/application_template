@@ -129,6 +129,17 @@ Off by default. With `PPROF_ENABLED=false` no server and no profile rate is set.
 
 The three `PPROF_*` values besides `PPROF_ENABLED` are read only with pprof on; an invalid one stops the start then.
 
+### Replicas
+
+Off by default: a single process behaves as before. Details: "Replicas" below.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `LEADER_ELECTION_ENABLED` | `false` | Strict boolean. With `true` the leader workers run only on the replica that holds the MySQL lease row `leader-workers` (`leader_leases`). With `false` every process starts them at once. |
+| `REPLICA_HEARTBEAT_ENABLED` | `false` | Strict boolean. With `true` every process upserts its row in `replica_heartbeats` every 30 s and deletes it on a clean shutdown; the leader deletes rows older than 2 minutes. |
+
+The lease timing is fixed in code (`leader.DefaultLeaseConfig`: 15 s lease, 10 s renew deadline, 2 s retry period), not configurable.
+
 ### Compose and Makefile variables
 
 These are read by `docker-compose.yml`, the Makefile or the scripts, not by the backend.
@@ -176,9 +187,12 @@ The username login throttle is separate and in memory per replica: 5 failed logi
 6. Telemetry flush (`Telemetry.Shutdown`: spans, metrics and logs that are still buffered, sent or dropped within the budget). Own budget.
 7. Rate limiters: stop their cleanup goroutines.
 8. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
-9. Database: close the pool last.
+9. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): stop it and delete this process's row, within a fixed 2 s (`heartbeatStopTimeout`).
+10. Database: close the pool last.
 
-Steps 1, 2, 3, 4 and 6 each get their own budget of the length that was left on the shutdown context when shutdown began (at least 100 ms), detached from it, so a hung request cannot starve a later step and the 2 s of step 0 do not shorten the HTTP drain. That is five budgeted steps, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0 (152 s with the default 30 s). The stop grace period of the orchestrator must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s, which still covers it. Raise both together. Work that outlives its request starts with `inflight.Tracker.Go`; a periodic job is a `leader.Worker`.
+With `LEADER_ELECTION_ENABLED=true` step 3 first stops the workers (the group can no longer start), then ends the election, which releases the lease (`expires_at` in the past where this process is the holder) so the next replica takes over at its next attempt; all of it within the step's budget. When the budget runs out the lease simply expires after 15 s.
+
+Steps 1, 2, 3, 4 and 6 each get their own budget of the length that was left on the shutdown context when shutdown began (at least 100 ms), detached from it, so a hung request cannot starve a later step and the 2 s of step 0 do not shorten the HTTP drain. That is five budgeted steps, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0 and the 2 s of step 9 (154 s with the default 30 s). The stop grace period of the orchestrator must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s, which still covers it. Raise both together. Work that outlives its request starts with `inflight.Tracker.Go`; a periodic job is a `leader.Worker`.
 
 The API-key last-used update runs in a goroutine that shutdown does not wait for.
 
@@ -225,8 +239,33 @@ Both run on ports of their own, started by `main` (`backend/api/servers.go`) and
 - Shared through MySQL: all data, the token blocklist and OIDC login states (`SESSION_STORE=mysql`), the refresh-token families and the audit log. A logout on one replica is seen by all others at their next request. A WebSocket on another replica closes at the next revalidation pass (every `websocket.DefaultRevalidateInterval`) or at token expiry.
 - Per replica, in memory: the rate limiters, the username login throttle, the WebSocket hub and its connections. WebSocket broadcasts reach only the sockets of the replica that sent them.
 - `SESSION_STORE=memory` is for one replica: a restart forgets every revocation and a second replica does not see any.
-- There is no leader election yet: each process starts the leader workers itself (`refresh-token-cleanup`, hourly, and `session-store-cleanup`, every 15 minutes). Both only delete expired rows, so several replicas running them is safe.
+- Leader workers (`refresh-token-cleanup`, hourly, `session-store-cleanup`, every 15 minutes, and with the heartbeat on `replica-heartbeat-cleanup`, every 15 minutes) run in a `leader.Group`. With `LEADER_ELECTION_ENABLED=false` (the default) each process starts them itself; they only delete expired rows, so several replicas running them is safe. With `LEADER_ELECTION_ENABLED=true` they run on one replica at a time (below). A new worker must still be safe to run twice for a short time: see "Failure semantics".
 - `EnsureAdminUser` is safe when replicas start together: it never changes an existing user and treats a duplicate key as success.
+
+### Leader election
+
+`leader.Lease` (`backend/internal/leader/lease.go`) elects the leader on one row of `leader_leases`:
+
+| Column | Type | Meaning |
+|---|---|---|
+| `name` | `varchar(64)`, primary key | The lease name; the bootstrap uses `leader-workers`. |
+| `holder` | `varchar(253)` | The process ID of the holder: host name plus `-` and 8 random hex characters (`replica.ProcessID`), new for every process start. No secret. |
+| `expires_at` | `datetime(3)` | When the lease ends, in the database server's UTC clock. |
+
+- **Acquire and renew** are the same atomic statement, every 2 s: `UPDATE leader_leases SET holder = me, expires_at = UTC_TIMESTAMP(3) + 15 s WHERE name = ? AND (holder = me OR expires_at < UTC_TIMESTAMP(3))`. When no row matched, the holder is read back (MySQL counts changed rows, so a renewal in the same millisecond reports 0) and, without a row, inserted; the loser of a duplicate-key race is a follower.
+- **Time source: the database clock.** The expiry is written and compared with `UTC_TIMESTAMP(3)` in the same statement, so the clocks of the replicas never decide who may take the lease, and no Go time value crosses the driver (its `loc` and `parseTime` settings do not matter). The holder measures its own deadline with its monotonic clock from the moment it sent its last successful renewal; the database evaluated that renewal later, so the holder's deadline always comes before the stored expiry. All replicas must use the same MySQL server (the primary).
+- **Takeover.** A replica that crashed is replaced about 15 s plus 2 s after its last renewal. A replica that shuts down releases the lease, and the next one takes over within 2 s.
+
+### Failure semantics
+
+- The holder stops acting as leader (cancels the workers' context and calls `Group.Stop`) when no renewal succeeded for 10 s: database errors, timeouts or a lost connection. Every statement has a timeout that ends at that deadline, so a database that does not answer cannot keep it leader. Its lease is then still valid for at least 5 s, which is the time the workers have to stop before another replica can start: a worker must return within that after its context is cancelled.
+- A renewal that finds another holder in the row (the lease expired and was taken) stops the leader work at once. Every replica that is not leader keeps campaigning, so a deposed or recovered replica can lead again later.
+- The lease is not a fencing token: a process that was paused (long GC pause, frozen VM) for longer than the lease can finish a write that it started before the pause while another replica already leads. Keep leader work idempotent and keep state that must survive a leader change in the database.
+- When the database is unreachable for every replica, no replica leads until it is back: the leader work pauses rather than running twice.
+
+### Replica heartbeat
+
+With `REPLICA_HEARTBEAT_ENABLED=true` every process (leader or not) upserts its row in `replica_heartbeats` (`id` `varchar(253)` primary key, the process ID; `last_seen` `datetime(3)`, the database server's UTC clock, indexed) every 30 s, and deletes it on a clean shutdown (step 9). A failed write is logged once until the next success and does not stop the process. A row older than 2 minutes (`replica.StaleAfter`) belongs to a process that ended without a clean shutdown; the `replica-heartbeat-cleanup` leader worker deletes those rows. The table lists the running processes, for example `SELECT id, last_seen FROM replica_heartbeats ORDER BY last_seen DESC`.
 
 ## Health
 

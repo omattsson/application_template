@@ -161,7 +161,7 @@ With auth on, `middleware.AuditRecorder` writes an entry for every successful `P
 Details: `docs/claude/operations.md`.
 
 - Paginate every new list endpoint (`limit` and `offset` with `ListPaged`). Select only the columns that the list needs. Give the query an index that covers its filter and its order. Use batch queries instead of N+1 loops.
-- Add a periodic job as a `leader.Worker` with a restartable `Run(ctx)`, passed to `leader.NewGroup` in `buildServices` before `workers.Start`. Keep state that must survive a leader change in the database. There is no leader election yet: every process runs the workers, so a job must be safe on several replicas.
+- Add a periodic job as a `leader.Worker` with a restartable `Run(ctx)`, passed to `leader.NewGroup` in `buildServices` before the group starts. Keep state that must survive a leader change in the database. With `LEADER_ELECTION_ENABLED=false` (the default) every process runs the workers; with `true` only the holder of the MySQL lease (`leader.Lease`) does. Either way a job must be idempotent and safe on several replicas, and return within 5 s after its context is cancelled.
 - Work that outlives its request starts with `inflight.Tracker.Go`. Shutdown waits for it before the database closes.
 - Send WebSocket messages through the hub (`Broadcast`, `BroadcastToTopic`, `BroadcastToUser`) and revoke through `DisconnectUser`, `DisconnectToken` or `DisconnectAPIKey`, never by writing to a connection. Hub state is per replica: a message reaches only the sockets of the replica that sent it.
 - Register every external dependency with `healthChecker.AddCheck()`.

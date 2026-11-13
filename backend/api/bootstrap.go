@@ -21,6 +21,7 @@ import (
 	"backend/internal/inflight"
 	"backend/internal/leader"
 	"backend/internal/models"
+	"backend/internal/replica"
 	"backend/internal/sessionstore"
 	"backend/internal/telemetry"
 	"backend/internal/websocket"
@@ -50,6 +51,19 @@ const (
 	sessionStoreCleanupInterval = 15 * time.Minute
 	// ensureAdminTimeout bounds the admin bootstrap at start.
 	ensureAdminTimeout = 30 * time.Second
+)
+
+// Replica coordination (LEADER_ELECTION_ENABLED, REPLICA_HEARTBEAT_ENABLED).
+const (
+	// leaderLeaseName is the row of leader_leases that the replicas elect
+	// the leader of the leader workers with.
+	leaderLeaseName = "leader-workers"
+	// heartbeatStopTimeout bounds the shutdown step that ends the heartbeat
+	// and deletes this process's row.
+	heartbeatStopTimeout = 2 * time.Second
+	// heartbeatCleanupInterval is how often the leader deletes the heartbeat
+	// rows of processes that stopped without a clean shutdown.
+	heartbeatCleanupInterval = 15 * time.Minute
 )
 
 // openRepository opens the database and runs the migrations. Tests replace it.
@@ -93,6 +107,16 @@ type stopper interface {
 	Stop()
 }
 
+// heartbeatStopper is the replica heartbeat (*replica.Heartbeat).
+type heartbeatStopper interface {
+	Stop(timeout time.Duration)
+}
+
+// leaseRunner is the leader election (*leader.Lease).
+type leaseRunner interface {
+	Run(ctx context.Context, onStarted func(ctx context.Context), onStopped func())
+}
+
 // auditShutdowner is the audit recorder (*middleware.AuditRecorder).
 type auditShutdowner interface {
 	Shutdown(ctx context.Context) error
@@ -109,8 +133,12 @@ type services struct {
 	auditRecorder auditShutdowner
 	// sessionStore is the token blocklist and OIDC state store (auth on).
 	sessionStore stopper
-	// leader runs the leader-only background workers.
+	// leader runs the leader-only background workers: the *leader.Group
+	// itself, or an *electedLeader with LEADER_ELECTION_ENABLED=true.
 	leader groupCloser
+	// heartbeat writes this process's replica_heartbeats row
+	// (REPLICA_HEARTBEAT_ENABLED=true).
+	heartbeat heartbeatStopper
 	// inFlight is the work that outlives its request or worker run
 	// (*inflight.Tracker; see routerDeps.InFlight).
 	inFlight waiter
@@ -323,6 +351,62 @@ func periodicWorker(name string, interval time.Duration, fn func(ctx context.Con
 	}}
 }
 
+// electedLeader runs a leader.Group under a leader election: the group
+// starts when this replica acquires the lease and stops when it loses it.
+type electedLeader struct {
+	group  *leader.Group
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// startElection campaigns for the lease in a goroutine and starts group for
+// each term in which this replica holds it.
+func startElection(group *leader.Group, lease leaseRunner) *electedLeader {
+	ctx, cancel := context.WithCancel(context.Background())
+	e := &electedLeader{group: group, cancel: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(e.done)
+		lease.Run(ctx, group.Start, func() { group.Stop() })
+	}()
+	return e
+}
+
+// Close is the leader step of shutdown. It stops the workers first (and
+// keeps the group from starting again), then ends the election, which
+// releases the lease so another replica takes over at once. The whole call
+// takes at most timeout; when the election does not end in time the lease
+// expires on its own.
+func (e *electedLeader) Close(timeout time.Duration) bool {
+	start := time.Now()
+	ok := e.group.Close(timeout)
+	e.cancel()
+	timer := time.NewTimer(max(timeout-time.Since(start), 0))
+	defer timer.Stop()
+	select {
+	case <-e.done:
+		return ok
+	default:
+	}
+	select {
+	case <-e.done:
+		return ok
+	case <-timer.C:
+		slog.Warn("Leader election did not end in time; the lease expires on its own")
+		return false
+	}
+}
+
+// newProcessID returns the identity of this process: the host name plus a
+// random suffix (replica.ProcessID). It is the heartbeat row ID and the
+// lease holder.
+func newProcessID() string {
+	host, err := os.Hostname()
+	if err != nil {
+		host = ""
+	}
+	return replica.ProcessID(host)
+}
+
 // initDatabase opens the database, runs the migrations and returns the
 // repository.
 func initDatabase(cfg *config.Config) (models.Repository, error) {
@@ -409,6 +493,18 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		return fail(nil, err)
 	}
 
+	// Leader election and the heartbeat share the database of repo.
+	var replicaDB *gorm.DB
+	var processID string
+	if cfg.Replica.LeaderElectionEnabled || cfg.Replica.HeartbeatEnabled {
+		g, ok := repo.(gormRepository)
+		if !ok || g.DB() == nil {
+			return fail(res, errors.New("LEADER_ELECTION_ENABLED and REPLICA_HEARTBEAT_ENABLED need the database repository"))
+		}
+		replicaDB = g.DB()
+		processID = newProcessID()
+	}
+
 	s := &services{
 		inFlight:          tracker,
 		hub:               hub,
@@ -417,10 +513,11 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		db:                repo,
 	}
 
-	// Leader-only background workers. There is no leader election yet, so
-	// this process is the leader until shutdown. Pass every worker to
+	// Leader-only background workers. Without leader election this process
+	// is the leader until shutdown; with LEADER_ELECTION_ENABLED=true the
+	// group runs while this replica holds the lease. Pass every worker to
 	// NewGroup here (give it tracker when it starts work that outlives its
-	// Run), BEFORE workers.Start: Group.Add only takes effect at the next
+	// Run), BEFORE the group starts: Group.Add only takes effect at the next
 	// term, and without an election there is no next term.
 	var leaderWorkers []leader.Worker
 	if cfg.Auth.Enabled {
@@ -439,9 +536,29 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		s.auditRecorder = res.AuditRecorder
 		s.sessionStore = authDeps.SessionStore
 	}
+	var heartbeats models.ReplicaHeartbeatRepository
+	if cfg.Replica.HeartbeatEnabled {
+		heartbeats = database.NewGORMReplicaHeartbeatRepository(replicaDB)
+		leaderWorkers = append(leaderWorkers, periodicWorker("replica-heartbeat-cleanup", heartbeatCleanupInterval, func(ctx context.Context) error {
+			_, err := heartbeats.DeleteOlderThan(ctx, replica.StaleAfter)
+			return err
+		}))
+	}
 	workers := leader.NewGroup(leader.DefaultStopTimeout, leaderWorkers...)
-	workers.Start(context.Background())
-	s.leader = workers
+	if cfg.Replica.LeaderElectionEnabled {
+		lease := leader.NewLease(replicaDB, leaderLeaseName, processID, leader.DefaultLeaseConfig())
+		s.leader = startElection(workers, lease)
+		slog.Info("Leader election enabled; the leader workers run on the lease holder", "lease", leaderLeaseName, "replica_id", processID)
+	} else {
+		workers.Start(context.Background())
+		s.leader = workers
+	}
+
+	if cfg.Replica.HeartbeatEnabled {
+		hb := replica.NewHeartbeat(heartbeats, processID, replica.HeartbeatInterval)
+		hb.Start()
+		s.heartbeat = hb
+	}
 
 	return s, router, nil
 }
@@ -524,7 +641,12 @@ func stepBudget(ctx context.Context) time.Duration {
 //  7. Rate limiters: stop their cleanup goroutines.
 //  8. Session store (auth on): stop its cleanup goroutine, after everything
 //     that reads it (requests, workers, the hub revalidation).
-//  9. Database: close the connection pool last.
+//  9. Replica heartbeat (REPLICA_HEARTBEAT_ENABLED): stop it and delete this
+//     process's row, within heartbeatStopTimeout (2 s).
+//  10. Database: close the connection pool last.
+//
+// With LEADER_ELECTION_ENABLED the leader step (3) also ends the election
+// and releases the lease, within the same budget (electedLeader.Close).
 //
 // Budgets: the diagnostics step gets auxShutdownTimeout. The HTTP step, the
 // audit step, the leader step, the in-flight step and the telemetry step each
@@ -534,9 +656,9 @@ func stepBudget(ctx context.Context) time.Duration {
 // steps, and the diagnostics step does not shorten the HTTP drain: the leader
 // workers still get time to stop and the telemetry flush still gets a live
 // context. The worst case is auxShutdownTimeout plus five budgets (each of
-// the five steps hangs), 152 s with the default 30 s; keep the grace period
-// of the orchestrator above that, or SERVER_SHUTDOWN_TIMEOUT below a fifth of
-// it.
+// the five steps hangs) plus heartbeatStopTimeout, 154 s with the default
+// 30 s; keep the grace period of the orchestrator above that, or
+// SERVER_SHUTDOWN_TIMEOUT below a fifth of it.
 //
 // Every step runs even when an earlier step failed. shutdown returns the
 // errors of all steps; a step that ran out of time wraps
@@ -613,6 +735,10 @@ func shutdown(ctx context.Context, s *services) error {
 
 	if !isNilInterface(s.sessionStore) {
 		s.sessionStore.Stop()
+	}
+
+	if !isNilInterface(s.heartbeat) {
+		s.heartbeat.Stop(heartbeatStopTimeout)
 	}
 
 	if s.db != nil {
