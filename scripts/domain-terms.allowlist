@@ -12,6 +12,7 @@
 .github/agents/orchestrator.md|stack|line 37: "full-stack feature", generic English
 .github/agents/qa-engineer.md|stack|lines 3/64/199/236: "full stack" / "full Docker stack", generic English
 .github/copilot-instructions.md|stack|lines 5/65: "Full-stack app", "Full stack (Docker)", generic English
+CLAUDE.md|stack|"full-stack application template", "Full stack (Docker)", the "Stack:" label of the frontend technology list; generic English
 .github/instructions/security.instructions.md|stack|lines 24/52: "stack traces" (never leak them), generic debugging term
 README.md|stack|lines 1/3/57: "Full-Stack Application Template", "full-stack web applications", "Full stack (recommended)"; generic English
 WIKI.md|stack|line 5: "full-stack application template", generic English

@@ -203,18 +203,28 @@ Authentication is optional and **off by default** (`AUTH_ENABLED=false`): the AP
 | Local login | `AUTH_ENABLED=true` | Username and password, a short-lived access token with a rotating refresh session (httpOnly cookie), API keys, user administration (admin), an audit log of changes. |
 | OIDC | `AUTH_ENABLED=true`, `OIDC_ENABLED=true` | Single sign-on added to the local login (authorization code flow with PKCE, roles from a token claim). |
 
-To turn it on, set at least these variables. With Compose, put them in a `.env` file next to `docker-compose.yml` (it is not committed; Compose passes them to the backend). A backend that you run on the host reads `backend/.env` or the environment:
+To turn it on, set at least these variables. With Compose, put them in a `.env` file next to `docker-compose.yml` (it is not committed; Compose passes them to the backend). A backend that you run on the host reads `backend/.env` (copy `backend/config/.env.example`) or the environment.
+
+A `.env` file is not a shell script: nothing in it is executed, so `$(...)` or a placeholder in angle brackets would be used as the literal value. Generate the secret first and paste the result:
 
 ```bash
-AUTH_ENABLED=true
-JWT_SECRET=$(openssl rand -base64 48)   # required, 16 or more characters, no default
-ADMIN_USERNAME=<not "admin">            # the break-glass admin
-ADMIN_PASSWORD=<strong, unique>         # 8 to 72 bytes; no admin is created when empty
+openssl rand -base64 48
 ```
+
+Then write the lines with your own values (no quotes, no trailing comments):
+
+```text
+AUTH_ENABLED=true
+JWT_SECRET=<paste the output of the command above>
+ADMIN_USERNAME=<a name other than admin>
+ADMIN_PASSWORD=<a strong, unique password>
+```
+
+`JWT_SECRET` is required (16 or more characters, no default). `ADMIN_USERNAME` is the break-glass admin. `ADMIN_PASSWORD` needs 8 to 72 bytes; no admin is created when it is empty. Replace every `<...>` before you start: a placeholder left in place is a public, guessable secret.
 
 Notes:
 
-- `SECURE_COOKIES` defaults to `true`: the refresh cookie is `__Host-refresh_token` and `Secure`. Browsers accept that on `http://localhost`. On plain HTTP on any other host name set `SECURE_COOKIES=false` (development only).
+- `SECURE_COOKIES` defaults to `true`: the refresh cookie is `__Host-refresh_token` and `Secure`. Chromium accepts that on `http://localhost` (the e2e run checks it); other browsers, Safari for one, may refuse `Secure` cookies on plain HTTP. On plain HTTP on any other host name set `SECURE_COOKIES=false` (development only).
 - The first admin is created at start from `ADMIN_USERNAME` and `ADMIN_PASSWORD`. It is a service account for break-glass use: it can still sign in with the password when OIDC is the only interactive login. An existing user of that name is never changed. Use a name other than `admin` (five wrong passwords lock a name for 15 minutes) and a strong password.
 - `SELF_REGISTRATION=true` lets anyone create an account with the role `user`.
 - OIDC needs `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and `OIDC_REDIRECT_URL`. Behind the bundled nginx or the Vite dev server (both strip one `/api`) the redirect URI to register at the identity provider is `<origin>/api/api/v1/auth/oidc/callback`.
@@ -241,7 +251,7 @@ Details, including the session and revocation design: [docs/claude/auth-sessions
    - The tests and e2e specs that assert those texts (search for `Full Stack App` and `Full Stack Application`), `frontend/package.json` (`name`) and this README and `WIKI.md`.
    - `@title` in `backend/api/main.go` (then `make docs`), `APP_NAME` in `docker-compose.yml`.
    - `.github/CODEOWNERS`, `.github/SECURITY.md` and `.github/CODE_OF_CONDUCT.md` name contacts that must become yours.
-4. **Set the secrets.** For Compose, create a `.env` file next to `docker-compose.yml`; for a backend on the host, copy `backend/.env.example` to `backend/.env` (neither is committed). Set your own values:
+4. **Set the secrets.** For Compose, create a `.env` file next to `docker-compose.yml`; for a backend on the host, copy `backend/config/.env.example` (the same file with `DB_HOST=localhost`) to `backend/.env` (neither is committed). Set your own values:
    - `JWT_SECRET` and `ADMIN_PASSWORD` have no default (see [Authentication](#authentication)); generate them, never reuse a value from a document.
    - The database credentials in `docker-compose.yml` and `.env.example` (`MYSQL_PASSWORD=apppass`, `MYSQL_ROOT_PASSWORD=rootpass`) are **dev only**. Set your own in the environment of every shared or production deployment, or do not publish the MySQL port.
    - Set `CORS_ALLOWED_ORIGINS` to a list of origins (or leave it unused: the bundled UI is same-origin), `APP_DEBUG=false`, and `TRUSTED_PROXIES` to your proxy addresses.
