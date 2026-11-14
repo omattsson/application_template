@@ -27,7 +27,8 @@ const (
 	contextKeyExpiry   = "auth.tokenExpiry"
 	contextKeySID      = "auth.sessionID"
 	// contextKeyIssuedAt holds the issue time of the access token
-	// (Claims.IssueTime, millisecond precision when the iat_ms claim is set).
+	// (Claims.IssueTime, millisecond precision when the iat_ms claim is set),
+	// or for an API key the start of its authentication.
 	contextKeyIssuedAt = "auth.tokenIssuedAt"
 	// contextKeyAuthMethod holds AuthMethodJWT or AuthMethodAPIKey.
 	contextKeyAuthMethod = "auth.method"

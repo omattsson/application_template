@@ -235,6 +235,12 @@ func (a *APIKeyAuthenticator) middleware(jwtMW gin.HandlerFunc) gin.HandlerFunc 
 
 // authenticate runs the key check and sets the request context.
 func (a *APIKeyAuthenticator) authenticate(c *gin.Context, clientKey string) {
+	// The issue time of the key credential, taken before the owner is read.
+	// A socket opened with the key is checked against the user block with it
+	// (a block at or after it ends the socket): a block written after the
+	// owner was read but before a later stamp would otherwise miss the
+	// socket. Truncated to the millisecond, like the block.
+	issuedAt := time.Now().Truncate(time.Millisecond)
 	p, failure := a.Authenticate(c.Request.Context(), clientKey)
 	if failure != nil {
 		c.AbortWithStatusJSON(failure.Status, gin.H{"error": failure.Message})
@@ -248,6 +254,7 @@ func (a *APIKeyAuthenticator) authenticate(c *gin.Context, clientKey string) {
 	c.Set(contextKeyRole, p.Role)
 	c.Set(contextKeyAuthMethod, AuthMethodAPIKey)
 	c.Set(contextKeyAPIKeyID, p.Key.ID)
+	c.Set(contextKeyIssuedAt, issuedAt)
 	if p.Key.ExpiresAt != nil {
 		// The credential expiry, as for a token: a socket opened with the key
 		// closes at it.

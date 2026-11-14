@@ -730,3 +730,41 @@ func TestAPIKeyAuthenticatorDirect(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, fail.Status)
 	assert.Equal(t, "Invalid API key", fail.Message)
 }
+
+// ownerReadTimeRepo records when the owner was read.
+type ownerReadTimeRepo struct {
+	*userRepoFake
+	readAt atomic.Pointer[time.Time]
+}
+
+func (r *ownerReadTimeRepo) FindByID(ctx context.Context, id string) (*models.User, error) {
+	now := time.Now()
+	r.readAt.Store(&now)
+	return r.userRepoFake.FindByID(ctx, id)
+}
+
+// TestAPIKeyIssueTimeIsStampedBeforeTheOwnerRead: a socket opened with a key is
+// covered by a user block that is written after the owner was read, so the
+// issue time of the key credential must not be later than that read.
+func TestAPIKeyIssueTimeIsStampedBeforeTheOwnerRead(t *testing.T) {
+	t.Parallel()
+	client, rec := issuedKey(t, "k1", "u1", nil)
+	users := &ownerReadTimeRepo{userRepoFake: newUserRepoFake(&models.User{ID: "u1", Username: "alice", Role: models.RoleUser})}
+	var issued time.Time
+	var ok bool
+	r := gin.New()
+	r.GET("/protected", CombinedAuth(APIKeyAuthDeps{JWTSecret: testSecret, APIKeyRepo: newKeyRepoFake(rec), UserRepo: users}), func(c *gin.Context) {
+		issued, ok = GetTokenIssuedAtFromContext(c)
+		c.Status(http.StatusNoContent)
+	})
+
+	before := time.Now()
+	w := doGet(r, "/protected", map[string]string{"X-API-Key": client})
+
+	require.Equal(t, http.StatusNoContent, w.Code)
+	require.True(t, ok, "a key request has an issue time")
+	readAt := users.readAt.Load()
+	require.NotNil(t, readAt)
+	assert.False(t, issued.After(*readAt), "issued %v after the owner read %v", issued, *readAt)
+	assert.False(t, issued.Before(before.Truncate(time.Millisecond)), "and not before the request")
+}

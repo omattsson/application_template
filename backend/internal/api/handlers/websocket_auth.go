@@ -18,8 +18,9 @@ import (
 //   - a JWT: the user, the role claim, the jti, the session (sid), the expiry
 //     and the issue time (millisecond precision with the iat_ms claim);
 //   - an API key: the user, the owner's current role, the key ID, the key
-//     expiry, and the connection time as the issue time, so a later user
-//     block (disable, password reset, role change) covers the socket.
+//     expiry, and the start of the key authentication as the issue time, so
+//     a later user block (disable, password reset, role change) covers the
+//     socket.
 //
 // Without authentication it returns the empty identity.
 func WebSocketIdentityFromContext(c *gin.Context) websocket.ClientIdentity {
@@ -33,13 +34,14 @@ func WebSocketIdentityFromContext(c *gin.Context) websocket.ClientIdentity {
 	if exp, ok := middleware.GetTokenExpiryFromContext(c); ok {
 		id.ExpiresAt = exp
 	}
-	switch {
-	case id.APIKeyID != "":
+	// The issue time: the JWT iat, or for an API key the time at which the key
+	// authentication started (before the owner was read, so a user block
+	// written after that read covers the socket). A request that did not come
+	// through the key middleware falls back to the connection time.
+	if iat, ok := middleware.GetTokenIssuedAtFromContext(c); ok {
+		id.IssuedAt = iat
+	} else if id.APIKeyID != "" {
 		id.IssuedAt = time.Now()
-	default:
-		if iat, ok := middleware.GetTokenIssuedAtFromContext(c); ok {
-			id.IssuedAt = iat
-		}
 	}
 	return id
 }
