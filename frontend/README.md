@@ -99,10 +99,10 @@ The `api` directory contains all API-related code:
 Example usage:
 
 ```typescript
-import { apiClient } from '@/api/client';
+import { healthService } from '@/api/client';
 
-// Make API calls
-const response = await apiClient.get('/health/live');
+// Make API calls through a service (the Axios instance is the default export, `api`)
+const status = await healthService.checkLiveness();
 ```
 
 ## Routing

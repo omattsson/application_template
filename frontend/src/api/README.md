@@ -19,6 +19,7 @@ The API layer provides:
 api/
 ├── client.ts   # Axios client setup and interceptors
 ├── config.ts   # API configuration and endpoints
+├── errorSummary.ts # summarizeRequestError: the only safe way to log a failed request
 ├── refresh.ts  # Access token refresh (single flight, cross-tab Web Lock, never aborted)
 ├── session.ts  # In-memory session (auth mode, access token) shared across tabs
 └── README.md   # This documentation
@@ -52,14 +53,11 @@ The Axios client is configured in `client.ts` with:
 
 ```typescript
 import axios from 'axios';
-import { API_BASE_URL } from './config';
+import { axiosConfig } from './config';
 
-export const apiClient = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+// config.ts: axiosConfig = { baseURL: API_BASE_URL, headers: { 'Content-Type': 'application/json' } }
+const api = axios.create(axiosConfig);
+export default api; // the services below and your own calls use it
 ```
 
 ## Available Services
@@ -71,37 +69,49 @@ Methods for checking backend health status:
 ```typescript
 export const healthService = {
   checkLiveness: async () => {
-    const response = await apiClient.get('/health/live');
-    return response.data;
+    try {
+      const response = await api.get('/health/live');
+      return response.data;
+    } catch (error) {
+      console.error('Liveness check failed:', summarizeRequestError(error));
+      throw error;
+    }
   },
-
-  checkReadiness: async () => {
-    const response = await apiClient.get('/health/ready');
-    return response.data;
-  },
+  // checkReadiness is the same for /health/ready
 };
 ```
 
+The other service objects (`itemService`, `authService`, `userService`,
+`uiConfigService`) live in `client.ts` too.
+
 ## Error Handling
 
-Global error handling through Axios interceptors:
+Global error handling through an Axios response interceptor in `client.ts`.
+A 401 with auth on is refreshed once and retried; every other failure is
+logged with `summarizeRequestError` and rejected to the caller.
+
+Never pass the error object itself to `console.error`: an
+AxiosError carries the request config, so the log would contain the body (a
+login password) and the headers (the `Authorization: Bearer` token).
+`summarizeRequestError` keeps only the method, the URL path without its
+query, the HTTP status and the axios error code.
 
 ```typescript
-apiClient.interceptors.response.use(
+import { summarizeRequestError } from './errorSummary';
+
+api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    // Log errors
-    console.error('API Error:', error);
-    
-    // Handle specific error cases
-    if (error.response?.status === 401) {
-      // Handle unauthorized
-    }
-    
+  async (error) => {
+    // ... 401 refresh and retry (see client.ts) ...
+    console.error('API Error:', summarizeRequestError(error));
+    // logs e.g. "POST /api/v1/auth/login -> 401 ERR_BAD_REQUEST"
     return Promise.reject(error);
   }
 );
 ```
+
+The same rule applies in a service or a component: log
+`summarizeRequestError(error)`, not `error`.
 
 ## Usage Example
 
@@ -109,6 +119,7 @@ Using the API client in components:
 
 ```typescript
 import { healthService } from '@/api/client';
+import { summarizeRequestError } from '@/api/errorSummary';
 
 const HealthCheck = () => {
   const [status, setStatus] = useState<string>('');
@@ -118,7 +129,7 @@ const HealthCheck = () => {
       const result = await healthService.checkLiveness();
       setStatus(result.status);
     } catch (error) {
-      console.error('Health check failed:', error);
+      console.error('Health check failed:', summarizeRequestError(error));
     }
   };
 };
@@ -155,7 +166,7 @@ When adding a new service:
 
 1. Add endpoint configuration to `config.ts`
 2. Create TypeScript interfaces for the data
-3. Implement the service methods using `apiClient`
+3. Implement the service methods using `api` and log failures with `summarizeRequestError`
 4. Add error handling specific to the service
 5. Document the new service in this README
 
