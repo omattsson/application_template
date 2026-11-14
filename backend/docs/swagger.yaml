@@ -1961,12 +1961,14 @@ paths:
         (removed from the URL before any logging). The upgrade runs the checks of
         the HTTP auth (token, session and user blocklists, a deleted or disabled user,
         an unknown, deleted or expired key) and counts against the per-IP RATE_LIMIT.
-        A failed blocklist or user lookup refuses the upgrade (500). An open socket
-        is closed with code 1008 on logout, logout-all, a disable, delete, role change
-        or password reset of the user, a deleted key, and when the token or key expires;
-        a periodic re-check closes the sockets that another replica revoked. Subscriptions
-        are authorised: items and item:<id> for every user, user:<id> for that user
-        (and admins), admin:<name> for admins; any other topic is ignored.'
+        A failed blocklist or user lookup refuses the upgrade (500). A socket over
+        the per-user and per-key limit (WS_MAX_CONNECTIONS_PER_USER, default 16) is
+        closed with code 1008 right after the upgrade. An open socket is closed with
+        code 1008 on logout, logout-all, a disable, delete, role change or password
+        reset of the user, a deleted key, and when the token or key expires; a periodic
+        re-check closes the sockets that another replica revoked. Subscriptions are
+        authorised: items and item:<id> for every user, user:<id> for that user (and
+        admins), admin:<name> for admins; any other topic is ignored.'
       parameters:
       - description: Access token (AUTH_ENABLED=true, browsers)
         in: query

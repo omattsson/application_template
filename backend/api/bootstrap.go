@@ -468,6 +468,7 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 	healthChecker.SetReady(true)
 
 	hub := websocket.NewHub()
+	hub.SetMaxConnectionsPerIdentity(int(cfg.Server.WSMaxConnectionsPerUser))
 	go hub.Run()
 
 	// In-flight work: shared by the handlers (routerDeps.InFlight) and the

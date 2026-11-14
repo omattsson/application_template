@@ -33,6 +33,10 @@ const (
 	defaultWriteTimeout    = time.Duration(0)
 	defaultIdleTimeout     = 30 * time.Second
 	defaultShutdownTimeout = 30 * time.Second
+
+	// defaultWSMaxConnectionsPerUser is the default of
+	// WS_MAX_CONNECTIONS_PER_USER (websocket.DefaultMaxConnectionsPerIdentity).
+	defaultWSMaxConnectionsPerUser int32 = 16
 )
 
 // Supported values for DB_TYPE.
@@ -289,6 +293,10 @@ type ServerConfig struct {
 	// LoginRateLimit is LOGIN_RATE_LIMIT: login attempts per minute per client
 	// IP (default 10).
 	LoginRateLimit int32
+	// WSMaxConnectionsPerUser is WS_MAX_CONNECTIONS_PER_USER: the most /ws
+	// sockets that one user, and one API key, may have open at once (default
+	// 16, must be positive). The hub refuses the next one with close code 1008.
+	WSMaxConnectionsPerUser int32
 	// 1-byte fields
 	// EnableSwagger is ENABLE_SWAGGER (default false).
 	EnableSwagger bool
@@ -508,6 +516,10 @@ func (c *ServerConfig) Validate() error {
 		return errors.New("LOGIN_RATE_LIMIT must be positive")
 	}
 
+	if c.WSMaxConnectionsPerUser <= 0 {
+		return errors.New("WS_MAX_CONNECTIONS_PER_USER must be positive")
+	}
+
 	return nil
 }
 
@@ -651,6 +663,12 @@ func LoadConfig() (*Config, error) {
 	}
 
 	if cfg.Server.LoginRateLimit, err = parseEnvInt32Strict("LOGIN_RATE_LIMIT", 10); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	// The cap of open WebSocket connections per user: a value that is set
+	// but not a number is an error (Validate rejects zero and below).
+	if cfg.Server.WSMaxConnectionsPerUser, err = parseEnvInt32Strict("WS_MAX_CONNECTIONS_PER_USER", defaultWSMaxConnectionsPerUser); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 

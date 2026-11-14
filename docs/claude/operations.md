@@ -92,6 +92,7 @@ The DSN sets `sql_mode`, `time_zone` (UTC) and `foreign_key_checks` as driver pa
 | `TRUSTED_PROXIES` | empty | See "Client IP and proxies". |
 | `RATE_LIMIT` | `100` | Requests per minute per client IP on `/api/v1`; must be positive. |
 | `LOGIN_RATE_LIMIT` | `10` | Attempts per minute per client IP on each of login, register, OIDC login and OIDC callback; must be positive. |
+| `WS_MAX_CONNECTIONS_PER_USER` | `16` | Most `/ws` sockets that one user, and one API key, may have open at once (per replica: the hub is per replica); must be positive. The socket over the limit is closed with code 1008 `too many connections` right after the upgrade; closing a socket frees its slot. Sockets without an identity (`AUTH_ENABLED=false`) are not counted. One line per minute at Warn tells who was refused. A user with many tabs and devices may need a higher value. |
 | `ENABLE_SWAGGER` | `false` | Swagger UI at `/swagger/index.html`. |
 
 ### Logging and CORS

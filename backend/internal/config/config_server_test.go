@@ -185,6 +185,36 @@ func TestLoadConfigAppDebugIsStrict(t *testing.T) {
 	}
 }
 
+// TestLoadConfigWSMaxConnectionsPerUser: the cap of open /ws sockets per user
+// and per API key is a strict positive integer with the default 16.
+func TestLoadConfigWSMaxConnectionsPerUser(t *testing.T) {
+	// Not parallel: subtests use t.Setenv which modifies process env.
+	for _, tt := range []struct {
+		value string
+		want  int32
+	}{{"", 16}, {"1", 1}, {" 40 ", 40}} {
+		t.Run("valid "+tt.value, func(t *testing.T) {
+			t.Setenv("ENV_FILE", "/nonexistent/.env")
+			t.Setenv("WS_MAX_CONNECTIONS_PER_USER", tt.value)
+
+			cfg, err := config.LoadConfig()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.Server.WSMaxConnectionsPerUser)
+		})
+	}
+	for _, value := range []string{"0", "-1", "many", "1.5", "99999999999"} {
+		t.Run("invalid "+value, func(t *testing.T) {
+			t.Setenv("ENV_FILE", "/nonexistent/.env")
+			t.Setenv("WS_MAX_CONNECTIONS_PER_USER", value)
+
+			cfg, err := config.LoadConfig()
+			require.Error(t, err)
+			assert.Nil(t, cfg)
+			assert.Contains(t, err.Error(), "WS_MAX_CONNECTIONS_PER_USER")
+		})
+	}
+}
+
 func TestLoadConfigRateLimitValues(t *testing.T) {
 	// Not parallel: subtests use t.Setenv which modifies process env.
 	tests := []struct {
@@ -227,6 +257,8 @@ func TestServerConfigValidateRateLimits(t *testing.T) {
 			IdleTimeout:    time.Second,
 			RateLimit:      100,
 			LoginRateLimit: 10,
+
+			WSMaxConnectionsPerUser: 16,
 		}
 	}
 
@@ -240,6 +272,8 @@ func TestServerConfigValidateRateLimits(t *testing.T) {
 		{name: "rate limit negative", mutate: func(c *config.ServerConfig) { c.RateLimit = -1 }, wantErr: "RATE_LIMIT"},
 		{name: "login rate limit zero", mutate: func(c *config.ServerConfig) { c.LoginRateLimit = 0 }, wantErr: "LOGIN_RATE_LIMIT"},
 		{name: "login rate limit negative", mutate: func(c *config.ServerConfig) { c.LoginRateLimit = -1 }, wantErr: "LOGIN_RATE_LIMIT"},
+		{name: "ws cap zero", mutate: func(c *config.ServerConfig) { c.WSMaxConnectionsPerUser = 0 }, wantErr: "WS_MAX_CONNECTIONS_PER_USER"},
+		{name: "ws cap negative", mutate: func(c *config.ServerConfig) { c.WSMaxConnectionsPerUser = -1 }, wantErr: "WS_MAX_CONNECTIONS_PER_USER"},
 	}
 
 	for _, tt := range tests {

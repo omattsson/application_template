@@ -98,12 +98,30 @@ func NewClientWithIdentity(hub *Hub, conn *websocket.Conn, identity ClientIdenti
 		send:     make(chan []byte, sendBufferSize),
 	}
 	if err := hub.Register(client); err != nil {
-		_ = conn.Close() // best-effort close; the registration error is returned
+		if errors.Is(err, ErrTooManyConnections) {
+			refuseSocket(conn)
+		} else {
+			_ = conn.Close() // best-effort close; the registration error is returned
+		}
 		return nil, err
 	}
 	go client.writePump()
 	go client.readPump()
 	return client, nil
+}
+
+// refuseWriteWait is the time allowed to write the close frame of a refused
+// socket. The socket is new and its buffer empty, so the write is immediate
+// unless the peer is gone; a short limit keeps the request goroutine from
+// waiting on a dead peer.
+const refuseWriteWait = 2 * time.Second
+
+// refuseSocket tells the peer why (close code 1008, policy violation) and
+// closes the connection. It starts no goroutine.
+func refuseSocket(conn *websocket.Conn) {
+	msg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, closeReasonTooManyConnections)
+	_ = conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(refuseWriteWait)) // best effort: the connection is closed next
+	_ = conn.Close()
 }
 
 // readPump pumps messages from the WebSocket connection to the hub.

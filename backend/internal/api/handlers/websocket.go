@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -56,7 +57,7 @@ func NewWebSocketHandler(hub *websocket.Hub, allowedOrigins string) *WebSocketHa
 
 // HandleWebSocket godoc
 // @Summary Open a WebSocket connection
-// @Description Upgrades the HTTP connection to a WebSocket for real-time events. With AUTH_ENABLED=false no credential is needed and any topic can be subscribed. With AUTH_ENABLED=true the upgrade needs one credential: `Authorization: Bearer <jwt>`, `X-API-Key: sk_<key>` (header only), or `?token=<jwt>` for browsers (removed from the URL before any logging). The upgrade runs the checks of the HTTP auth (token, session and user blocklists, a deleted or disabled user, an unknown, deleted or expired key) and counts against the per-IP RATE_LIMIT. A failed blocklist or user lookup refuses the upgrade (500). An open socket is closed with code 1008 on logout, logout-all, a disable, delete, role change or password reset of the user, a deleted key, and when the token or key expires; a periodic re-check closes the sockets that another replica revoked. Subscriptions are authorised: items and item:<id> for every user, user:<id> for that user (and admins), admin:<name> for admins; any other topic is ignored.
+// @Description Upgrades the HTTP connection to a WebSocket for real-time events. With AUTH_ENABLED=false no credential is needed and any topic can be subscribed. With AUTH_ENABLED=true the upgrade needs one credential: `Authorization: Bearer <jwt>`, `X-API-Key: sk_<key>` (header only), or `?token=<jwt>` for browsers (removed from the URL before any logging). The upgrade runs the checks of the HTTP auth (token, session and user blocklists, a deleted or disabled user, an unknown, deleted or expired key) and counts against the per-IP RATE_LIMIT. A failed blocklist or user lookup refuses the upgrade (500). A socket over the per-user and per-key limit (WS_MAX_CONNECTIONS_PER_USER, default 16) is closed with code 1008 right after the upgrade. An open socket is closed with code 1008 on logout, logout-all, a disable, delete, role change or password reset of the user, a deleted key, and when the token or key expires; a periodic re-check closes the sockets that another replica revoked. Subscriptions are authorised: items and item:<id> for every user, user:<id> for that user (and admins), admin:<name> for admins; any other topic is ignored.
 // @Tags websocket
 // @Param token query string false "Access token (AUTH_ENABLED=true, browsers)"
 // @Param X-API-Key header string false "API key (AUTH_ENABLED=true, header only)"
@@ -88,7 +89,11 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 	}
 	client, err := websocket.NewClientWithIdentity(h.hub, conn, identity)
 	if err != nil {
-		slog.Error("WebSocket client creation failed", "error", err)
+		// A socket over the per-user cap was told why and closed by the hub,
+		// which logs it at a bounded rate: not an error of the server.
+		if !errors.Is(err, websocket.ErrTooManyConnections) {
+			slog.Error("WebSocket client creation failed", "error", err)
+		}
 		return
 	}
 	h.recheckRegistered(c.Request.Context(), client, identity)

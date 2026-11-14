@@ -1,13 +1,16 @@
 package routes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -329,3 +332,107 @@ func TestWSRevocationDuringUpgradeClosesTheSocket(t *testing.T) {
 	require.Equal(t, http.StatusSwitchingProtocols, status)
 	assert.Equal(t, gorilla.ClosePolicyViolation, waitClosed(t, conn))
 }
+
+// TestWSConnectionCapPerUser: the socket over the cap of a user (tokens and API
+// keys of the user count together) is closed with 1008; another user is not
+// affected and closing a socket frees a slot.
+func TestWSConnectionCapPerUser(t *testing.T) {
+	t.Parallel()
+	env := newAuthEnv(t, nil)
+	env.hub.SetMaxConnectionsPerIdentity(2)
+	alice := env.createUser(t, "alice", models.RoleUser)
+	bob := env.createUser(t, "bob", models.RoleUser)
+	tok := env.token(t, alice)
+	key, _ := env.apiKey(t, alice)
+	target := wsURL(t, env.router)
+
+	first, status := dialWS(t, withToken(target, tok), nil)
+	require.Equal(t, http.StatusSwitchingProtocols, status)
+	_, status = dialWS(t, target, http.Header{"X-Api-Key": {key}})
+	require.Equal(t, http.StatusSwitchingProtocols, status)
+	require.Eventually(t, func() bool { return env.hub.ClientCount() == 2 }, 2*time.Second, 5*time.Millisecond)
+
+	over, status := dialWS(t, withToken(target, tok), nil)
+	require.Equal(t, http.StatusSwitchingProtocols, status, "the upgrade is done, then the socket is closed")
+	assert.Equal(t, gorilla.ClosePolicyViolation, waitClosed(t, over))
+	assert.Equal(t, 2, env.hub.ClientCount())
+
+	_, status = dialWS(t, withToken(target, env.token(t, bob)), nil)
+	assert.Equal(t, http.StatusSwitchingProtocols, status, "another user is not affected")
+
+	require.NoError(t, first.Close())
+	require.Eventually(t, func() bool { return env.hub.ClientCount() == 2 }, 2*time.Second, 5*time.Millisecond,
+		"the closed socket left, bob's is there")
+	conn, status := dialWS(t, withToken(target, tok), nil)
+	require.Equal(t, http.StatusSwitchingProtocols, status)
+	subscribe(t, conn, "items")
+	require.Eventually(t, func() bool { return env.hub.TopicSubscriberCount("items") == 1 }, 2*time.Second, 5*time.Millisecond,
+		"the socket in the freed slot is a working one")
+}
+
+// TestWSConnectionCapIgnoresWhatTheClientSends: with auth off the sockets have
+// no identity and are not capped; a user ID in the request (header or query)
+// is not an identity and neither adds a cap nor bypasses one.
+func TestWSConnectionCapIgnoresWhatTheClientSends(t *testing.T) {
+	t.Parallel()
+	hub := websocket.NewHub()
+	hub.SetMaxConnectionsPerIdentity(1)
+	go hub.Run()
+	t.Cleanup(hub.Shutdown)
+	router := gin.New()
+	res, err := Setup(router, Deps{
+		Config: testConfig(100, 10, nil), Repository: handlers.NewMockRepository(),
+		HealthChecker: health.New(), Hub: hub,
+	})
+	require.NoError(t, err)
+	t.Cleanup(res.RateLimiters.Stop)
+	target := wsURL(t, router)
+
+	for i := 0; i < 4; i++ {
+		_, status := dialWS(t, target+"?user_id=u1", http.Header{"X-User-Id": {"u1"}})
+		require.Equal(t, http.StatusSwitchingProtocols, status)
+	}
+	require.Eventually(t, func() bool { return hub.ClientCount() == 4 }, 2*time.Second, 5*time.Millisecond,
+		"no socket was refused")
+}
+
+// TestWSRefusedSocketsDoNotFloodTheErrorLog: a client over the cap that keeps
+// reconnecting costs one bounded hub line, never an Error line per attempt.
+func TestWSRefusedSocketsDoNotFloodTheErrorLog(t *testing.T) {
+	// Not parallel: it replaces the default slog logger.
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(writerFunc(func(p []byte) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return buf.Write(p)
+	}), &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	env := newAuthEnv(t, nil)
+	env.hub.SetMaxConnectionsPerIdentity(1)
+	alice := env.createUser(t, "alice", models.RoleUser)
+	tok := env.token(t, alice)
+	target := wsURL(t, env.router)
+	_, status := dialWS(t, withToken(target, tok), nil)
+	require.Equal(t, http.StatusSwitchingProtocols, status)
+	require.Eventually(t, func() bool { return env.hub.ClientCount() == 1 }, 2*time.Second, 5*time.Millisecond)
+
+	for i := 0; i < 10; i++ {
+		over, status := dialWS(t, withToken(target, tok), nil)
+		require.Equal(t, http.StatusSwitchingProtocols, status)
+		assert.Equal(t, gorilla.ClosePolicyViolation, waitClosed(t, over))
+	}
+
+	mu.Lock()
+	out := buf.String()
+	mu.Unlock()
+	assert.NotContains(t, out, "level=ERROR", "a refused socket is not an error")
+	assert.Equal(t, 1, strings.Count(out, "level=WARN msg=\"WebSocket connection limit reached"), "one Warn for the ten refusals")
+	assert.NotContains(t, out, tok)
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

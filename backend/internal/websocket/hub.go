@@ -28,6 +28,19 @@ const (
 	// Further subscriptions are ignored, so a client cannot grow the hub's
 	// subscription maps without bound.
 	MaxTopicsPerClient = 64
+
+	// DefaultMaxConnectionsPerIdentity is the default for the most /ws
+	// sockets that one user, and one API key, may have open at once
+	// (WS_MAX_CONNECTIONS_PER_USER). A socket over the cap is refused.
+	DefaultMaxConnectionsPerIdentity = 16
+
+	// closeReasonTooManyConnections is the close reason (code 1008) of a socket
+	// that the connection cap refused.
+	closeReasonTooManyConnections = "too many connections"
+
+	// connectionCapLogInterval is the time between two Warn lines about
+	// refused sockets.
+	connectionCapLogInterval = time.Minute
 )
 
 // ErrHubClosed is returned when attempting to register a client on a shut-down hub.
@@ -36,6 +49,17 @@ var ErrHubClosed = errHubClosed{}
 type errHubClosed struct{}
 
 func (errHubClosed) Error() string { return "hub is closed" }
+
+// ErrTooManyConnections is returned by Register when the user or the API key
+// of the client already has the most sockets that the hub allows
+// (SetMaxConnectionsPerIdentity).
+var ErrTooManyConnections = errTooManyConnections{}
+
+type errTooManyConnections struct{}
+
+func (errTooManyConnections) Error() string {
+	return "too many WebSocket connections for this identity"
+}
 
 // BroadcastSender is implemented by any type that can broadcast messages
 // to all connected WebSocket clients. Use this interface for decoupled
@@ -126,6 +150,17 @@ type Hub struct {
 	// revalidateDone is closed when the revalidation loop exits (tests).
 	revalidateDone chan struct{}
 
+	// maxPerIdentity is the most sockets of one user and of one API key
+	// (SetMaxConnectionsPerIdentity); 0 or less: no cap.
+	maxPerIdentity atomic.Int32
+	// identityConns counts the registered clients per identity key (see
+	// identityKeys). An entry exists only while its count is above zero.
+	// Protected by mu, like clients.
+	identityConns map[string]int
+	// capLog limits the log line of a refused socket: a client over the cap
+	// that keeps reconnecting would flood the log.
+	capLog *logutil.Limiter
+
 	// dropLog limits the log line of a dropped broadcast: with the channel
 	// full, every Broadcast drops its message. dropped counts every drop.
 	dropLog *logutil.Limiter
@@ -143,7 +178,9 @@ func NewHub() *Hub {
 		otel.Handle(err)
 	}
 
-	return &Hub{
+	h := &Hub{
+		capLog:         logutil.NewLimiter(connectionCapLogInterval),
+		identityConns:  make(map[string]int),
 		dropLog:        logutil.NewLimiter(time.Minute),
 		dropped:        dropped,
 		clients:        make(map[*Client]bool),
@@ -155,6 +192,31 @@ func NewHub() *Hub {
 		done:           make(chan struct{}),
 		revalidateDone: make(chan struct{}),
 	}
+	h.maxPerIdentity.Store(DefaultMaxConnectionsPerIdentity)
+	return h
+}
+
+// SetMaxConnectionsPerIdentity sets the most sockets that one user (UserID)
+// and one API key (APIKeyID) may have open at once. A socket over the cap is
+// refused by Register with ErrTooManyConnections. A socket without identity
+// (authentication off) is not counted: the identity comes from the verified
+// credential only, never from the request, so a client cannot choose one.
+// n <= 0 turns the cap off. Call it before the traffic starts.
+func (h *Hub) SetMaxConnectionsPerIdentity(n int) {
+	h.maxPerIdentity.Store(int32(max(n, 0))) // #nosec G115 -- a connection cap, far below int32
+}
+
+// identityKeys returns the counters of the identity: one for the user and one
+// for the API key, "" for a part that is empty.
+func identityKeys(id ClientIdentity) [2]string {
+	var keys [2]string
+	if id.UserID != "" {
+		keys[0] = "user:" + id.UserID
+	}
+	if id.APIKeyID != "" {
+		keys[1] = "key:" + id.APIKeyID
+	}
+	return keys
 }
 
 // Run starts the hub's event loop. It should be launched as a goroutine.
@@ -219,9 +281,13 @@ func (h *Hub) Shutdown() {
 
 // Register registers a client with the hub. The client is in the client set
 // when Register returns, so a Subscribe or a revoke right after it sees the
-// client. It returns ErrHubClosed if the hub has been shut down. The done
-// check runs under h.mu: closeAllClients also takes h.mu after done is
-// closed, so a client is either refused or closed by the shutdown.
+// client. It returns ErrHubClosed if the hub has been shut down, and
+// ErrTooManyConnections if the user or the API key of the client already has
+// the most sockets that SetMaxConnectionsPerIdentity allows. The done check
+// and the cap check run under h.mu with the registration: closeAllClients
+// also takes h.mu after done is closed, so a client is either refused or
+// closed by the shutdown, and concurrent registrations of one identity never
+// exceed the cap.
 func (h *Hub) Register(c *Client) error {
 	h.mu.Lock()
 	select {
@@ -230,11 +296,41 @@ func (h *Hub) Register(c *Client) error {
 		return ErrHubClosed
 	default:
 	}
+	keys := identityKeys(c.identity)
+	if limit := int(h.maxPerIdentity.Load()); limit > 0 {
+		for _, key := range keys {
+			if key != "" && h.identityConns[key] >= limit {
+				h.mu.Unlock()
+				h.logRefused(c.identity, limit)
+				return ErrTooManyConnections
+			}
+		}
+	}
 	h.clients[c] = true
+	for _, key := range keys {
+		if key != "" {
+			h.identityConns[key]++
+		}
+	}
 	count := len(h.clients)
 	h.mu.Unlock()
 	slog.Info("WebSocket client registered", "clients", count)
 	return nil
+}
+
+// logRefused logs a socket that the cap refused: one Warn per interval (with
+// the number of lines left out), the others at Debug. Only the user ID and the
+// key ID are logged, never a token.
+func (h *Hub) logRefused(id ClientIdentity, limit int) {
+	level := slog.LevelDebug
+	attrs := []any{"user_id", id.UserID, "api_key_id", id.APIKeyID, "limit", limit}
+	if ok, suppressed := h.capLog.Allow(); ok {
+		level = slog.LevelWarn
+		if suppressed > 0 {
+			attrs = append(attrs, "suppressed", suppressed)
+		}
+	}
+	slog.Log(context.Background(), level, "WebSocket connection limit reached, socket refused", attrs...)
 }
 
 // Unregister safely requests client removal from the hub. If the hub has
@@ -478,9 +574,25 @@ func (h *Hub) removeClientLocked(c *Client, reason string) {
 		return
 	}
 	delete(h.clients, c)
+	h.releaseIdentityLocked(c)
 	c.closeReason = reason
 	close(c.send)
 	h.removeClientTopicsLocked(c)
+}
+
+// releaseIdentityLocked counts a removed client off its identity counters and
+// drops a counter that reaches zero. Caller holds h.mu (write lock).
+func (h *Hub) releaseIdentityLocked(c *Client) {
+	for _, key := range identityKeys(c.identity) {
+		if key == "" {
+			continue
+		}
+		if n := h.identityConns[key]; n > 1 {
+			h.identityConns[key] = n - 1
+		} else {
+			delete(h.identityConns, key)
+		}
+	}
 }
 
 // removeClientTopicsLocked removes a client from all topic subscriptions.
@@ -509,6 +621,7 @@ func (h *Hub) closeAllClients() {
 	}
 	h.topicSubs = make(map[string]map[*Client]bool)
 	h.clientTopics = make(map[*Client]map[string]struct{})
+	h.identityConns = make(map[string]int)
 }
 
 // DisconnectClient closes one client, for example when a revocation check
