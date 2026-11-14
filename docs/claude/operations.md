@@ -130,6 +130,19 @@ Off by default. With `PPROF_ENABLED=false` no server and no profile rate is set.
 
 The three `PPROF_*` values besides `PPROF_ENABLED` are read only with pprof on; an invalid one stops the start then.
 
+Compose does not pass the `PPROF_*` variables to the backend, so a `PPROF_ENABLED=true` in the root `.env` has no effect. Profile a backend that runs on the host (set them in `backend/.env` or the environment, then `go tool pprof http://127.0.0.1:6060/debug/pprof/heap`), or give the container an override file of your own, for example `docker-compose.override.yml` (Compose reads it by itself; do not commit it):
+
+```yaml
+services:
+  backend:
+    environment:
+      - PPROF_ENABLED=true
+      - PPROF_ADDR=:6060
+      - PPROF_ALLOW_NON_LOOPBACK=true
+    ports:
+      - "127.0.0.1:6060:6060"
+```
+
 ### Replicas
 
 Off by default: a single process behaves as before. Details: "Replicas" below.
@@ -150,11 +163,14 @@ These are read by `docker-compose.yml`, the Makefile or the scripts, not by the 
 | `GO_ENV`, `NODE_ENV` | `production` | Image targets (`development` or `production`). `make dev*` sets development, `make prod*` production. |
 | `BACKEND_PORT`, `FRONTEND_PORT` | 8081, 3000 | Host ports (`make prod*`: 8080 and 80). |
 | `FRONTEND_CONTAINER_PORT` | `8080` | The unprivileged nginx of the production image. `make dev*` sets `3000` for the Vite dev server (set it too when running `NODE_ENV=development docker compose` by hand). |
-| `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | 3306, `app`, `appuser`, `apppass`, `rootpass` | Dev-only credentials. |
+| `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | 3306, `app`, `appuser`, `apppass`, `rootpass` | Dev-only credentials. The database port is published on `127.0.0.1` only (`127.0.0.1:${MYSQL_PORT}:3306`): a backend or test run on the Compose host connects to `127.0.0.1:${MYSQL_PORT}`, the backend container uses `db:3306` on `backend-net`. |
+| `ALLOW_DEFAULT_CREDENTIALS` | unset | Read by `make prod`, `make prod-backend` and `make prod-frontend` (`scripts/check-prod-credentials.sh`): they refuse to start while `MYSQL_PASSWORD` or `MYSQL_ROOT_PASSWORD` is unset or still the placeholder (`apppass`, `rootpass`), looking at the environment, the `.env` file and the defaults as Compose resolves them. `ALLOW_DEFAULT_CREDENTIALS=1` overrides it with a warning (a throwaway local check of the production images). A database volume that already exists keeps the password it was created with. |
 | `GRAFANA_ADMIN_PASSWORD` | `devonly-change-me` | Grafana admin password of `docker-compose.otel.yml`. A dev-only default: set your own. Read at the first start of an empty `grafana_data` volume. |
 | `GRAFANA_PORT`, `PROMETHEUS_PORT`, `TEMPO_PORT`, `OTLP_GRPC_PORT`, `OTLP_HTTP_PORT` | 3001, 9090, 3200, 4317, 4318 | Host ports of the observability setup, all published on `127.0.0.1` only. |
 | `FRONTEND_PROXY_IP`, `FRONTEND_NET_SUBNET` | `172.30.80.10`, `172.30.80.0/24` | Fixed proxy address on `frontend-net` and its subnet; change both together. |
 | `VITE_API_URL` | `http://localhost:8081` | Target of the Vite dev proxy; Compose sets `http://backend:8081`. |
+
+`docker-compose.yml` also passes three backend variables documented above, with an empty default that keeps the backend's own default (their parsers treat an empty value as unset): `LEADER_ELECTION_ENABLED` (`false`), `REPLICA_HEARTBEAT_ENABLED` (`false`) and `WS_MAX_CONNECTIONS_PER_USER` (`16`). It does not pass the `PPROF_*` variables: profiling needs an override file of your own (see "Profiling (pprof)"), and `docker-compose.otel.yml` sets the telemetry and metrics variables. The backend healthcheck (`/health/live`, every 30 s) has `start_period: 120s`, so a cold development compile (`go run` with an empty module cache) is not counted as failing; the frontend waits for it (`depends_on: service_healthy`).
 
 `docker-compose.yml` also passes `APP_ENV`, `PORT`, `API_VERSION`, `API_PREFIX`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS` and `CORS_MAX_AGE` to the backend. The backend reads none of them (it reads `GO_ENV`, `SERVER_PORT` and `CORS_ALLOWED_ORIGINS`), so they have no effect. Set the listening port with `SERVER_PORT`, never `PORT`. The development frontend does not read a `PORT` either: the Vite server is fixed to port 3000.
 
