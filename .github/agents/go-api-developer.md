@@ -40,10 +40,10 @@ When given a GitHub issue:
 
 ## Project Architecture
 
-- **Module**: `backend` (Go 1.23, Gin web framework, GORM ORM)
+- **Module**: `backend` (Go 1.27, as in `backend/go.mod`; Gin web framework, GORM ORM)
 - **Data stores**: MySQL
-- **Bootstrap**: `api/main.go` → `config.LoadConfig()` → `initDatabase` → `buildServices` (`buildRouter` → `routes.SetupRoutes()`) → `startHTTPServer` → ordered `shutdown` (helpers in `api/bootstrap.go`)
-- **Ports**: Backend `:8081` on host; inside Docker backend listens on `:8080`
+- **Bootstrap**: `api/main.go` → `config.LoadConfig()` → `initDatabase` → `buildServices` (`buildRouter` → `routes.Setup()`) → `startHTTPServer` → ordered `shutdown` (helpers in `api/bootstrap.go`)
+- **Ports**: the backend listens on `:8081` (`SERVER_PORT`), also inside Docker; the host port is `BACKEND_PORT` (8081 for `make dev`, 8080 for `make prod`)
 
 ### Key directories
 

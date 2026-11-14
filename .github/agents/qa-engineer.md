@@ -61,7 +61,7 @@ When given a task:
 - **Framework**: Playwright (Chromium)
 - **Location**: `frontend/e2e/*.spec.ts`
 - **Config**: `frontend/playwright.config.ts`
-- **Run**: `make test-e2e` (starts full Docker stack)
+- **Run**: `make test-e2e` (auth off) and `make test-e2e-auth` (auth on). Each starts only MySQL in Docker (its own Compose project, host port 13306), runs the backend natively and lets Playwright start the Vite dev server; nothing else is started (`scripts/e2e.sh`)
 
 ## Writing Backend Unit Tests
 
@@ -196,7 +196,7 @@ test.describe('Orders Page', () => {
 Key rules:
 - Use accessible locators: `getByRole`, `getByText`, `getByLabel`
 - Set generous timeouts (10s) for elements depending on API calls
-- E2e tests require full Docker stack — run with `make test-e2e`
+- E2e tests need Docker for MySQL only (the backend runs natively, Vite is started by Playwright) — run with `make test-e2e` or `make test-e2e-auth`
 - Test real user workflows, not implementation details
 - Each test should be independent — no shared state between tests
 
@@ -233,7 +233,7 @@ cd backend && make test-coverage          # Coverage (80% threshold)
 cd frontend && npm test                   # Frontend unit tests
 cd frontend && npm run lint              # Frontend TypeScript check
 make test-backend-all                     # Integration tests (needs Docker)
-make test-e2e                             # E2e tests (needs Docker stack)
+make test-e2e                             # E2e tests (MySQL in Docker; backend and Vite run natively)
 make lint                                 # Full lint
 ```
 

@@ -45,7 +45,7 @@ Three services:
 | Service | Image | Networks | Health Check |
 |---|---|---|---|
 | `db` | mysql:8.0 | backend-net | `mysqladmin ping` |
-| `backend` | ./backend (multi-stage) | backend-net, frontend-net | `curl /health/live` |
+| `backend` | ./backend (multi-stage) | backend-net, frontend-net | `wget /health/live` (start period 120s) |
 | `frontend` | ./frontend (multi-stage) | frontend-net | — |
 
 **Network isolation**: `backend-net` connects db + backend. `frontend-net` connects backend + frontend. Frontend CANNOT reach the database directly. Always maintain this separation.
@@ -103,20 +103,21 @@ CMD ["go", "run", "main.go"]
 Every service MUST have a health check in `docker-compose.yml`:
 ```yaml
 healthcheck:
-  test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
-  interval: 10s
-  timeout: 5s
-  retries: 5
-  start_period: 30s
+  test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8081/health/live"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 120s
 ```
+The images are Alpine based: they have `wget` (BusyBox) and no `curl`. The development backend compiles at start, hence the long `start_period`.
 Use `depends_on` with `condition: service_healthy` for startup ordering.
 
 ### Port mapping
 | Service | Container Port | Host Port | Notes |
 |---|---|---|---|
-| db | 3306 | 3306 | MySQL |
-| backend | 8080 | 8081 | API |
-| frontend | 8080 (nginx) / 3000 (dev) | 3000 | Web UI |
+| db | 3306 | 127.0.0.1:3306 | MySQL (loopback only) |
+| backend | 8081 | 8081 (`make prod`: 8080) | API |
+| frontend | 8080 (nginx) / 3000 (dev) | 3000 (`make prod`: 80) | Web UI |
 
 Changing a port requires updating: docker-compose.yml, nginx.conf, frontend API config, and any health check URLs.
 
@@ -135,7 +136,7 @@ curl http://localhost:8081/health/live    # Liveness check
 curl http://localhost:8081/health/ready   # Readiness check
 make clean                                # Remove containers + volumes
 make test-backend-all                     # Integration tests (starts infra)
-make test-e2e                             # E2e tests (starts full stack)
+make test-e2e                             # E2e tests (MySQL in Docker only: the backend runs natively, Playwright starts Vite)
 ```
 
 ## When in doubt
