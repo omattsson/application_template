@@ -135,13 +135,13 @@ The complete file tree is in [docs/claude/structure.md](docs/claude/structure.md
 
 ### Production
 
-- `make prod` - Start both services in production mode
+- `make prod` - Start both services in production mode. Refuses to start with the placeholder database credentials (`MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`); set your own, or `ALLOW_DEFAULT_CREDENTIALS=1` for a throwaway local run
 - `make prod-backend` - Start backend in production mode
 - `make prod-frontend` - Start frontend in production mode
 
 ### Maintenance
 
-- `make clean` - Stop and remove containers
+- `make clean` - Stop and remove the containers, networks **and volumes** (`docker compose down -v`): the MySQL database is deleted
 - `make prune` - Clean up Docker resources
 
 ## Configuration
@@ -257,7 +257,7 @@ Details, including the session and revocation design: [docs/claude/auth-sessions
    - `.github/CODEOWNERS`, `.github/SECURITY.md` and `.github/CODE_OF_CONDUCT.md` name contacts that must become yours.
 4. **Set the secrets.** For Compose, create a `.env` file next to `docker-compose.yml`; for a backend on the host, copy `backend/config/.env.example` (the same file with `DB_HOST=localhost`) to `backend/.env` (neither is committed). Set your own values:
    - `JWT_SECRET` and `ADMIN_PASSWORD` have no default (see [Authentication](#authentication)); generate them, never reuse a value from a document.
-   - The database credentials in `docker-compose.yml` and `.env.example` (`MYSQL_PASSWORD=apppass`, `MYSQL_ROOT_PASSWORD=rootpass`) are **dev only**. Set your own in the environment of every shared or production deployment, or do not publish the MySQL port.
+   - The database credentials in `docker-compose.yml` and `.env.example` (`MYSQL_PASSWORD=apppass`, `MYSQL_ROOT_PASSWORD=rootpass`) are **dev only**. Set your own in the environment or the `.env` file of every shared or production deployment. Compose publishes MySQL on `127.0.0.1` only (`MYSQL_PORT`, default 3306), and `make prod`, `make prod-backend` and `make prod-frontend` refuse to start while either password is unset or still the placeholder (`ALLOW_DEFAULT_CREDENTIALS=1` overrides it, for a throwaway local check of the production images only). An existing `mysql_data` volume keeps the password it was created with: change it in MySQL too, or run `make clean` (deletes the data) first. The API port is published on all interfaces: put a firewall or the bundled proxy in front of it.
    - Set `CORS_ALLOWED_ORIGINS` to a list of origins (or leave it unused: the bundled UI is same-origin), `APP_DEBUG=false`, and `TRUSTED_PROXIES` to your proxy addresses.
 5. **Enable auth** (see [Authentication](#authentication)). Decide whether to keep local login only or add OIDC, and whether `SELF_REGISTRATION` stays off.
 6. **Replace the example.** Items is the example resource. Add your own resources by following [EXTENDING.md](EXTENDING.md), then remove Items (model, repository code, handler, routes, page, tests, `item` entries in the audit constants) when you no longer need it.
@@ -309,14 +309,13 @@ make test-e2e
 make test-e2e-auth
 ```
 
-Before you push, run `make lint` (go vet, ESLint, workflow and environment variable docs checks) and `make lint-docs` (Markdown).
+Before you push, run `make lint` (go vet, ESLint and every script check CI runs: workflows, Dockerfiles, Trivy ignore list, environment variable docs, agents and settings, make targets, domain terms, shellcheck) and `make lint-docs` (Markdown).
 
 ## Health Checks
 
-Both services include health check endpoints:
-
-- Backend: [http://localhost:8081/health/live](http://localhost:8081/health/live)
-- Frontend: Built into the Docker container
+- Backend: [http://localhost:8081/health/live](http://localhost:8081/health/live) (`/health/ready` also checks the database). The Compose healthcheck of the backend calls `/health/live`; it has a 120 s start period because the development image compiles the backend at start.
+- Frontend: no health endpoint and no Compose healthcheck. Open the web UI, or request `/` (nginx answers `index.html`). A `/api/health/live` request through the web UI reaches the backend health check.
+- MySQL: the Compose healthcheck of the `db` service (`mysqladmin ping`).
 
 ## Contributing
 

@@ -36,14 +36,10 @@ jobs:
         run: make check-workflows
 
       - name: Dockerfile hardening
-        run: |
-          scripts/check-dockerfiles.sh --self-test
-          scripts/check-dockerfiles.sh
+        run: make check-dockerfiles
 
       - name: Trivy ignore list
-        run: |
-          scripts/check-trivyignore.sh --self-test
-          scripts/check-trivyignore.sh
+        run: make check-trivyignore
 
       - name: Environment variable docs
         run: make check-env-docs
@@ -54,15 +50,17 @@ jobs:
       - name: Make targets
         run: make check-make-targets
 
+      - name: Production credentials guard
+        run: make test-prod-credentials
+
       - name: Domain terms
         run: |
           git config --global user.email ci@example.com
           git config --global user.name ci
-          scripts/check-domain-terms.test.sh
-          scripts/check-domain-terms.sh
+          make check-domain-terms
 
       - name: Shell scripts
-        run: shellcheck scripts/*.sh
+        run: make shellcheck
 
   backend:
     name: Backend

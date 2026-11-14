@@ -22,14 +22,14 @@ Toolchain versions are single sources of truth:
 
 | Workflow | Jobs | Runs when |
 |---|---|---|
-| `pull-request.yml` | `Repository checks` (workflow hygiene, Dockerfile hardening, Trivy ignore list, environment variable docs, domain terms, shell scripts), `Backend` (vet, gosec, unit tests with the race detector, integration tests on MySQL with `-p 1`), `Frontend` (lint, build, unit tests), `Markdown lint` | every pull request to `main`, every push to `main` |
+| `pull-request.yml` | `Repository checks` (workflow hygiene, Dockerfile hardening, Trivy ignore list, environment variable docs, Claude agents and settings, make targets, production credentials guard, domain terms, shell scripts), `Backend` (vet, gosec, unit tests with the race detector, integration tests on MySQL with `-p 1`), `Frontend` (lint, build, unit tests), `Markdown lint` | every pull request to `main`, every push to `main` |
 | `pr-title.yml` | `PR title` | pull request opened, edited, synchronized, reopened |
 | `docker-build.yml` | `Build backend image`, `Build frontend image` (production target, not pushed) | changes under `backend/`, `frontend/` or the workflow |
 | `security-scan.yml` | `.trivyignore expiry`, `Trivy (filesystem)`, `Trivy (<image> image)` | pull request, push to `main`, weekly |
 | `codeql.yml` | `Analyze (go)`, `Analyze (javascript-typescript)` | pull request and push to `main` except Markdown and `docs/` only changes, weekly |
 | `e2e.yml` | `Playwright (auth off, auth on, secure cookies)`: `make test-e2e`, `make test-e2e-auth`, `make test-e2e-auth E2E_SECURE_COOKIES=true` | changes under `frontend/`, `backend/`, the Compose file, the Makefile or the e2e script; push to `main`; weekly |
 
-The same checks run locally: `make lint`, `make test`, `make test-backend-all`, `make test-e2e`, `make test-e2e-auth`, `make lint-docs`, `make gosec`, `scripts/check-domain-terms.sh`. The workflows call the Makefile targets, so a developer and CI run the same commands. `make check-workflows` enforces the rules for the workflow files themselves: pinned actions (a full commit SHA with the version in a comment), minimal `permissions`, a `timeout-minutes` for every job and the `main` trigger.
+The same checks run locally: `make lint` runs every `Repository checks` step (`check-workflows`, `check-dockerfiles`, `check-trivyignore`, `check-env-docs`, `check-agents`, `check-make-targets`, `test-prod-credentials`, `check-domain-terms`, `shellcheck`) plus `go vet` and the frontend lint, and `make test`, `make test-backend-all`, `make test-e2e`, `make test-e2e-auth`, `make lint-docs` and `make gosec` cover the other jobs. The workflows call the same Makefile targets, so a developer and CI run the same commands. `shellcheck` is skipped with a warning when it is not installed locally (CI fails instead); `check-domain-terms` scans git-tracked files only, so `git add` new files first. `make check-workflows` enforces the rules for the workflow files themselves: pinned actions (a full commit SHA with the version in a comment), minimal `permissions`, a `timeout-minutes` for every job and the `main` trigger.
 
 ## Branch protection
 

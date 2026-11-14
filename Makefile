@@ -1,4 +1,4 @@
-.PHONY: test-e2e test-e2e-auth test-coverage test-backend-repeat seed loadtest loadtest-stress check-make-targets gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs check-agents test-backend-unit dev dev-backend dev-frontend dev-otel mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
+.PHONY: test-e2e test-e2e-auth test-coverage test-backend-repeat seed loadtest loadtest-stress check-make-targets gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs check-agents check-dockerfiles check-trivyignore check-domain-terms shellcheck check-prod-credentials test-prod-credentials test-backend-unit dev dev-backend dev-frontend dev-otel mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
 
 # MySQL service management
 mysql-start:
@@ -50,17 +50,28 @@ dev-frontend:
 dev-otel:
 	$(DEV_ENV) docker compose -f docker-compose.yml -f docker-compose.otel.yml up --build
 
+# The production targets refuse to start with the placeholder database
+# credentials of docker-compose.yml (set MYSQL_PASSWORD and MYSQL_ROOT_PASSWORD
+# in the environment or in .env, or ALLOW_DEFAULT_CREDENTIALS=1 knowingly).
 # Production mode for both services
-prod:
+prod: check-prod-credentials
 	$(PROD_ENV) docker compose up --build
 
 # Production mode for backend only
-prod-backend:
+prod-backend: check-prod-credentials
 	$(PROD_ENV) docker compose up --build backend
 
 # Production mode for frontend only (also starts the backend it depends on)
-prod-frontend:
+prod-frontend: check-prod-credentials
 	$(PROD_ENV) docker compose up --build frontend
+
+# Refuse the placeholder database credentials. See scripts/check-prod-credentials.sh.
+check-prod-credentials:
+	scripts/check-prod-credentials.sh
+
+# The fixture tests of that guard (part of lint; CI runs them too).
+test-prod-credentials:
+	scripts/check-prod-credentials.sh --self-test
 
 # Stop and remove all containers, networks, and volumes
 clean:
@@ -248,7 +259,10 @@ fmt:
 	cd backend && go fmt ./...
 	cd frontend && npm run format
 
-lint: lint-backend lint-frontend check-workflows check-env-docs check-agents check-make-targets
+# Everything the "Repository checks", "Backend" (vet) and "Frontend" (lint)
+# jobs of .github/workflows/pull-request.yml run, so a clean local lint means
+# a clean CI lint. (Markdown: make lint-docs. gosec: make gosec.)
+lint: lint-backend lint-frontend check-workflows check-dockerfiles check-trivyignore check-env-docs check-agents check-make-targets check-domain-terms test-prod-credentials shellcheck
 
 lint-backend:
 	cd backend && go vet ./...
@@ -283,6 +297,32 @@ check-agents:
 check-make-targets:
 	scripts/check-make-targets.sh --self-test
 	scripts/check-make-targets.sh
+
+# Dockerfile hardening rules, with the checker's own fixture tests first. CI
+# runs it too.
+check-dockerfiles:
+	scripts/check-dockerfiles.sh --self-test
+	scripts/check-dockerfiles.sh
+
+# The .trivyignore entries are well formed and not expired, with the checker's
+# own fixture tests first. CI runs it too.
+check-trivyignore:
+	scripts/check-trivyignore.sh --self-test
+	scripts/check-trivyignore.sh
+
+# No project-specific terms in tracked files (git add new files first: the
+# scan reads git-tracked files only), with the checker's own tests first. CI
+# runs it too.
+check-domain-terms:
+	scripts/check-domain-terms.test.sh
+	scripts/check-domain-terms.sh
+
+# shellcheck of every script. CI installs it; locally a missing shellcheck is
+# a warning (brew install shellcheck, apt install shellcheck), CI still fails.
+shellcheck:
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/*.sh; \
+	elif [ -n "$$CI" ]; then echo "ERROR: shellcheck is not installed"; exit 1; \
+	else echo "WARNING: shellcheck is not installed, skipping (CI runs it)"; fi
 
 # Markdown lint (rules: .markdownlint.yml, ignores: .markdownlint-cli2.jsonc;
 # markdownlint-cli2 does not read .markdownlintignore).

@@ -65,13 +65,14 @@ The steps 1, 2, 3, 4 and 6 have their own detached budgets, so the worst case is
 | Sample Items through the API of a running backend | `make seed` |
 | k6 load tests of Items and `/ws` (stress profile: `make loadtest-stress`) | `make loadtest` |
 | Format | `make fmt` |
-| Lint (go vet, ESLint, workflow, env docs, agent and make target checks) | `make lint` |
+| Lint (go vet, ESLint and every script check CI runs: workflows, Dockerfiles, Trivy ignore list, env docs, agents, make targets, domain terms, shellcheck) | `make lint` |
 | Markdown lint | `make lint-docs` |
 | Security scan (backend) | `make gosec` |
 | Environment variable docs match the code | `make check-env-docs` |
 | Claude agents, skill and settings are consistent | `make check-agents` |
 | The ops make targets exist and can be planned | `make check-make-targets` |
-| Domain terms check | `scripts/check-domain-terms.sh` |
+| Domain terms check (git-tracked files only) | `make check-domain-terms` |
+| `make prod*` refuses the placeholder database credentials | `scripts/check-prod-credentials.sh` (`make test-prod-credentials` for its tests) |
 | Install dependencies | `make install` |
 
 Integration tests (tag `integration`) run one package at a time (`-p 1`): the packages share one database. A CI job that runs them must copy that flag.
