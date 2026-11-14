@@ -31,9 +31,10 @@ signal -> shutdown              # ordered, see below
 6. Telemetry flush (OpenTelemetry; a no-op with `OTEL_ENABLED=false` and `METRICS_ENABLED=false`).
 7. Rate limiters: stop their cleanup goroutines.
 8. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
-9. Database: close the pool last.
+9. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): stop it and delete this process's row, within a fixed 2 s.
+10. Database: close the pool last.
 
-The steps after the HTTP step have their own budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0. The orchestrator's stop grace period must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s. Details: `docs/claude/operations.md`.
+The steps 1, 2, 3, 4 and 6 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0 and the 2 s of step 9 (154 s with the default 30 s). The orchestrator's stop grace period must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s. Details: `docs/claude/operations.md`.
 
 **Gin mode.** `GIN_MODE` wins when it is set. Otherwise the mode is debug when `APP_DEBUG` is true and release when it is false. The code default of `APP_DEBUG` is `true` and nothing warns about it: set `APP_DEBUG=false` in production (`make prod*` does).
 

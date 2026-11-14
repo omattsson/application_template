@@ -116,7 +116,7 @@ The WebSocket hub, the leader worker group and the in-flight tracker are always 
 9. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): delete this process's row, within 2 s.
 10. Database pool.
 
-The steps 2, 3, 4 and 6 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` (plus 2 s each for the diagnostics servers and the heartbeat); the orchestrator's stop grace period must be longer (Compose: `stop_grace_period: 170s`). With `LEADER_ELECTION_ENABLED=true` step 3 also releases the leader lease, unless a worker did not stop in time: then the lease is kept (renewed) until the process exits.
+The steps 1, 2, 3, 4 and 6 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` (plus 2 s each for the diagnostics servers and the heartbeat); the orchestrator's stop grace period must be longer (Compose: `stop_grace_period: 170s`). With `LEADER_ELECTION_ENABLED=true` step 3 also releases the leader lease, unless a worker did not stop in time: then the lease is kept (renewed) until the process exits.
 
 ## Design Decisions
 

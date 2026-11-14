@@ -2,10 +2,8 @@
 # One Go package per line, as a path relative to backend/. Blank lines and
 # lines starting with # are ignored.
 #
-# The list holds every package that has non-test Go code added or changed
-# since the merge base 5b2e7ce of this backport branch: derived with
-#   git diff --name-only 5b2e7ce2e414efd935f87587e6ea1be32863a0b1..HEAD -- backend
-# Add a new package here in the same change that adds it.
+# The list is the set of gated packages. A package that a change adds goes
+# in here in the same change.
 #
 # Not listed, on purpose:
 #   ./docs                                 generated Swagger spec (swag init), no logic

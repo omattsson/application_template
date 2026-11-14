@@ -292,7 +292,7 @@ None of the variables in this section is read by the backend: they are Make and 
 
 ### Coverage gate
 
-`make test-coverage` runs the unit tests (`-short`, no database) with `-coverpkg` over the packages of `backend/coverage-packages.txt` and fails when any listed package has less than `COVERAGE_MIN` percent (default 80) on its own; an average would hide a weak package. `-coverpkg` credits a package for what any test binary runs, so the `api` main package is measured through its bootstrap tests (its `main()` is not testable). The list holds every package with non-test Go code added or changed since the backport began; the file says what is left out (the generated `docs`) and how it was derived. Add a package to the list in the change that adds it. Reports: `backend/coverage/coverage.html` and `coverage-summary.txt`. The logic is in `scripts/coverage-gate.sh`.
+`make test-coverage` runs the unit tests (`-short`, no database) with `-coverpkg` over the packages of `backend/coverage-packages.txt` and fails when any listed package has less than `COVERAGE_MIN` percent (default 80) on its own; an average would hide a weak package. `-coverpkg` credits a package for what any test binary runs, so the `api` main package is measured through its bootstrap tests (its `main()` is not testable). The list is the set of gated packages; the file says what is left out on purpose (the generated `docs`). Add a package to the list in the change that adds it. Reports: `backend/coverage/coverage.html` and `coverage-summary.txt`. The logic is in `scripts/coverage-gate.sh`.
 
 | Variable | Default | Notes |
 |---|---|---|

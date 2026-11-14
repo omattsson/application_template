@@ -427,7 +427,7 @@ func TestAuthRequiredStoreError(t *testing.T) {
 		wantCode  int
 		wantError string
 	}{
-		{name: "default fails open as KSM does", store: failingStore{memory, dbDown}, wantCode: http.StatusOK},
+		{name: "default fails open on a store error", store: failingStore{memory, dbDown}, wantCode: http.StatusOK},
 		{name: "strict mode fails closed with 500", store: failingStore{memory, dbDown}, strict: true, wantCode: http.StatusInternalServerError, wantError: "Internal server error"},
 		{name: "strict mode and a deadline stays 500", store: failingStore{memory, context.DeadlineExceeded}, strict: true, wantCode: http.StatusInternalServerError, wantError: "Internal server error"},
 		{name: "a cancelled error gives 499", store: failingStore{memory, context.Canceled}, wantCode: 499, wantError: "Client closed request"},
