@@ -143,6 +143,48 @@ func TestLoadConfigServerSettings(t *testing.T) {
 	})
 }
 
+// TestLoadConfigAppDebugIsStrict: APP_DEBUG defaults to true, which turns on
+// SQL value logging and Gin debug mode, so a value that is set but not a
+// boolean must stop the start instead of silently falling back to true.
+func TestLoadConfigAppDebugIsStrict(t *testing.T) {
+	// Not parallel: subtests use t.Setenv which modifies process env.
+	valid := []struct {
+		value string
+		want  bool
+	}{
+		{"", true},
+		{"true", true},
+		{"false", false},
+		{"0", false},
+		{"F", false},
+		{" false ", false},
+		{"false\t", false},
+	}
+	for _, tt := range valid {
+		t.Run("valid "+tt.value, func(t *testing.T) {
+			t.Setenv("ENV_FILE", "/nonexistent/.env")
+			t.Setenv("APP_DEBUG", tt.value)
+
+			cfg, err := config.LoadConfig()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.App.Debug)
+		})
+	}
+
+	for _, value := range []string{"off", "no", "false please", "disabled", "2"} {
+		t.Run("invalid "+value, func(t *testing.T) {
+			t.Setenv("ENV_FILE", "/nonexistent/.env")
+			t.Setenv("APP_DEBUG", value)
+
+			cfg, err := config.LoadConfig()
+			require.Error(t, err)
+			assert.Nil(t, cfg)
+			assert.Contains(t, err.Error(), "APP_DEBUG")
+			assert.NotContains(t, err.Error(), value, "the value is not echoed")
+		})
+	}
+}
+
 func TestLoadConfigRateLimitValues(t *testing.T) {
 	// Not parallel: subtests use t.Setenv which modifies process env.
 	tests := []struct {

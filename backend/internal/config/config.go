@@ -24,10 +24,12 @@ const (
 	defaultMaxIdleConns    int32 = 5
 	defaultConnMaxLifetime       = 5 * time.Minute
 	defaultReadTimeout           = 10 * time.Second
-	// defaultWriteTimeout is 0 (disabled at the server level) because per-write
-	// deadlines are enforced in the WebSocket write pump (websocket/client.go).
-	// A non-zero server-level write timeout would prematurely terminate idle
-	// WebSocket connections.
+	// defaultWriteTimeout is 0 (disabled at the server level). A positive value
+	// does not end WebSockets: net/http clears the connection deadlines when
+	// the upgrade hijacks the connection, and the write pump
+	// (websocket/client.go) sets its own per-write deadline. With 0 a slow or
+	// stalled client can hold a REST connection indefinitely; Compose sets 15s
+	// against that.
 	defaultWriteTimeout    = time.Duration(0)
 	defaultIdleTimeout     = 30 * time.Second
 	defaultShutdownTimeout = 30 * time.Second
@@ -571,12 +573,20 @@ func LoadConfig() (*Config, error) {
 		}
 	}
 
+	// APP_DEBUG defaults to true and turns on SQL value logging and Gin debug
+	// mode, so a value that is set but not a boolean is an error: a silent
+	// fallback would turn debug on for a typo such as "off" or "no".
+	debug, err := parseEnvBoolStrict("APP_DEBUG", true)
+	if err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	cfg := &Config{
 		App: AppConfig{
 			Name:        getEnv("APP_NAME", "backend-api"),
 			Environment: getEnv("GO_ENV", "development"),
 			Title:       getEnv("APP_TITLE", DefaultAppTitle),
-			Debug:       getEnvBool("APP_DEBUG", true),
+			Debug:       debug,
 		},
 		Database: DatabaseConfig{
 			Type:            strings.ToLower(strings.TrimSpace(getEnv("DB_TYPE", DBTypeMySQL))),
@@ -606,8 +616,6 @@ func LoadConfig() (*Config, error) {
 			File:  getEnv("LOG_FILE", ""),
 		},
 	}
-
-	var err error
 
 	if cfg.Auth, err = loadAuthConfig(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)

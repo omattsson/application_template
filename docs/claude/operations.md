@@ -13,7 +13,7 @@ How to run, configure and stop the backend. Read it before you change configurat
 
 `internal/config/config.go` and `oidc.go` read every variable below. `backend/.env.example` has the same list with comments, and `scripts/check-env-docs.sh` (`make check-env-docs`, part of `make lint`) fails when a variable of the code is missing here or in the example files, or when the example documents one that no code reads. Add a variable to the code, `backend/.env.example`, `backend/config/.env.example` and this table together.
 
-An unset or empty variable has its default. A duration is a Go duration such as `15m` or `12h`. With `AUTH_ENABLED=true` a set but invalid boolean or duration of the auth and OIDC settings stops the start; with auth off they are read leniently (the default on an invalid value) because nothing uses them. `RATE_LIMIT` and `LOGIN_RATE_LIMIT` are strict in both modes.
+An unset or empty variable has its default. A duration is a Go duration such as `15m` or `12h`. With `AUTH_ENABLED=true` a set but invalid boolean or duration of the auth and OIDC settings stops the start; with auth off they are read leniently (the default on an invalid value) because nothing uses them. `RATE_LIMIT`, `LOGIN_RATE_LIMIT` and `APP_DEBUG` are strict in both modes.
 
 ### Application
 
@@ -23,7 +23,7 @@ An unset or empty variable has its default. A duration is a Go duration such as 
 | `APP_NAME` | `backend-api` | Required non-empty. |
 | `GO_ENV` | `development` | Required non-empty; nothing branches on it. Compose uses the same name for the image target. |
 | `APP_TITLE` | `Application Template` | Product name in `GET /api/v1/ui-config`. |
-| `APP_DEBUG` | `true` | Gin debug mode and SQL values in the log. Set `false` in production (`make prod*` does). |
+| `APP_DEBUG` | `true` | Gin debug mode and SQL values in the log. Set `false` in production (`make prod*` does). A boolean (`true`, `false`, `1`, `0`, `t`, `f`, surrounding spaces ignored); any other value, such as `off` or `no`, stops the start instead of falling back to `true`. |
 | `GIN_MODE` | not set | When set, wins over `APP_DEBUG`. |
 
 ### Authentication and sessions
