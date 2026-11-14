@@ -18,7 +18,6 @@ Where things are. Run `ls` when a file is missing here: the tree below lists the
 ├── backend/                   # Go service
 ├── frontend/                  # React app
 ├── docs/claude/               # Reference docs that CLAUDE.md links to
-├── docs/superpowers/          # Design specs and plans of the template itself
 ├── scripts/                   # Check and test scripts (see below)
 ├── .claude/                   # Claude Code agents (agents/), the ship-issue skill (skills/), permissions (settings.json)
 └── .github/                   # Workflows, templates, Copilot instructions, agents

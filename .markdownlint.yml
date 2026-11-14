@@ -47,5 +47,5 @@ MD037: false
 MD058: false
 
 # MD060 - Table column style: the docs use tables with compact separator rows
-# (|---|---|), for example the generated specs and plans under docs/superpowers
+# (|---|---|), for example in docs/claude
 MD060: false

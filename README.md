@@ -238,7 +238,7 @@ Details, including the session and revocation design: [docs/claude/auth-sessions
 
 ## Start a new project from this template
 
-1. **Copy the template.** Clone it (or use "Use this template" on GitHub) into your project name and start a fresh history. Remove `docs/superpowers/`, the design notes of the template itself.
+1. **Copy the template.** Clone it (or use "Use this template" on GitHub) into your project name and start a fresh history.
 2. **Rename the Go module.** The module is called `backend` and 100 or so files import `backend/...`. Pick your module path (for example `github.com/acme/shop/backend`) and run, from the repository root:
 
    ```bash
