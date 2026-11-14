@@ -6,7 +6,7 @@ import { AxiosError, AxiosHeaders } from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import AdminUsers from '../index';
 import { endSession } from '../../../../api/session';
-import { OWN_ACCOUNT_CHANGED } from '../../../../utils/loginNotice';
+import { LOGIN_NOTICE_KEY } from '../../../../utils/loginNotice';
 import { userService } from '../../../../api/client';
 import type { User, UserListResponse } from '../../../../api/client';
 import { useAuth } from '../../../../context/AuthContext';
@@ -101,10 +101,10 @@ const mocked = {
   delete: vi.mocked(userService.delete),
 };
 
-/** Stands in for the login page: shows where the page went and the router state it got. */
+/** Stands in for the login page. */
 function LoginProbe() {
   const location = useLocation();
-  return <p>login page {JSON.stringify(location.state)}</p>;
+  return <p>login page {location.pathname}</p>;
 }
 
 function renderPage() {
@@ -135,6 +135,7 @@ describe('Admin Users page', () => {
   });
 
   afterEach(() => {
+    sessionStorage.clear();
     vi.clearAllMocks();
     vi.restoreAllMocks();
   });
@@ -469,7 +470,8 @@ describe('Admin Users page', () => {
     // bounce to /login before any toast is seen: so the session ends here and
     // the login page tells why.
     const expectSessionEnded = async () => {
-      expect(await screen.findByText(`login page ${JSON.stringify({ notice: OWN_ACCOUNT_CHANGED })}`)).toBeInTheDocument();
+      expect(await screen.findByText('login page /login')).toBeInTheDocument();
+      expect(sessionStorage.getItem(LOGIN_NOTICE_KEY)).toMatch(/^own-account-changed@\d+$/);
       expect(vi.mocked(endSession)).toHaveBeenCalledWith({ broadcast: true });
       expect(screen.queryByRole('table', { name: 'Users' })).not.toBeInTheDocument();
     };
@@ -538,6 +540,7 @@ describe('Admin Users page', () => {
 
       expect(await screen.findByText(LAST_ADMIN_MESSAGE)).toBeInTheDocument();
       expect(vi.mocked(endSession)).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem(LOGIN_NOTICE_KEY)).toBeNull();
     });
 
     it('does not end the session when another user is changed', async () => {

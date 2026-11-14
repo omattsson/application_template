@@ -7,7 +7,7 @@ import { redirectBrowser } from '../../../utils/navigation';
 import { getSession, resetSessionForTesting } from '../../../api/session';
 import { resetRefreshForTesting } from '../../../api/refresh';
 import { AuthProviders, fakeBackend, uiConfigOf } from '../../../test/authHarness';
-import { OWN_ACCOUNT_CHANGED } from '../../../utils/loginNotice';
+import { OWN_ACCOUNT_CHANGED, rememberLoginNotice } from '../../../utils/loginNotice';
 import { pathOf, tokenFor } from '../../../test/mockHttp';
 import type { MockReply } from '../../../test/mockHttp';
 import type { UIConfig } from '../../../context/UIConfigContext';
@@ -76,16 +76,18 @@ describe('Login page', () => {
     expect(screen.queryByRole('button', { name: 'Sign in with SSO' })).not.toBeInTheDocument();
   });
 
-  it('tells the user why the session ended after a change of their own account (router state)', async () => {
-    renderLogin(LOCAL, { state: { notice: OWN_ACCOUNT_CHANGED } });
+  it('tells the user why the session ended after a change of their own account (one-shot notice)', async () => {
+    rememberLoginNotice(OWN_ACCOUNT_CHANGED);
+    renderLogin(LOCAL);
     expect(await screen.findByText(/your own account/i)).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(/your own account/i);
   });
 
-  it('shows no notice for an unknown state, and never text from the URL', async () => {
+  it('shows no notice for an unknown stored value or router state, and never text from the URL', async () => {
+    sessionStorage.setItem('auth-login-notice', `Call 555-0100@${Date.now()}`);
     renderLogin(LOCAL, {
       path: `/login?notice=${encodeURIComponent('Call 555-0100')}&message=hello`,
-      state: { notice: 'Call 555-0100' },
+      state: { notice: OWN_ACCOUNT_CHANGED },
     });
     await screen.findByLabelText(/username/i);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();

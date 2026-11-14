@@ -29,7 +29,7 @@ import ConfirmDialog from '../../../components/ConfirmDialog';
 import EmptyState from '../../../components/EmptyState';
 import LoadingState from '../../../components/LoadingState';
 import { getApiErrorMessage } from '../../../utils/apiError';
-import { OWN_ACCOUNT_CHANGED } from '../../../utils/loginNotice';
+import { OWN_ACCOUNT_CHANGED, rememberLoginNotice } from '../../../utils/loginNotice';
 import { ROLES } from '../../../utils/jwt';
 import type { Role } from '../../../utils/jwt';
 import CreateUserDialog from './CreateUserDialog';
@@ -131,8 +131,10 @@ const AdminUsers = () => {
     try {
       const outcome = await change();
       if (outcome.endsOwnSession) {
-        // Leave first: once the session is gone the route guard would send this page to /login?next=.
-        navigate('/login', { replace: true, state: { notice: OWN_ACCOUNT_CHANGED } });
+        // The notice is not router state: ending the session makes the route
+        // guard redirect to /login itself, which replaces that state.
+        rememberLoginNotice(OWN_ACCOUNT_CHANGED);
+        navigate('/login', { replace: true });
         endSession({ broadcast: true });
         busyRef.current = false;
         return;
