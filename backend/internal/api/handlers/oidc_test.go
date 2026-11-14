@@ -151,6 +151,7 @@ type oidcHarness struct {
 	cfg     *config.OIDCConfig
 	authCfg *config.AuthConfig
 	router  *gin.Engine
+	revoker *recordingRevoker
 }
 
 type oidcOpt func(*oidcSetup)
@@ -220,10 +221,13 @@ func newOIDCHarness(t *testing.T, opts ...oidcOpt) *oidcHarness {
 		authH.SetRefreshTokenRepo(rt)
 	}
 	authH.SetSessionStore(st)
+	revoker := &recordingRevoker{}
+	authH.SetWebSocketRevoker(revoker)
 
 	provider, err := auth.NewProvider(cfg, auth.Options{AllowInsecureLoopbackForTesting: true})
 	require.NoError(t, err)
 	h := NewOIDCHandler(provider, authH, users, st, cfg)
+	h.blockRetryDelays = []time.Duration{time.Millisecond, time.Millisecond}
 
 	r := gin.New()
 	r.GET(oidcLoginPath, h.Login)
@@ -236,7 +240,7 @@ func newOIDCHarness(t *testing.T, opts ...oidcOpt) *oidcHarness {
 
 	return &oidcHarness{
 		idp: idp, auth: authH, h: h, db: db, rawUser: rawUser, users: users, tokens: tokens,
-		store: st, logs: logs, cfg: cfg, authCfg: authCfg, router: r,
+		store: st, logs: logs, cfg: cfg, authCfg: authCfg, router: r, revoker: revoker,
 	}
 }
 
@@ -693,6 +697,145 @@ func TestOIDCRoleIsSyncedOnEveryLogin(t *testing.T) {
 	require.Equal(t, http.StatusFound, w.Code)
 	assert.Equal(t, models.RoleAdmin, s.userBySub(t, "idp-user-1").Role)
 	assert.Equal(t, int64(1), s.userCount(t), "the same identity is the same account")
+}
+
+// refreshToken trades the refresh cookie of the browser for an access token.
+func (s *oidcHarness) refreshToken(b *browser) (int, string) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
+	b.apply(req)
+	withHeader("X-Requested-With", "XMLHttpRequest")(req)
+	rec := httptest.NewRecorder()
+	s.router.ServeHTTP(rec, req)
+	b.store(rec)
+	var resp RefreshResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	return rec.Code, resp.Token
+}
+
+func (s *oidcHarness) meStatus(t *testing.T, token string) int {
+	t.Helper()
+	return bearerGet(t, s.router, "/api/v1/auth/me", token).Code
+}
+
+// TestOIDCDemotionEndsTheOtherSessionsOfTheUser: tokens carry the role claim,
+// so a demotion by the identity provider must end every access token and
+// session of the user that was issued before the login, as ChangeUserRole
+// does, and close the sockets. The session of the login itself is not caught.
+func TestOIDCDemotionEndsTheOtherSessionsOfTheUser(t *testing.T) {
+	t.Parallel()
+	s := newOIDCHarness(t)
+	old, w := s.signIn(t, oidcClaims("roles", []string{"platform-admins"}))
+	require.Equal(t, http.StatusFound, w.Code)
+	code, oldToken := s.refreshToken(old)
+	require.Equal(t, http.StatusOK, code)
+	claims, err := middleware.ValidateJWT(oldToken, testJWTSecret)
+	require.NoError(t, err)
+	require.Equal(t, models.RoleAdmin, claims.Role)
+	require.Equal(t, http.StatusOK, s.meStatus(t, oldToken))
+
+	fresh, w := s.signIn(t, oidcClaims("roles", []string{"staff"}))
+	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
+
+	assert.Equal(t, http.StatusUnauthorized, s.meStatus(t, oldToken), "the access token with the admin claim is rejected")
+	code, _ = s.refreshToken(old)
+	assert.Equal(t, http.StatusUnauthorized, code, "the old session cannot get a new token")
+	code, freshToken := s.refreshToken(fresh)
+	require.Equal(t, http.StatusOK, code, "the session of this very login is not caught by the block")
+	freshClaims, err := middleware.ValidateJWT(freshToken, testJWTSecret)
+	require.NoError(t, err)
+	assert.Equal(t, models.RoleUser, freshClaims.Role)
+	assert.Equal(t, http.StatusOK, s.meStatus(t, freshToken))
+	users, _ := s.revoker.snapshot()
+	assert.Equal(t, []string{s.userBySub(t, "idp-user-1").ID}, users, "the sockets of the user are closed")
+}
+
+// TestOIDCRoleChangesThatDoNotLowerTheRoleKeepTheSessions: only a lowered role
+// is a revocation: a promotion, an unchanged role and a first login are not.
+func TestOIDCRoleChangesThatDoNotLowerTheRoleKeepTheSessions(t *testing.T) {
+	t.Parallel()
+	s := newOIDCHarness(t, func(o *oidcSetup) { o.oidc = func(c *config.OIDCConfig) { c.DevOpsRoles = []string{"builders"} } })
+	old, w := s.signIn(t, oidcClaims())
+	require.Equal(t, http.StatusFound, w.Code)
+	code, oldToken := s.refreshToken(old)
+	require.Equal(t, http.StatusOK, code)
+
+	for _, roles := range [][]string{{"staff"}, {"builders"}, {"platform-admins"}} {
+		_, w = s.signIn(t, oidcClaims("roles", roles))
+		require.Equal(t, http.StatusFound, w.Code)
+	}
+
+	assert.Equal(t, http.StatusOK, s.meStatus(t, oldToken), "no block for a first login, an unchanged role or a promotion")
+	users, _ := s.revoker.snapshot()
+	assert.Empty(t, users)
+}
+
+// TestOIDCDevOpsDemotionAlsoEndsTheSessions: any lowered role counts.
+func TestOIDCDevOpsDemotionAlsoEndsTheSessions(t *testing.T) {
+	t.Parallel()
+	s := newOIDCHarness(t, func(o *oidcSetup) { o.oidc = func(c *config.OIDCConfig) { c.DevOpsRoles = []string{"builders"} } })
+	old, w := s.signIn(t, oidcClaims("roles", []string{"builders"}))
+	require.Equal(t, http.StatusFound, w.Code)
+	code, oldToken := s.refreshToken(old)
+	require.Equal(t, http.StatusOK, code)
+
+	_, w = s.signIn(t, oidcClaims("roles", []string{"staff"}))
+	require.Equal(t, http.StatusFound, w.Code)
+
+	assert.Equal(t, http.StatusUnauthorized, s.meStatus(t, oldToken))
+}
+
+// TestOIDCDemotionBlockIsRetried: the block is written with the same bounded
+// retries as an admin role change.
+func TestOIDCDemotionBlockIsRetried(t *testing.T) {
+	t.Parallel()
+	var flaky *flakyBlockStore
+	s := newOIDCHarness(t, func(o *oidcSetup) {
+		o.wrapStore = func(st sessionstore.SessionStore) sessionstore.SessionStore {
+			flaky = &flakyBlockStore{SessionStore: st}
+			return flaky
+		}
+	})
+	old, w := s.signIn(t, oidcClaims("roles", []string{"platform-admins"}))
+	require.Equal(t, http.StatusFound, w.Code)
+	code, oldToken := s.refreshToken(old)
+	require.Equal(t, http.StatusOK, code)
+	flaky.setPlan(func(call int) bool { return call == 1 })
+
+	_, w = s.signIn(t, oidcClaims("roles", []string{"staff"}))
+
+	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
+	assert.Equal(t, 2, flaky.callCount(), "one failure, one success")
+	assert.Equal(t, http.StatusUnauthorized, s.meStatus(t, oldToken))
+	assert.Contains(t, s.logs.String(), "Retrying the user block")
+}
+
+// TestOIDCDemotionWithAFailedBlockRefusesTheLogin: the stored role is lowered
+// but the old tokens are not ended; no new session starts, the sockets are
+// closed anyway and the client sees the generic 500.
+func TestOIDCDemotionWithAFailedBlockRefusesTheLogin(t *testing.T) {
+	t.Parallel()
+	var flaky *flakyBlockStore
+	s := newOIDCHarness(t, func(o *oidcSetup) {
+		o.wrapStore = func(st sessionstore.SessionStore) sessionstore.SessionStore {
+			flaky = &flakyBlockStore{SessionStore: st}
+			return flaky
+		}
+	})
+	_, w := s.signIn(t, oidcClaims("roles", []string{"platform-admins"}))
+	require.Equal(t, http.StatusFound, w.Code)
+	rows := s.tokenRows(t)
+	flaky.setPlan(always)
+
+	b, w := s.signIn(t, oidcClaims("roles", []string{"staff"}))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.JSONEq(t, bodyInternal, w.Body.String())
+	assert.Nil(t, cookieNamed(w, hostRefreshCookie))
+	assert.NotContains(t, b.cookies, hostRefreshCookie)
+	assert.Equal(t, 1+len(s.h.blockRetryDelays), flaky.callCount(), "bounded retries")
+	users, _ := s.revoker.snapshot()
+	assert.Len(t, users, 1, "the sockets are closed even when the block failed")
+	assert.LessOrEqual(t, s.tokenRows(t), rows, "no new session")
 }
 
 func TestOIDCProfileIsSyncedAndOnlyChangesAreWritten(t *testing.T) {

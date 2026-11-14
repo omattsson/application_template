@@ -196,14 +196,21 @@ func (h *UserHandler) respondGuardedChangeError(c *gin.Context, err error, what 
 // error that can be transient is retried (not a cancelled context and not an
 // invalid key); the waits are blockRetryDelays and end with ctx.
 func (h *UserHandler) blockUser(ctx context.Context, userID string) error {
+	return blockUserWithRetry(ctx, h.log(), h.sessions, h.cfg, userID, h.blockRetryDelays)
+}
+
+// blockUserWithRetry is the retrying user block that the admin changes and the
+// OIDC role sync share (see UserHandler.blockUser): blockUserNow, retried after
+// each of delays while the error can be transient.
+func blockUserWithRetry(ctx context.Context, log *slog.Logger, store sessionstore.SessionStore, cfg *config.AuthConfig, userID string, delays []time.Duration) error {
 	for attempt := 0; ; attempt++ {
-		err := blockUserNow(ctx, h.sessions, userID, userBlockUntil(h.cfg))
-		if err == nil || attempt >= len(h.blockRetryDelays) ||
+		err := blockUserNow(ctx, store, userID, userBlockUntil(cfg))
+		if err == nil || attempt >= len(delays) ||
 			errors.Is(err, context.Canceled) || errors.Is(err, sessionstore.ErrInvalidKey) {
 			return err
 		}
-		h.log().Warn("Retrying the user block", "user_id", userID, "attempt", attempt+1, "error", err)
-		timer := time.NewTimer(h.blockRetryDelays[attempt])
+		log.Warn("Retrying the user block", "user_id", userID, "attempt", attempt+1, "error", err)
+		timer := time.NewTimer(delays[attempt])
 		select {
 		case <-ctx.Done():
 			timer.Stop()

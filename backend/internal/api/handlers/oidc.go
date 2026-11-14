@@ -12,6 +12,7 @@ import (
 	"backend/internal/api/middleware"
 	"backend/internal/auth"
 	"backend/internal/config"
+	"backend/internal/ctxutil"
 	"backend/internal/models"
 	"backend/internal/sessionstore"
 	"backend/pkg/dberrors"
@@ -81,6 +82,9 @@ type OIDCHandler struct {
 	cfg      *config.OIDCConfig
 	// exchangeTimeout is oidcExchangeTimeout (tests shorten it).
 	exchangeTimeout time.Duration
+	// blockRetryDelays are the waits between the attempts to write the user
+	// block of a demotion (see UserHandler.blockRetryDelays).
+	blockRetryDelays []time.Duration
 }
 
 // NewOIDCHandler creates an OIDCHandler. authHandler supplies the session
@@ -95,6 +99,8 @@ func NewOIDCHandler(provider OIDCProvider, authHandler *AuthHandler, users model
 		store:           store,
 		cfg:             cfg,
 		exchangeTimeout: oidcExchangeTimeout,
+
+		blockRetryDelays: defaultBlockRetryDelays,
 	}
 }
 
@@ -477,6 +483,7 @@ func (h *OIDCHandler) syncUser(ctx context.Context, user *models.User, ident *au
 		upd.DisplayName = &user.DisplayName
 		changed = true
 	}
+	lowered := roleRank(ident.Role) < roleRank(user.Role)
 	if ident.Role != user.Role {
 		if user.Role == models.RoleAdmin {
 			// An admin loses the role because of the identity provider: say so
@@ -495,7 +502,69 @@ func (h *OIDCHandler) syncUser(ctx context.Context, user *models.User, ident *au
 			return nil, err
 		}
 	}
+	if lowered {
+		// Access tokens carry the role claim and claim-trusting checks act on
+		// it until the token expires: end every session and token of the user
+		// that exists before this login, as an admin role change does.
+		if err := h.endSessionsOfDemotedUser(ctx, user.ID); err != nil {
+			return nil, err
+		}
+	}
 	return user, nil
+}
+
+// roleRank orders the roles by privilege; an unknown role ranks lowest.
+func roleRank(role string) int {
+	switch role {
+	case models.RoleAdmin:
+		return 2
+	case models.RoleDevOps:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// endSessionsOfDemotedUser ends the access of the user that was issued before
+// the demotion, with the steps and order of UserHandler.revokeUserAccess for a
+// role change; all of them run even when one fails:
+//  1. Revoke all refresh tokens of the user.
+//  2. Write the user block (retried a few times, see blockUserWithRetry). It
+//     answers after its own millisecond, so the session that this login
+//     starts next has a later start and is not caught by it.
+//  3. Close the sockets of the user on this replica (the others close theirs
+//     at the next revalidation).
+//
+// Each step has a WriteTimeout budget of its own on a context that the client
+// cannot cancel. It returns the joined errors of the steps that failed: the
+// login must not start a session while the old tokens still carry the role.
+func (h *OIDCHandler) endSessionsOfDemotedUser(ctx context.Context, userID string) error {
+	log := h.auth.log()
+	var errs []error
+	step := func(what string, fn func(context.Context) error) {
+		stepCtx, cancel := ctxutil.Detach(ctx, ctxutil.WriteTimeout)
+		defer cancel()
+		if err := fn(stepCtx); err != nil {
+			log.Error("Failed to "+what, "user_id", userID, "error", err)
+			errs = append(errs, err)
+		}
+	}
+	if h.auth.refreshTokenRepo != nil {
+		step("revoke the refresh tokens of a demoted user", func(c context.Context) error {
+			return h.auth.refreshTokenRepo.RevokeAllForUser(c, userID)
+		})
+	}
+	if h.auth.sessionStore != nil {
+		step("block a demoted user", func(c context.Context) error {
+			return blockUserWithRetry(c, log, h.auth.sessionStore, h.auth.cfg, userID, h.blockRetryDelays)
+		})
+	}
+	if h.auth.wsRevoker != nil {
+		if n := h.auth.wsRevoker.DisconnectUser(userID); n > 0 {
+			log.Info("Closed WebSocket connections of a demoted user", "user_id", userID, "connections", n)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // createUser creates the account of a first login. The username is the
