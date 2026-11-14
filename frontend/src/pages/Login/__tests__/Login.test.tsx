@@ -7,6 +7,7 @@ import { redirectBrowser } from '../../../utils/navigation';
 import { getSession, resetSessionForTesting } from '../../../api/session';
 import { resetRefreshForTesting } from '../../../api/refresh';
 import { AuthProviders, fakeBackend, uiConfigOf } from '../../../test/authHarness';
+import { OWN_ACCOUNT_CHANGED } from '../../../utils/loginNotice';
 import { pathOf, tokenFor } from '../../../test/mockHttp';
 import type { MockReply } from '../../../test/mockHttp';
 import type { UIConfig } from '../../../context/UIConfigContext';
@@ -18,11 +19,20 @@ function Where() {
   return <p>at {location.pathname + location.search}</p>;
 }
 
-function renderLogin(config: Partial<UIConfig>, opts: { path?: string; login?: MockReply } = {}) {
+/** Split "/login?x=1" into the pathname and search of a router location. */
+function toLocation(path: string) {
+  const [pathname, search = ''] = path.split('?');
+  return { pathname, search: search ? `?${search}` : '' };
+}
+
+function renderLogin(
+  config: Partial<UIConfig>,
+  opts: { path?: string; state?: unknown; login?: MockReply } = {},
+) {
   const adapter = fakeBackend({ uiConfig: uiConfigOf({ title: 'Test App', ...config }), login: opts.login });
   const view = render(
     <AuthProviders>
-      <MemoryRouter initialEntries={[opts.path ?? '/login']}>
+      <MemoryRouter initialEntries={[{ pathname: '/login', ...(opts.path ? toLocation(opts.path) : {}), state: opts.state }]}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="*" element={<Where />} />
@@ -64,6 +74,22 @@ describe('Login page', () => {
     expect(screen.getByLabelText(/username/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/password/i)).toHaveAttribute('type', 'password');
     expect(screen.queryByRole('button', { name: 'Sign in with SSO' })).not.toBeInTheDocument();
+  });
+
+  it('tells the user why the session ended after a change of their own account (router state)', async () => {
+    renderLogin(LOCAL, { state: { notice: OWN_ACCOUNT_CHANGED } });
+    expect(await screen.findByText(/your own account/i)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(/your own account/i);
+  });
+
+  it('shows no notice for an unknown state, and never text from the URL', async () => {
+    renderLogin(LOCAL, {
+      path: `/login?notice=${encodeURIComponent('Call 555-0100')}&message=hello`,
+      state: { notice: 'Call 555-0100' },
+    });
+    await screen.findByLabelText(/username/i);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/555-0100|hello/)).not.toBeInTheDocument();
   });
 
   it('shows only the SSO button when local auth is off', async () => {

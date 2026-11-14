@@ -1,23 +1,28 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Navigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Alert, Box, Button, Divider, Paper, TextField, Typography } from '@mui/material';
 import LoginIcon from '@mui/icons-material/Login';
 import LoadingState from '../../components/LoadingState';
 import { useAuth } from '../../context/AuthContext';
 import { useUIConfig } from '../../context/UIConfigContext';
+import { loginNoticeFrom } from '../../utils/loginNotice';
 import { safeReturnPath } from '../../utils/returnPath';
 import { describeLoginError } from './loginError';
 
 /**
  * Sign-in page. Shows the password form when `local_auth_enabled` and the SSO
  * button when `oidc_enabled`. After sign-in it goes to the `next` parameter
- * (validated: same-origin path only) or home. With auth off it goes home.
+ * (validated: same-origin path only) or home. With auth off it goes home. A
+ * known notice key in the router state (see utils/loginNotice) explains why
+ * the user was sent here.
  */
 const Login = () => {
   const { authEnabled, isLoading, isAuthenticated, login, loginWithOIDC } = useAuth();
   const { config } = useUIConfig();
   const [searchParams] = useSearchParams();
+  // Set by the app itself (router state, a key of a closed list), never by the URL.
+  const notice = loginNoticeFrom(useLocation().state);
   const next = safeReturnPath(searchParams.get('next'));
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -61,6 +66,12 @@ const Login = () => {
         <Typography variant="h5" component="h1" gutterBottom sx={{ textAlign: 'center' }}>
           Sign in
         </Typography>
+
+        {notice && (
+          <Alert severity="info" role="status" sx={{ mb: 2 }}>
+            {notice}
+          </Alert>
+        )}
 
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>

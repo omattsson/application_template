@@ -1,15 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { AxiosError, AxiosHeaders } from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import AdminUsers from '../index';
+import { endSession } from '../../../../api/session';
+import { OWN_ACCOUNT_CHANGED } from '../../../../utils/loginNotice';
 import { userService } from '../../../../api/client';
 import type { User, UserListResponse } from '../../../../api/client';
 import { useAuth } from '../../../../context/AuthContext';
 import type { AuthContextValue } from '../../../../context/AuthContext';
 
 vi.mock('../../../../context/AuthContext', () => ({ useAuth: vi.fn() }));
+vi.mock('../../../../api/session', () => ({ endSession: vi.fn() }));
 
 vi.mock('../../../../api/client', () => ({
   userService: {
@@ -97,9 +101,26 @@ const mocked = {
   delete: vi.mocked(userService.delete),
 };
 
+/** Stands in for the login page: shows where the page went and the router state it got. */
+function LoginProbe() {
+  const location = useLocation();
+  return <p>login page {JSON.stringify(location.state)}</p>;
+}
+
+function renderPage() {
+  return render(
+    <MemoryRouter initialEntries={['/admin/users']}>
+      <Routes>
+        <Route path="/admin/users" element={<AdminUsers />} />
+        <Route path="/login" element={<LoginProbe />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 async function renderLoaded(users: User[] = [ALICE, BOB, CAROL]) {
   mocked.list.mockResolvedValue(page(users));
-  render(<AdminUsers />);
+  renderPage();
   await screen.findByRole('table', { name: 'Users' });
 }
 
@@ -121,7 +142,7 @@ describe('Admin Users page', () => {
   describe('list', () => {
     it('shows a loading state while the users load', () => {
       mocked.list.mockReturnValue(new Promise(() => {}));
-      render(<AdminUsers />);
+      renderPage();
       expect(screen.getByRole('heading', { level: 1, name: 'Users' })).toBeInTheDocument();
       expect(screen.getByRole('progressbar')).toBeInTheDocument();
     });
@@ -150,7 +171,7 @@ describe('Admin Users page', () => {
 
     it('shows an empty state when there are no users', async () => {
       mocked.list.mockResolvedValue(page([]));
-      render(<AdminUsers />);
+      renderPage();
       expect(await screen.findByText('No users found')).toBeInTheDocument();
       expect(screen.queryByRole('table')).not.toBeInTheDocument();
     });
@@ -158,7 +179,7 @@ describe('Admin Users page', () => {
     it('shows the server message in an alert when the list fails, and retries', async () => {
       const user = userEvent.setup();
       mocked.list.mockRejectedValueOnce(httpError(403, { error: 'Admin role required' }));
-      render(<AdminUsers />);
+      renderPage();
       expect(await screen.findByRole('alert')).toHaveTextContent('Admin role required');
 
       mocked.list.mockResolvedValue(page([ALICE]));
@@ -169,7 +190,7 @@ describe('Admin Users page', () => {
 
     it('never shows the body of a 5xx answer', async () => {
       mocked.list.mockRejectedValueOnce(httpError(500, { error: 'pq: relation "users" does not exist' }));
-      render(<AdminUsers />);
+      renderPage();
       const alert = await screen.findByRole('alert');
       expect(alert).not.toHaveTextContent('relation');
     });
@@ -181,7 +202,7 @@ describe('Admin Users page', () => {
       mocked.list.mockImplementation(async (pageNumber) =>
         pageNumber === 1 ? page([ALICE], 40) : page([BOB], 40, 2),
       );
-      render(<AdminUsers />);
+      renderPage();
       await screen.findByRole('table', { name: 'Users' });
       expect(screen.getByText('1–25 of 40')).toBeInTheDocument();
 
@@ -194,7 +215,7 @@ describe('Admin Users page', () => {
     it('goes back to page 1 when the page size changes', async () => {
       const user = userEvent.setup();
       mocked.list.mockResolvedValue(page([ALICE], 40));
-      render(<AdminUsers />);
+      renderPage();
       await screen.findByRole('table', { name: 'Users' });
 
       await user.click(screen.getByRole('combobox', { name: /rows per page/i }));
@@ -209,7 +230,7 @@ describe('Admin Users page', () => {
         if (pageNumber === 2) return page([BOB], 26, 2);
         return page([ALICE], 26, 1);
       });
-      render(<AdminUsers />);
+      renderPage();
       await screen.findByRole('table', { name: 'Users' });
       await user.click(screen.getByRole('button', { name: /next page/i }));
       await screen.findByText('bob');
@@ -443,9 +464,20 @@ describe('Admin Users page', () => {
       expect(await screen.findByRole('dialog', { name: 'Delete user' })).not.toHaveAccessibleDescription(/your own account/i);
     });
 
-    it('warns after changing your own role, and still lets the backend decide', async () => {
+    // The backend ends every session of the target. Loading the list again
+    // would answer 401, the refresh would be refused and the route guard would
+    // bounce to /login before any toast is seen: so the session ends here and
+    // the login page tells why.
+    const expectSessionEnded = async () => {
+      expect(await screen.findByText(`login page ${JSON.stringify({ notice: OWN_ACCOUNT_CHANGED })}`)).toBeInTheDocument();
+      expect(vi.mocked(endSession)).toHaveBeenCalledWith({ broadcast: true });
+      expect(screen.queryByRole('table', { name: 'Users' })).not.toBeInTheDocument();
+    };
+
+    it('ends the session and goes to the login page after changing your own role, without reloading the list', async () => {
       const user = userEvent.setup();
       await renderLoaded();
+      mocked.list.mockClear();
       mocked.changeRole.mockResolvedValue({
         id: ALICE.id, old_role: 'admin', new_role: 'devops', message: 'Role changed', changed: true, idp_managed: false,
       });
@@ -454,24 +486,76 @@ describe('Admin Users page', () => {
       await user.click(await screen.findByRole('option', { name: 'devops' }));
 
       await waitFor(() => expect(mocked.changeRole).toHaveBeenCalledWith(ALICE.id, 'devops'));
-      expect(await screen.findByText(/Role of alice changed to devops.*your own account/)).toBeInTheDocument();
+      await expectSessionEnded();
+      expect(mocked.list).not.toHaveBeenCalled();
     });
 
-    it('warns after disabling yourself', async () => {
+    it('keeps the session when your own role is already the one chosen by the server (nothing changed)', async () => {
       const user = userEvent.setup();
       await renderLoaded();
+      mocked.changeRole.mockResolvedValue({
+        id: ALICE.id, old_role: 'admin', new_role: 'devops', message: 'Role unchanged', changed: false, idp_managed: false,
+      });
+
+      await user.click(screen.getByRole('combobox', { name: 'Role of alice' }));
+      await user.click(await screen.findByRole('option', { name: 'devops' }));
+
+      expect(await screen.findByText(/Role of alice is already devops/)).toBeInTheDocument();
+      expect(vi.mocked(endSession)).not.toHaveBeenCalled();
+    });
+
+    it('ends the session after disabling yourself', async () => {
+      const user = userEvent.setup();
+      await renderLoaded();
+      mocked.list.mockClear();
       mocked.setDisabled.mockResolvedValue({ id: ALICE.id, disabled: true, changed: true, message: 'User disabled' });
 
       await user.click(screen.getByRole('button', { name: 'Disable alice' }));
 
-      expect(await screen.findByText(/alice disabled.*your own account/)).toBeInTheDocument();
+      await expectSessionEnded();
+      expect(mocked.list).not.toHaveBeenCalled();
+    });
+
+    it('ends the session after deleting yourself', async () => {
+      const user = userEvent.setup();
+      await renderLoaded();
+      mocked.list.mockClear();
+
+      await user.click(screen.getByRole('button', { name: 'Delete alice' }));
+      await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }));
+
+      await waitFor(() => expect(mocked.delete).toHaveBeenCalledWith(ALICE.id));
+      await expectSessionEnded();
+      expect(mocked.list).not.toHaveBeenCalled();
+    });
+
+    it('keeps the session when your own change fails (nothing was changed)', async () => {
+      const user = userEvent.setup();
+      await renderLoaded();
+      mocked.setDisabled.mockRejectedValue(httpError(409, { error: LAST_ADMIN_MESSAGE }));
+
+      await user.click(screen.getByRole('button', { name: 'Disable alice' }));
+
+      expect(await screen.findByText(LAST_ADMIN_MESSAGE)).toBeInTheDocument();
+      expect(vi.mocked(endSession)).not.toHaveBeenCalled();
+    });
+
+    it('does not end the session when another user is changed', async () => {
+      const user = userEvent.setup();
+      await renderLoaded();
+      mocked.setDisabled.mockResolvedValue({ id: BOB.id, disabled: true, changed: true, message: 'User disabled' });
+
+      await user.click(screen.getByRole('button', { name: 'Disable bob' }));
+
+      expect(await screen.findByText('bob disabled')).toBeInTheDocument();
+      expect(vi.mocked(endSession)).not.toHaveBeenCalled();
     });
   });
 
   describe('auth disabled', () => {
     it('explains that user management needs authentication and calls no API', () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: false, isAuthenticated: false, user: null, role: null }));
-      render(<AdminUsers />);
+      renderPage();
       expect(screen.getByText(/requires authentication to be enabled/i)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Create user' })).not.toBeInTheDocument();
       expect(mocked.list).not.toHaveBeenCalled();
@@ -484,7 +568,7 @@ describe('Admin Users page', () => {
       mocked.list.mockImplementation(async (pageNumber) =>
         pageNumber === 1 ? page([ALICE], 50) : page([], 50, 2),
       );
-      render(<AdminUsers />);
+      renderPage();
       await screen.findByRole('table', { name: 'Users' });
 
       await user.click(screen.getByRole('button', { name: /next page/i }));

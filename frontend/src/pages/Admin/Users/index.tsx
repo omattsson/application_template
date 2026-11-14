@@ -20,6 +20,8 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PeopleIcon from '@mui/icons-material/People';
+import { useNavigate } from 'react-router-dom';
+import { endSession } from '../../../api/session';
 import { userService } from '../../../api/client';
 import { useAuth } from '../../../context/AuthContext';
 import type { User } from '../../../api/client';
@@ -27,6 +29,7 @@ import ConfirmDialog from '../../../components/ConfirmDialog';
 import EmptyState from '../../../components/EmptyState';
 import LoadingState from '../../../components/LoadingState';
 import { getApiErrorMessage } from '../../../utils/apiError';
+import { OWN_ACCOUNT_CHANGED } from '../../../utils/loginNotice';
 import { ROLES } from '../../../utils/jwt';
 import type { Role } from '../../../utils/jwt';
 import CreateUserDialog from './CreateUserDialog';
@@ -35,8 +38,8 @@ import CreateUserDialog from './CreateUserDialog';
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
-/** Added to a change of the signed-in user's own account: the API ends the sessions of the target. */
-const SELF_NOTICE = ' This is your own account: your session ends and you may have to sign in again.';
+/** What a change gives back: the toast text, and whether it ended the signed-in user's own sessions. */
+type ChangeOutcome = { message: string; endsOwnSession?: boolean };
 
 /**
  * Administration of users (admin role). Lists one page at a time, creates
@@ -46,6 +49,7 @@ const SELF_NOTICE = ' This is your own account: your session ends and you may ha
  */
 const AdminUsers = () => {
   const { authEnabled, user: currentUser } = useAuth();
+  const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
@@ -113,14 +117,27 @@ const AdminUsers = () => {
   /**
    * Run one change at a time. The list is loaded again after a failure as well
    * as after a success, so a row that changed or vanished meanwhile is not stale.
+   *
+   * A change of the signed-in user's own role, status or account makes the API
+   * end all that user's sessions: loading the list again would answer 401, the
+   * refresh would be refused and the route guard would bounce to /login before
+   * the toast is seen. So the session ends here and the login page tells why.
    */
-  const runChange = async (change: () => Promise<string>): Promise<void> => {
+  const runChange = async (change: () => Promise<ChangeOutcome>): Promise<void> => {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setActionError(null);
     try {
-      showNotice(await change());
+      const outcome = await change();
+      if (outcome.endsOwnSession) {
+        // Leave first: once the session is gone the route guard would send this page to /login?next=.
+        navigate('/login', { replace: true, state: { notice: OWN_ACCOUNT_CHANGED } });
+        endSession({ broadcast: true });
+        busyRef.current = false;
+        return;
+      }
+      showNotice(outcome.message);
     } catch (err: unknown) {
       setActionError(getApiErrorMessage(err));
     }
@@ -141,17 +158,20 @@ const AdminUsers = () => {
     if (role === user.role) return;
     void runChange(async () => {
       const result = await userService.changeRole(user.id, role);
-      if (!result.changed) return `Role of ${user.username} is already ${role}`;
+      if (!result.changed) return { message: `Role of ${user.username} is already ${role}` };
       const idp = result.idp_managed ? '; the identity provider may override it at the next login' : '';
-      return `Role of ${user.username} changed to ${role}${idp}${isSelf(user) ? SELF_NOTICE : ''}`;
+      return { message: `Role of ${user.username} changed to ${role}${idp}`, endsOwnSession: isSelf(user) };
     });
   };
 
   const handleToggleDisabled = (user: User) => {
     const disabled = !user.disabled;
     void runChange(async () => {
-      await userService.setDisabled(user.id, disabled);
-      return `${user.username} ${disabled ? 'disabled' : 'enabled'}${isSelf(user) ? SELF_NOTICE : ''}`;
+      const result = await userService.setDisabled(user.id, disabled);
+      return {
+        message: `${user.username} ${disabled ? 'disabled' : 'enabled'}`,
+        endsOwnSession: isSelf(user) && disabled && result.changed,
+      };
     });
   };
 
@@ -161,7 +181,7 @@ const AdminUsers = () => {
     setDeleteOpen(false);
     void runChange(async () => {
       await userService.delete(target.id);
-      return `User ${target.username} deleted`;
+      return { message: `User ${target.username} deleted`, endsOwnSession: isSelf(target) };
     });
   };
 
