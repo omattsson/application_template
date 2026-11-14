@@ -14,6 +14,7 @@ import (
 	"backend/internal/sessionstore"
 	"backend/pkg/dberrors"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -124,4 +125,27 @@ func TestLimiterIsPerStoreErrorLogInstance(t *testing.T) {
 	assert.Contains(t, buf.String(), "from a")
 	assert.Contains(t, buf.String(), "from b", "another middleware has its own budget")
 	assert.NotContains(t, buf.String(), "from a again")
+}
+
+// TestRequireActiveUserStoreErrorDoesNotFloodTheLog: the account lookup of a
+// /ws upgrade fails for every request while the database is down; one Error
+// line per interval, the rest at Debug, and the answers do not change.
+func TestRequireActiveUserStoreErrorDoesNotFloodTheLog(t *testing.T) {
+	buf := captureLogs(t)
+	users := newUserRepoFake()
+	users.findErr = dberrors.NewDatabaseError("find", errors.New("dial tcp 10.0.0.5:3306: refused"))
+	r := gin.New()
+	r.GET("/x", func(c *gin.Context) {
+		c.Set(contextKeyUserID, "u1")
+		c.Next()
+	}, RequireActiveUser(users), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	for i := 0; i < 50; i++ {
+		w := doGet(r, "/x", nil)
+		require.Equal(t, http.StatusInternalServerError, w.Code, "the answer is the same as before")
+	}
+
+	out := buf.String()
+	assert.Len(t, lines(out, "level=ERROR", "User check failed"), 1)
+	assert.Len(t, lines(out, "level=DEBUG", "User check failed"), 49)
 }

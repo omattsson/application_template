@@ -40,8 +40,11 @@ func WebSocketQueryToken() gin.HandlerFunc {
 // blocklists; a long-lived connection such as a WebSocket also checks the
 // account itself before it opens. A request without a user is 401. A failed
 // lookup is 500 (fail closed: the lookup is the only check that sees the
-// account directly), a cancelled request 499. Put it after CombinedAuth.
+// account directly), a cancelled request 499. The failed lookups are logged
+// with a storeErrorLog (one Error line per interval during an outage). Put it
+// after CombinedAuth.
 func RequireActiveUser(users models.UserRepository) gin.HandlerFunc {
+	errLog := newStoreErrorLog()
 	return func(c *gin.Context) {
 		userID := GetUserIDFromContext(c)
 		if userID == "" {
@@ -59,7 +62,7 @@ func RequireActiveUser(users models.UserRepository) gin.HandlerFunc {
 			slog.DebugContext(c.Request.Context(), "User check cancelled by the client", "user_id", userID, "error", err)
 			c.AbortWithStatusJSON(statusClientClosedRequest, gin.H{"error": msgClientClosed})
 		default:
-			slog.ErrorContext(c.Request.Context(), "User check failed", "user_id", userID, "error", err)
+			errLog.log(c.Request.Context(), "User check failed", "user_id", userID, "error", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": msgInternalError})
 		}
 	}

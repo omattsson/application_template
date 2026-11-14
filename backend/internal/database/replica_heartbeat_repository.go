@@ -9,6 +9,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 // Compile-time interface check.
@@ -24,8 +25,14 @@ type GORMReplicaHeartbeatRepository struct {
 
 // NewGORMReplicaHeartbeatRepository creates a GORM-backed heartbeat
 // repository. The table replica_heartbeats must exist (migration
-// 20260101000003).
+// 20260101000003). Its statements run on a session with a silent GORM logger:
+// while the database fails, every heartbeat write (and cleanup run) would
+// write an Error line, and the callers log a failure once themselves
+// (replica.Heartbeat, the leader worker).
 func NewGORMReplicaHeartbeatRepository(db *gorm.DB) *GORMReplicaHeartbeatRepository {
+	if db != nil && db.Logger != nil {
+		db = db.Session(&gorm.Session{Logger: db.Logger.LogMode(logger.Silent)})
+	}
 	return &GORMReplicaHeartbeatRepository{BaseRepository: NewBaseRepository(db)}
 }
 

@@ -11,6 +11,7 @@ import (
 	"backend/pkg/dberrors"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // Defaults of LeaseConfig.
@@ -136,6 +137,12 @@ func NewLease(db *gorm.DB, name, holder string, cfg LeaseConfig) *Lease {
 	}
 	if db == nil || name == "" || holder == "" {
 		panic("leader.NewLease needs a database, a name and a holder")
+	}
+	// The lease statements run on a session with a silent GORM logger: during
+	// an outage one statement fails every RetryPeriod, and the logger would
+	// write an Error line for each. Run logs the outage once itself.
+	if db.Logger != nil {
+		db = db.Session(&gorm.Session{Logger: db.Logger.LogMode(logger.Silent)})
 	}
 	return &Lease{db: db, sql: sqlFor(db.Dialector.Name()), name: name, holder: holder, cfg: cfg}
 }
