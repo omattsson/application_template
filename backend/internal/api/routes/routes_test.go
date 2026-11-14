@@ -419,3 +419,42 @@ func TestUIConfigRouteIsRateLimited(t *testing.T) {
 
 	assert.Equal(t, http.StatusTooManyRequests, last.Code)
 }
+
+// TestTrailingSlashIsNotRedirected: with RedirectTrailingSlash on, Gin answers
+// GET /ws/?token=... with a 301 before any middleware runs and, in debug mode,
+// prints the redirect target (with the query, so the WebSocket token) to its
+// own writer. The router must not redirect at all: a path with a trailing
+// slash is a plain 404.
+func TestTrailingSlashIsNotRedirected(t *testing.T) {
+	// Not parallel: gin.SetMode and gin.DefaultWriter are process-wide.
+	var buf bytes.Buffer
+	origWriter := gin.DefaultWriter
+	gin.SetMode(gin.DebugMode)
+	gin.DefaultWriter = &buf
+	t.Cleanup(func() {
+		gin.DefaultWriter = origWriter
+		gin.SetMode(gin.TestMode)
+	})
+
+	router, _ := newTestRouter(t, testConfig(100, 10, nil))
+
+	for _, target := range []string{
+		"/ws/?token=abc-secret-jwt",
+		"/api/v1/items/?token=abc-secret-jwt",
+		"/health/live/",
+		"/API/V1/ITEMS?token=abc-secret-jwt",
+	} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.RequestURI = req.URL.RequestURI()
+		req.RemoteAddr = testPeer
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code, target)
+		assert.Empty(t, w.Header().Get("Location"), target)
+	}
+
+	out := buf.String()
+	assert.NotContains(t, out, "abc-secret-jwt", "gin's debug output must never hold the WebSocket token")
+	assert.NotContains(t, out, "redirecting request")
+}

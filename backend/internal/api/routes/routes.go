@@ -173,6 +173,14 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 
 	setTrustedProxies(router, cfg.Server.TrustedProxies)
 
+	// No redirects of any kind. Gin answers a path with or without a trailing
+	// slash (and, with RedirectFixedPath, a path in another case) with a 301
+	// before any middleware runs, and in debug mode prints the target, query
+	// string included, to its own writer: the /ws token would reach the log
+	// ahead of RedactWSToken. A request that does not match a route is a 404.
+	router.RedirectTrailingSlash = false
+	router.RedirectFixedPath = false
+
 	// Add middleware. RedactWSToken runs before Logger and the telemetry
 	// middleware so the WebSocket token in the query string is never recorded
 	// in a log line, a span attribute or a metric label.
