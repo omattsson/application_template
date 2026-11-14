@@ -37,7 +37,7 @@ By participating in this project, you agree to abide by our Code of Conduct. Ple
 4. Add or update tests as necessary.
 5. Update documentation if needed.
 6. Ensure all tests pass.
-7. Create a pull request using the appropriate template.
+7. Create a pull request using the appropriate template. The **pull request title must follow Conventional Commits**: `<type>(<optional scope>): <subject>`, for example `fix(auth): refuse an expired refresh token`. The type is one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert` or `deps`. The `PR title` check (`.github/workflows/pr-title.yml`) runs on every edit of the title and must pass before the pull request can be merged.
 
 ## Development Setup
 
@@ -96,8 +96,7 @@ make test-frontend
 
 ## Branching Strategy
 
-- `main` - stable production code
-- `dev` - development branch for next release
+- `main` - the only long-lived branch: pull requests target it, and the CI workflows run only for pull requests into `main` and pushes to `main`. (A `dev` branch gets no CI; do not open pull requests against one unless you also add it to the `branches:` of the workflows.)
 - `feature/<name>` - for new features
 - `fix/<name>` - for bug fixes
 - `docs/<name>` - for documentation changes

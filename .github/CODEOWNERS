@@ -29,5 +29,6 @@ Makefile @devops-team
 WIKI.md @docs-team
 
 # GitHub-specific files
-/.github/ @repo-admin @devops-team
-/.github/ @repo-admin @docs-team
+# One rule with every owner: when several rules match, the last one wins, so
+# two lines for the same path would drop the owners of the first.
+/.github/ @repo-admin @devops-team @docs-team
