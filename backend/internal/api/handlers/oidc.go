@@ -495,18 +495,24 @@ func (h *OIDCHandler) syncUser(ctx context.Context, user *models.User, ident *au
 		upd.Role = &user.Role
 		changed = true
 	}
+	if lowered {
+		// Access tokens carry the role claim and claim-trusting checks act on
+		// it until the token expires: end every session and token of the user
+		// that exists before this login, as an admin role change does. It runs
+		// BEFORE the lower role is stored: a failed step refuses the login with
+		// the stored role unchanged, so the next login finds the role still to
+		// be lowered and runs the demotion again. A token that a concurrent
+		// refresh signs in the gap before the write is blocked too (its session
+		// started before the block), and the block answers after its own
+		// millisecond, so the session of this login is not caught by it.
+		if err := h.endSessionsOfDemotedUser(ctx, user.ID); err != nil {
+			return nil, err
+		}
+	}
 	if changed {
 		// A failed write ends the login: a session must not start with a role
 		// or profile that was not stored.
 		if err := h.users.UpdateProfile(ctx, user.ID, upd); err != nil {
-			return nil, err
-		}
-	}
-	if lowered {
-		// Access tokens carry the role claim and claim-trusting checks act on
-		// it until the token expires: end every session and token of the user
-		// that exists before this login, as an admin role change does.
-		if err := h.endSessionsOfDemotedUser(ctx, user.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -526,7 +532,7 @@ func roleRank(role string) int {
 }
 
 // endSessionsOfDemotedUser ends the access of the user that was issued before
-// the demotion, with the steps and order of UserHandler.revokeUserAccess for a
+// the demotion (it runs before the lower role is stored), with the steps and order of UserHandler.revokeUserAccess for a
 // role change; all of them run even when one fails:
 //  1. Revoke all refresh tokens of the user.
 //  2. Write the user block (retried a few times, see blockUserWithRetry). It

@@ -809,9 +809,10 @@ func TestOIDCDemotionBlockIsRetried(t *testing.T) {
 	assert.Contains(t, s.logs.String(), "Retrying the user block")
 }
 
-// TestOIDCDemotionWithAFailedBlockRefusesTheLogin: the stored role is lowered
-// but the old tokens are not ended; no new session starts, the sockets are
-// closed anyway and the client sees the generic 500.
+// TestOIDCDemotionWithAFailedBlockRefusesTheLogin: the block runs before the
+// role is stored. A failed block gives the generic 500, starts no session, closes
+// the sockets anyway and leaves the stored role unchanged, so the next login
+// runs the whole demotion again and ends the old tokens.
 func TestOIDCDemotionWithAFailedBlockRefusesTheLogin(t *testing.T) {
 	t.Parallel()
 	var flaky *flakyBlockStore
@@ -821,8 +822,10 @@ func TestOIDCDemotionWithAFailedBlockRefusesTheLogin(t *testing.T) {
 			return flaky
 		}
 	})
-	_, w := s.signIn(t, oidcClaims("roles", []string{"platform-admins"}))
+	old, w := s.signIn(t, oidcClaims("roles", []string{"platform-admins"}))
 	require.Equal(t, http.StatusFound, w.Code)
+	code, oldToken := s.refreshToken(old)
+	require.Equal(t, http.StatusOK, code)
 	rows := s.tokenRows(t)
 	flaky.setPlan(always)
 
@@ -836,6 +839,18 @@ func TestOIDCDemotionWithAFailedBlockRefusesTheLogin(t *testing.T) {
 	users, _ := s.revoker.snapshot()
 	assert.Len(t, users, 1, "the sockets are closed even when the block failed")
 	assert.LessOrEqual(t, s.tokenRows(t), rows, "no new session")
+	assert.Equal(t, models.RoleAdmin, s.userBySub(t, "idp-user-1").Role, "the role is not stored before the old tokens are ended")
+	assert.Equal(t, http.StatusOK, s.meStatus(t, oldToken), "the block failed: the old token still works")
+
+	// The store recovers: the next login runs the demotion again.
+	flaky.setPlan(nil)
+	fresh, w := s.signIn(t, oidcClaims("roles", []string{"staff"}))
+	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
+	assert.Equal(t, models.RoleUser, s.userBySub(t, "idp-user-1").Role)
+	assert.Equal(t, http.StatusUnauthorized, s.meStatus(t, oldToken), "the retry ended the old token")
+	code, freshToken := s.refreshToken(fresh)
+	require.Equal(t, http.StatusOK, code, "and its own session is not caught by the block")
+	assert.Equal(t, http.StatusOK, s.meStatus(t, freshToken))
 }
 
 func TestOIDCProfileIsSyncedAndOnlyChangesAreWritten(t *testing.T) {
