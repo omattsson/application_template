@@ -19,7 +19,7 @@ Where things are. Run `ls` when a file is missing here: the tree below lists the
 ├── frontend/                  # React app
 ├── docs/claude/               # Reference docs that CLAUDE.md links to
 ├── scripts/                   # Check and test scripts (see below)
-├── .claude/                   # Claude Code agents (agents/), the ship-issue skill (skills/), permissions (settings.json)
+├── .claude/                   # Claude Code agents (agents/), the ship-issue skill (skills/), permissions (settings.json), specs of running work (work/, git-ignored)
 └── .github/                   # Workflows, templates, Copilot instructions, agents
 ```
 
