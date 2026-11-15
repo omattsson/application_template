@@ -107,7 +107,16 @@ type UserFilter struct {
 	// it (case-insensitive on the default MySQL collation). % and _ are
 	// literals.
 	Search string
+	// SortBy is the sort key, one of UserSortKeys. Empty sorts by username.
+	// An unknown key makes ListPaged fail with dberrors.ErrValidation.
+	SortBy string
+	// SortDesc reverses the order. The id tiebreaker follows it.
+	SortDesc bool
 }
+
+// UserSortKeys are the keys that UserFilter.SortBy accepts (the values of the
+// sort query parameter of GET /api/v1/users). Each one has an index.
+var UserSortKeys = []string{"username", "email", "role", "created_at"}
 
 // UserRepository defines data access operations for users. There is no
 // full-row update: each change writes only its own columns, so concurrent

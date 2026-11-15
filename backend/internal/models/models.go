@@ -13,6 +13,7 @@ import (
 	"backend/pkg/dberrors"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Base model with common fields
@@ -262,16 +263,65 @@ func (r *GenericRepository) List(ctx context.Context, dest interface{}, conditio
 	return nil
 }
 
-// ItemFilter selects items for ListPaged. A zero field does not filter.
+// ItemFilter selects and sorts items for ListPaged. A zero field does not
+// filter.
 type ItemFilter struct {
 	// Name matches items whose name contains it (case-insensitive on the
 	// default MySQL collation). % and _ are literals.
 	Name string
 	// NameExact matches the whole name and takes precedence over Name.
 	NameExact string
+	// SortBy is the sort key, one of ItemSortKeys. Empty sorts by id. An
+	// unknown key makes ListPaged fail with dberrors.ErrValidation.
+	SortBy string
 	// MinPrice and MaxPrice bound the price (inclusive) when greater than 0.
 	MinPrice float64
 	MaxPrice float64
+	// SortDesc reverses the order. The id tiebreaker follows it.
+	SortDesc bool
+}
+
+// ItemSortKeys are the keys that ItemFilter.SortBy accepts (the values of the
+// sort query parameter of GET /api/v1/items). Each one has an index (see the
+// add_sort_indexes migration), so a sorted page does not need a filesort.
+var ItemSortKeys = []string{"id", "name", "price", "created_at", "updated_at"}
+
+// itemSortColumns maps a sort key to its column. It is the only place where a
+// key becomes SQL: a key that is not in it is refused.
+var itemSortColumns = map[string]string{
+	"id":         "id",
+	"name":       "name",
+	"price":      "price",
+	"created_at": "created_at",
+	"updated_at": "updated_at",
+}
+
+// SortColumn returns the column that f sorts by: the column of SortBy, or id
+// when SortBy is empty. An unknown key is dberrors.ErrValidation.
+func (f ItemFilter) SortColumn() (string, error) {
+	if f.SortBy == "" {
+		return "id", nil
+	}
+	col, ok := itemSortColumns[f.SortBy]
+	if !ok {
+		return "", dberrors.NewDatabaseError("list_paged", fmt.Errorf("%w: sort key", dberrors.ErrValidation))
+	}
+	return col, nil
+}
+
+// orderBy applies the sort: the column, then id as the tiebreaker, both in the
+// same direction, so pages never repeat or skip a row and a backward index
+// scan serves a descending order.
+func (f ItemFilter) orderBy(q *gorm.DB) (*gorm.DB, error) {
+	col, err := f.SortColumn()
+	if err != nil {
+		return nil, err
+	}
+	q = q.Order(clause.OrderByColumn{Column: clause.Column{Name: col}, Desc: f.SortDesc})
+	if col != "id" {
+		q = q.Order(clause.OrderByColumn{Column: clause.Column{Name: "id"}, Desc: f.SortDesc})
+	}
+	return q, nil
 }
 
 // itemListColumns are the columns of an item list row, in place of SELECT *.
@@ -299,11 +349,17 @@ func (f ItemFilter) where(q *gorm.DB) *gorm.DB {
 	return q
 }
 
-// ListPaged returns one page of items that match filter, ordered by id, and
-// the number of all items that match. dest must be a *[]Item.
+// ListPaged returns one page of items that match filter, ordered by the sort
+// of the filter (id ascending by default), and the number of all items that
+// match. The sort does not change the total. dest must be a *[]Item.
 func (r *GenericRepository) ListPaged(ctx context.Context, dest interface{}, limit, offset int, filter ItemFilter) (int64, error) {
 	if _, ok := dest.(*[]Item); !ok {
 		return 0, dberrors.NewDatabaseError("list_paged", errors.New("destination must be *[]Item"))
+	}
+
+	// Refuse an unknown sort key before any query runs.
+	if _, err := filter.SortColumn(); err != nil {
+		return 0, err
 	}
 
 	var total int64
@@ -311,9 +367,10 @@ func (r *GenericRepository) ListPaged(ctx context.Context, dest interface{}, lim
 		return 0, r.handleError("list_paged", err)
 	}
 
-	query := filter.where(r.db.WithContext(ctx).Model(&Item{})).
-		Select(itemListColumns).
-		Order("id ASC")
+	query, err := filter.orderBy(filter.where(r.db.WithContext(ctx).Model(&Item{})).Select(itemListColumns))
+	if err != nil {
+		return 0, err
+	}
 	if limit > 0 {
 		query = query.Limit(limit)
 		if offset > 0 {

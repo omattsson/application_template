@@ -332,7 +332,7 @@ type UserListResponse struct {
 
 // ListUsers godoc
 // @Summary      List users
-// @Description  Returns one page of users ordered by username, never with a password hash. Admin only, with a login session (an API key is refused with 403); the caller must still be an enabled admin in the database. Filter by role (exact) or search (username, display name or email contains the text).
+// @Description  Returns one page of users, ordered by username unless sort says otherwise, never with a password hash. Rows with an equal sort value are ordered by id in the same direction, so pages never repeat or skip a row. Admin only, with a login session (an API key is refused with 403); the caller must still be an enabled admin in the database. Filter by role (exact) or search (username, display name or email contains the text).
 // @Tags         users
 // @Produce      json
 // @Security     BearerAuth
@@ -340,6 +340,8 @@ type UserListResponse struct {
 // @Param        pageSize  query  int     false  "Page size (default 25, at most 100)"
 // @Param        role      query  string  false  "Role" Enums(admin, devops, user)
 // @Param        search    query  string  false  "Text in the username, display name or email (at most 100 characters)"
+// @Param        sort      query  string  false  "Sort key (default username)" Enums(username, email, role, created_at)
+// @Param        order     query  string  false  "Sort direction (default asc)" Enums(asc, desc)
 // @Success      200  {object}  UserListResponse
 // @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
@@ -358,6 +360,11 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 	}
 	if len(filter.Search) > maxUserSearchLen {
 		c.JSON(http.StatusBadRequest, gin.H{"error": msgInvalidSearch})
+		return
+	}
+
+	var ok bool
+	if filter.SortBy, filter.SortDesc, ok = parseSort(c, models.UserSortKeys); !ok {
 		return
 	}
 

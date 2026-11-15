@@ -99,9 +99,17 @@ func (h *Handler) CreateItem(c *gin.Context) {
 
 // GetItems godoc
 // @Summary Get all items
-// @Description Get a list of all items
+// @Description Get a list of all items. Sort with sort and order; without them the order is id ascending. Rows with an equal sort value are ordered by id in the same direction, so pages never repeat or skip a row.
 // @Tags items
 // @Produce json
+// @Param limit query int false "Page size (omit for all items)"
+// @Param offset query int false "Rows to skip (needs limit)"
+// @Param name query string false "Name contains the text"
+// @Param name_exact query string false "Name equals the text"
+// @Param min_price query number false "Lowest price"
+// @Param max_price query number false "Highest price"
+// @Param sort query string false "Sort key (default id)" Enums(id, name, price, created_at, updated_at)
+// @Param order query string false "Sort direction (default asc)" Enums(asc, desc)
 // @Success 200 {array} models.Item
 // @Failure 400 {object} map[string]string
 // @Failure 499 {object} map[string]string "Client closed request"
@@ -127,11 +135,18 @@ func (h *Handler) GetItems(c *gin.Context) {
 		return
 	}
 
+	sortBy, sortDesc, ok := parseSort(c, models.ItemSortKeys)
+	if !ok {
+		return
+	}
+
 	filter := models.ItemFilter{
 		Name:      c.Query("name"),
 		NameExact: c.Query("name_exact"),
 		MinPrice:  minPrice,
 		MaxPrice:  maxPrice,
+		SortBy:    sortBy,
+		SortDesc:  sortDesc,
 	}
 	if limit <= 0 {
 		// Without a limit the whole list is returned and offset is ignored.
