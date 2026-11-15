@@ -14,7 +14,8 @@ const renderDark = (ui: React.ReactNode) => render(<ThemeProvider theme={dark}>{
 describe('dark surfaces without an elevation overlay', () => {
   it('still draws the overlay on a plain Paper, so the checks below can fail', () => {
     renderDark(<Paper elevation={8} data-testid="paper" />);
-    expect(getComputedStyle(screen.getByTestId('paper')).backgroundImage).toContain('--Paper-overlay');
+    // jsdom 30 keeps the var(--Paper-overlay) text, jsdom 31 resolves it to a gradient.
+    expect(getComputedStyle(screen.getByTestId('paper')).backgroundImage).not.toBe('none');
   });
 
   it('draws no overlay on a Dialog', () => {
