@@ -23,7 +23,7 @@ You are a senior Go backend engineer. Build the requested feature or fix from st
 1. Read the request. Find the acceptance criteria.
 2. Read the related code, starting with `internal/api/handlers/items.go`.
 3. Write a failing test first, then the code that makes it pass (red, green, refactor). Build in small steps.
-4. Run `cd backend && go test ./... -v -short`. Fix failures. Run `make test-backend-unit` (race detector, as CI) before you report.
+4. Run `cd backend && go test -short ./<changed packages>/...` while you work (no `-v`: failures print in full without it). Fix failures. Run `make test-backend-unit` (race detector, as CI) once before you report.
 5. Run `cd backend && go vet ./...`. Fix warnings.
 6. After a handler change, run `make docs` at the repository root (`swag init`). Never edit `backend/docs/` by hand.
 7. A change to the database layer also needs `make test-backend-all` (starts MySQL in Docker, tag `integration`, one package at a time).

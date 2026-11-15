@@ -52,7 +52,7 @@ The steps 1, 2, 3, 4 and 6 have their own detached budgets, so the worst case is
 | Full stack (Docker, development images) | `make dev` |
 | Backend only, or frontend only (also starts the backend) | `make dev-backend`, `make dev-frontend` |
 | Full stack, production images | `make prod` (web UI on port 80, API on 8080) |
-| Backend unit tests (no database) | `cd backend && go test ./... -v -short` |
+| Backend unit tests (no database) | `cd backend && go test ./... -short` (add `-v` for one package) |
 | Backend unit tests with the race detector (as CI) | `make test-backend-unit` |
 | All backend tests (unit and integration, starts MySQL) | `make test-backend-all` |
 | Frontend tests | `cd frontend && npm test` |
