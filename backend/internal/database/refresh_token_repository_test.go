@@ -167,6 +167,41 @@ func TestRefreshTokenRepositoryRevoke(t *testing.T) {
 			},
 			wantRevoked: []string{"first", "succ"},
 		},
+		{
+			name: "all of the user except one family (the other family goes)",
+			run: func(r *GORMRefreshTokenRepository) error {
+				return r.RevokeAllForUserExceptFamily(context.Background(), "u1", "first")
+			},
+			wantRevoked: []string{"other"},
+		},
+		{
+			name: "all of the user except a one-token family",
+			run: func(r *GORMRefreshTokenRepository) error {
+				return r.RevokeAllForUserExceptFamily(context.Background(), "u1", "other")
+			},
+			wantRevoked: []string{"first", "succ"},
+		},
+		{
+			name: "all of the user except an empty family keeps nothing",
+			run: func(r *GORMRefreshTokenRepository) error {
+				return r.RevokeAllForUserExceptFamily(context.Background(), "u1", "")
+			},
+			wantRevoked: []string{"first", "succ", "other"},
+		},
+		{
+			name: "all of the user except an unknown family keeps nothing",
+			run: func(r *GORMRefreshTokenRepository) error {
+				return r.RevokeAllForUserExceptFamily(context.Background(), "u1", "nope")
+			},
+			wantRevoked: []string{"first", "succ", "other"},
+		},
+		{
+			name: "except a family of another user does not keep this user's sessions",
+			run: func(r *GORMRefreshTokenRepository) error {
+				return r.RevokeAllForUserExceptFamily(context.Background(), "u1", "foreign")
+			},
+			wantRevoked: []string{"first", "succ", "other"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -515,4 +550,30 @@ func TestRefreshTokenRepositoryWithTx(t *testing.T) {
 
 		require.ErrorIs(t, err, context.Canceled)
 	})
+}
+
+// A row without a family_id is its own family: RevokeAllForUserExceptFamily
+// keeps it when its ID is the excluded family.
+func TestRefreshTokenRepositoryRevokeAllExceptFamilyLegacyRow(t *testing.T) {
+	t.Parallel()
+	repo := setupRefreshTokenRepo(t)
+	seedRefreshToken(t, repo, "legacy", "", nil)
+	seedRefreshToken(t, repo, "other", "other", nil)
+	require.NoError(t, repo.DB.Model(&models.RefreshToken{}).Where("id = ?", "legacy").Update("family_id", "").Error)
+
+	require.NoError(t, repo.RevokeAllForUserExceptFamily(context.Background(), "u1", "legacy"))
+
+	assert.False(t, loadRefreshToken(t, repo, "legacy").Revoked, "the legacy row is its own family")
+	assert.True(t, loadRefreshToken(t, repo, "other").Revoked)
+}
+
+// A cancelled context ends the revoke with the context error.
+func TestRefreshTokenRepositoryRevokeAllExceptFamilyContext(t *testing.T) {
+	t.Parallel()
+	repo := setupRefreshTokenRepo(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := repo.RevokeAllForUserExceptFamily(ctx, "u1", "x")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 }

@@ -103,7 +103,9 @@ const DefaultAuditMaxInFlight = 64
 // a handler called SkipAudit. Not recorded:
 // reads; requests without a user (an audit entry needs a user, so failed
 // logins and other unauthenticated requests are out of scope); failed
-// requests (4xx and 5xx: a refused or failed request changed nothing); the endpoints under /auth (authentication events).
+// requests (4xx and 5xx: a refused or failed request changed nothing); the
+// endpoints under /auth (authentication events), except the routes with an
+// entry in auditRoutes (the self-service password change).
 //
 // An entry holds the action, the entity type and ID, the user, and in its
 // details the method, the route template (never the query string or the raw
@@ -267,7 +269,12 @@ type AuditRoute struct {
 	EntityType string
 	// IDParam is the path parameter with the entity ID.
 	IDParam string
-	// Skip means no audit entry: the endpoint is an authentication event.
+	// IDFromHandler is true for a route without an ID parameter whose handler
+	// gives the entity ID with SetAuditEntityID (the password change names the
+	// caller).
+	IDFromHandler bool
+	// Skip means no audit entry: the endpoint is an authentication event (a
+	// route under /auth/ that has no table entry).
 	Skip bool
 	// CRUD is true for a route that is not in the route table: the action
 	// comes from the HTTP method and the entity type from the route.
@@ -283,6 +290,9 @@ const (
 	AuditActionDisable    = "disable"
 	AuditActionEnable     = "enable"
 	AuditActionChangeRole = "change_role"
+	// AuditActionChangePassword is a user changing their own password
+	// (PUT /auth/me/password).
+	AuditActionChangePassword = "change_password"
 
 	AuditEntityItem   = "item"
 	AuditEntityUser   = "user"
@@ -293,7 +303,7 @@ const (
 // audit log page offers the same list as filter options.
 var KnownAuditActions = []string{
 	AuditActionCreate, AuditActionUpdate, AuditActionDelete,
-	AuditActionDisable, AuditActionEnable, AuditActionChangeRole,
+	AuditActionDisable, AuditActionEnable, AuditActionChangeRole, AuditActionChangePassword,
 }
 
 // KnownAuditEntityTypes lists every entity type that new audit entries can
@@ -321,21 +331,28 @@ var auditRoutes = map[string]AuditRoute{
 	"PUT /users/:id/role": {Action: AuditActionChangeRole, EntityType: AuditEntityUser, IDParam: "id"},
 	// The handler sets AuditActionEnable when the request enables the user.
 	"PUT /users/:id/disabled": {Action: AuditActionDisable, EntityType: AuditEntityUser, IDParam: "id"},
+	// A route under /auth/ is an authentication event and is skipped unless it
+	// has an entry here. A password change is a change of the account: the
+	// handler names the caller as the entity (SetAuditEntityID) and never puts
+	// a password in the details.
+	"PUT /auth/me/password": {Action: AuditActionChangePassword, EntityType: AuditEntityUser, IDFromHandler: true},
 }
 
 // AuditRouteFor returns how the audit middleware records a request with this
 // method and route pattern (gin FullPath). The endpoints under /auth are not
-// recorded. Routes in the route table get their entry from it. Other routes
+// recorded, unless the route table has an entry for them (the password
+// change). Routes in the route table get their entry from it. Other routes
 // are plain CRUD: the action comes from the method and the entity type from
 // the last resource segment of the route; the entity ID is the "id" path
 // parameter, or what the handler gives to SetAuditEntityID (a create).
 func AuditRouteFor(method, fullPath string) AuditRoute {
 	trimmed := strings.TrimPrefix(fullPath, auditAPIPrefix)
-	if strings.HasPrefix(trimmed, auditAuthPrefix) {
-		return AuditRoute{Skip: true}
-	}
+	// An explicit entry wins, also under /auth/.
 	if r, ok := auditRoutes[method+" "+trimmed]; ok {
 		return r
+	}
+	if strings.HasPrefix(trimmed, auditAuthPrefix) {
+		return AuditRoute{Skip: true}
 	}
 	r := AuditRoute{EntityType: extractEntityType(fullPath), CRUD: true}
 	switch method {

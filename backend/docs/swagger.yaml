@@ -13,6 +13,17 @@ definitions:
       total:
         type: integer
     type: object
+  handlers.ChangePasswordRequest:
+    properties:
+      current_password:
+        description: CurrentPassword is the password that the account has now.
+        type: string
+      new_password:
+        description: |-
+          NewPassword is the new password: at least 8 characters, at most 72 bytes,
+          and not the current one.
+        type: string
+    type: object
   handlers.ChangeRoleRequest:
     properties:
       role:
@@ -813,6 +824,101 @@ paths:
       - BearerAuth: []
       - ApiKeyAuth: []
       summary: Get current user
+      tags:
+      - auth
+  /api/v1/auth/me/password:
+    put:
+      consumes:
+      - application/json
+      description: 'Changes the password of the signed-in local user. Login session
+        only (an API key is refused with 403). The body needs the current password
+        and the new one (at least 8 characters, at most 72 bytes, not equal to the
+        current one); unknown fields are refused. A wrong current password answers
+        401 "Current password is incorrect" and counts toward the same per-account
+        failure lock as the password login (5 failures within 15 minutes lock the
+        account for 15 minutes; the locked account answers 429 with Retry-After, also
+        for the right password). A user with no local password (an SSO account) gets
+        400; with OIDC as the only interactive login (OIDC_LOCAL_AUTH=false) only
+        the service account may change a password (403 otherwise); a disabled user
+        gets 401. On success only the password hash is written and every other session
+        of the user ends: their refresh tokens are revoked and their sessions are
+        blocked, so their access tokens get 401; the open WebSockets of those sessions
+        are closed by the next revalidation (within about a minute). The current session
+        keeps working: its cookie, its access token and its socket are not touched.
+        API keys are kept: delete them separately when the old password may have been
+        exposed. The entry of the audit log has the action change_password and never
+        holds a password. When the password was stored but a revocation step failed,
+        the answer is 500, the new password stands and the entry has revocation_failed;
+        end the remaining sessions with logout-all or change the password again. The
+        login rate limit (LOGIN_RATE_LIMIT per client IP) applies.'
+      parameters:
+      - description: Current and new password
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.ChangePasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: An API key cannot change a password, or password sign-in is
+            disabled for the account
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Request Entity Too Large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "499":
+          description: Client closed request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Change the own password
       tags:
       - auth
   /api/v1/auth/oidc/callback:
@@ -2026,7 +2132,7 @@ securityDefinitions:
   ApiKeyAuth:
     description: 'With AUTH_ENABLED=true: an API key (sk_ and 64 hex characters) from
       POST /api/v1/api-keys. Not accepted on the key, user and audit log management
-      routes or on logout-all.'
+      routes, on logout-all or on the password change.'
     in: header
     name: X-API-Key
     type: apiKey

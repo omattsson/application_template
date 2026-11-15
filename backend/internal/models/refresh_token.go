@@ -92,6 +92,12 @@ type RefreshTokenRepository interface {
 	TouchFamily(ctx context.Context, familyID string, at time.Time) error
 	RevokeAllForUser(ctx context.Context, userID string) error
 	RevokeAllForUserExcept(ctx context.Context, userID string, excludeID string) error
+	// RevokeAllForUserExceptFamily revokes every active token of the user
+	// except the tokens of the session family familyID (a token without a
+	// family counts as its own family). An empty familyID keeps nothing, so
+	// it revokes every active token of the user. The self-service password
+	// change uses it to end the other sessions and keep the current one.
+	RevokeAllForUserExceptFamily(ctx context.Context, userID string, familyID string) error
 	// RevokeOldestForUser revokes the active tokens of the user except the
 	// keep newest ones (by CreatedAt) and the token excludeID (empty: none).
 	// It never revokes a token that is newer than the kept ones, so a login

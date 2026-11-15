@@ -188,6 +188,18 @@ func (r *GORMRefreshTokenRepository) RevokeAllForUserExcept(ctx context.Context,
 	return err
 }
 
+// RevokeAllForUserExceptFamily revokes every active token of the user whose
+// session family is not familyID. The family is matched like familyExpr (a
+// row without a family_id is its own family), so it also keeps the rows of
+// a session that predates the family_id column. An empty familyID matches
+// no row and keeps nothing.
+func (r *GORMRefreshTokenRepository) RevokeAllForUserExceptFamily(ctx context.Context, userID string, familyID string) error {
+	_, err := r.update(ctx, "revoke_all_for_user_except_family", func(db *gorm.DB) *gorm.DB {
+		return db.Where("user_id = ? AND revoked = ? AND "+familyExpr+" <> ?", userID, false, familyID)
+	}, revoke())
+	return err
+}
+
 // RevokeOldestForUser revokes the active tokens of the user except the keep
 // newest ones and excludeID. It reads the IDs first (MySQL refuses LIMIT in an
 // IN subquery); a token created after the read is newer than every revoked one

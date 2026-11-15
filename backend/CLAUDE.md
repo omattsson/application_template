@@ -77,7 +77,7 @@ Key groups:
 
 - `AUTH_ENABLED` (default false), `JWT_SECRET`, `ADMIN_*`, `SELF_REGISTRATION`, `SECURE_COOKIES` (default true), the session and token durations, `SESSION_STORE`, `OIDC_*`. With auth on, an invalid value stops the start; with auth off the auth settings are read leniently. `AUTH_ENABLED` itself is always strict.
 - `DB_*`. MySQL session variables (`sql_mode`, `time_zone` UTC, `foreign_key_checks`) are DSN parameters (`config.MySQLSessionParams`), which the driver sets on every pooled connection. Never set them with a `SET` statement after connecting: that reaches one connection only. MySQL 8.0.17 or later.
-- `SERVER_*`, `RATE_LIMIT` (default 100 per minute), `LOGIN_RATE_LIMIT` (default 10 per minute), `WS_MAX_CONNECTIONS_PER_USER` (default 16 open `/ws` sockets per user and per API key, enforced in `Hub.Register`), `TRUSTED_PROXIES` (validated by `config.ParseTrustedProxies` at load, applied by `routes.Setup`), `ENABLE_SWAGGER`.
+- `SERVER_*`, `RATE_LIMIT` (default 100 per minute), `LOGIN_RATE_LIMIT` (default 10 per minute; login, register, OIDC and the password change each have a budget), `WS_MAX_CONNECTIONS_PER_USER` (default 16 open `/ws` sockets per user and per API key, enforced in `Hub.Register`), `TRUSTED_PROXIES` (validated by `config.ParseTrustedProxies` at load, applied by `routes.Setup`), `ENABLE_SWAGGER`.
 - `LOG_LEVEL`: `debug`, `info` (default), `warn` or `error`. `main` applies it to the default `slog` logger, which writes text to stderr. GORM SQL errors and slow queries (200 ms or more) go through `slog`; with `APP_DEBUG=false` the SQL values are replaced with `?`.
 - `GIN_MODE` wins when set. Otherwise the mode is debug when `APP_DEBUG` is true and release when it is false. The code default of `APP_DEBUG` is `true`: set `false` in production.
 - `OTEL_ENABLED` (default false), `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACE_SAMPLE_RATE`, `METRICS_ENABLED` (default false), `METRICS_ADDR` (default `:9090`, read with `METRICS_ENABLED=true`). The two switches are strict booleans; the other three are read and validated only with `OTEL_ENABLED=true`.
@@ -124,4 +124,4 @@ Read `docs/claude/auth-sessions.md` before you change them. The short rules:
 - Logout and every admin action that ends sessions revoke the refresh tokens first, then block (`sessionstore`), then close the sockets. The REST path fails closed on a store error.
 - All auth paths (login, refresh, OIDC, API key) reject a disabled user.
 - A custom `sessionstore.SessionStore` must honour `ctx` and make a block visible to every replica.
-- `/auth/*` is not audited. The OIDC provider lives in `internal/auth`; the state is stored in `sessionstore`.
+- `/auth/*` is not audited, except routes with an entry in `auditRoutes` (the password change, `PUT /auth/me/password`). The OIDC provider lives in `internal/auth`; the state is stored in `sessionstore`.

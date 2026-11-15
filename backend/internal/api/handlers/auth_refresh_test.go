@@ -188,6 +188,13 @@ func (f *faultyTokens) RevokeAllForUser(ctx context.Context, userID string) erro
 	return f.RefreshTokenRepository.RevokeAllForUser(ctx, userID)
 }
 
+func (f *faultyTokens) RevokeAllForUserExceptFamily(ctx context.Context, userID, family string) error {
+	if f.revokeErr != nil {
+		return f.revokeErr
+	}
+	return f.RefreshTokenRepository.RevokeAllForUserExceptFamily(ctx, userID, family)
+}
+
 func (f *faultyTokens) ListRecentFamiliesForUser(ctx context.Context, userID string, since time.Time) ([]string, error) {
 	if f.listErr != nil {
 		return nil, f.listErr

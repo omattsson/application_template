@@ -31,6 +31,7 @@ var authRoutes = []struct{ method, path string }{
 	{http.MethodPost, "/api/v1/auth/logout"},
 	{http.MethodPost, "/api/v1/auth/logout-all"},
 	{http.MethodGet, "/api/v1/auth/me"},
+	{http.MethodPut, "/api/v1/auth/me/password"},
 	{http.MethodGet, "/api/v1/auth/oidc/login"},
 	{http.MethodGet, "/api/v1/auth/oidc/callback"},
 	{http.MethodGet, "/api/v1/api-keys"},
@@ -210,6 +211,12 @@ func TestAuthOnAccess(t *testing.T) {
 		{http.MethodGet, "/api/v1/api-keys", "", "user key", http.StatusForbidden},
 		{http.MethodPost, "/api/v1/api-keys", `{"name":"k","expires_in_days":1}`, "user key", http.StatusForbidden},
 		{http.MethodPost, "/api/v1/api-keys", `{"name":"k","expires_in_days":1}`, "user", http.StatusCreated},
+		{http.MethodPut, "/api/v1/auth/me/password", `{"current_password":"wrong-password","new_password":"Brand-New-Pass-1"}`, "none", http.StatusUnauthorized},
+		{http.MethodPut, "/api/v1/auth/me/password", `{"current_password":"wrong-password","new_password":"Brand-New-Pass-1"}`, "garbage bearer", http.StatusUnauthorized},
+		{http.MethodPut, "/api/v1/auth/me/password", `{"current_password":"wrong-password","new_password":"Brand-New-Pass-1"}`, "user key", http.StatusForbidden},
+		{http.MethodPut, "/api/v1/auth/me/password", `{"current_password":"wrong-password","new_password":"Brand-New-Pass-1"}`, "admin key", http.StatusForbidden},
+		{http.MethodPut, "/api/v1/auth/me/password", `{"current_password":"wrong-password","new_password":"Brand-New-Pass-1"}`, "user", http.StatusUnauthorized},
+		{http.MethodGet, "/api/v1/auth/me/password", "", "user", http.StatusNotFound},
 		{http.MethodPost, "/api/v1/auth/logout-all", "", "user key", http.StatusForbidden},
 		{http.MethodPost, "/api/v1/auth/logout-all", "", "none", http.StatusUnauthorized},
 		{http.MethodGet, "/api/v1/ui-config", "", "none", http.StatusOK},
@@ -708,4 +715,72 @@ func TestSetupBuildsTheOIDCProviderFromTheConfig(t *testing.T) {
 		assert.Nil(t, res)
 		assert.Empty(t, router.Routes())
 	})
+}
+
+// TestAuthOnPasswordChangeFlow: with auth on, a signed-in user changes the own
+// password through the router. The other session ends, the current one and
+// the API key stay, and the audit log has one change_password entry that
+// names the caller and holds no password.
+func TestAuthOnPasswordChangeFlow(t *testing.T) {
+	t.Parallel()
+	env := newAuthEnv(t, nil)
+	user := env.createUser(t, "alice", models.RoleUser)
+	key, _ := env.apiKey(t, user)
+	current, currentCookie := env.login(t, "alice")
+	other, otherCookie := env.login(t, "alice")
+	const newPassword = "Brand-New-Pass-1"
+
+	w := env.do(t, http.MethodPut, "/api/v1/auth/me/password",
+		fmt.Sprintf(`{"current_password":%q,"new_password":%q}`, testPassword, newPassword), bearer(current))
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.JSONEq(t, `{"message":"Password changed"}`, w.Body.String())
+	assert.Equal(t, http.StatusOK, env.do(t, http.MethodGet, "/api/v1/auth/me", "", bearer(current)).Code, "the current session works")
+	assert.Equal(t, http.StatusUnauthorized, env.do(t, http.MethodGet, "/api/v1/auth/me", "", bearer(other)).Code, "the other session ended")
+	assert.Equal(t, http.StatusOK, env.do(t, http.MethodGet, "/api/v1/items", "", map[string]string{"X-API-Key": key}).Code, "the API key stays")
+	refresh := func(c *http.Cookie) int {
+		return env.do(t, http.MethodPost, "/api/v1/auth/refresh", "",
+			map[string]string{"X-Requested-With": "x", "Cookie": c.Name + "=" + c.Value}).Code
+	}
+	assert.Equal(t, http.StatusOK, refresh(currentCookie), "the current cookie refreshes")
+	assert.Equal(t, http.StatusUnauthorized, refresh(otherCookie), "the other cookie is revoked")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, env.res.AuditRecorder.Shutdown(ctx))
+	entries := env.auditEntries(t)
+	require.Len(t, entries, 1)
+	assert.Equal(t, middleware.AuditActionChangePassword, entries[0].Action)
+	assert.Equal(t, middleware.AuditEntityUser, entries[0].EntityType)
+	assert.Equal(t, user.ID, entries[0].EntityID)
+	assert.Equal(t, user.ID, entries[0].UserID)
+	assert.NotContains(t, entries[0].Details, newPassword)
+	assert.NotContains(t, entries[0].Details, testPassword)
+}
+
+// TestAuthOnPasswordChangeRateLimit: the route has its own LOGIN_RATE_LIMIT
+// budget per client IP, separate from the login budget.
+func TestAuthOnPasswordChangeRateLimit(t *testing.T) {
+	t.Parallel()
+	cfg := authOn()
+	cfg.Server.LoginRateLimit = 3
+	env := newAuthEnv(t, cfg)
+	user := env.createUser(t, "alice", models.RoleUser)
+	tok := env.token(t, user)
+	// A body that fails validation: no bcrypt work and no failure budget.
+	body := `{"current_password":"wrong-password","new_password":"short"}`
+
+	for i := 0; i < 3; i++ {
+		w := env.do(t, http.MethodPut, "/api/v1/auth/me/password", body, bearer(tok))
+		require.Equal(t, http.StatusBadRequest, w.Code, "request %d", i+1)
+	}
+	w := env.do(t, http.MethodPut, "/api/v1/auth/me/password", body, bearer(tok))
+	assert.Equal(t, http.StatusTooManyRequests, w.Code, "the 4th request")
+	assert.JSONEq(t, `{"error":"rate limit exceeded"}`, w.Body.String())
+
+	w = doFrom(env.router, "198.51.100.7:1000", http.MethodPut, "/api/v1/auth/me/password", body, bearer(tok))
+	assert.Equal(t, http.StatusBadRequest, w.Code, "another IP has its own budget")
+	w = env.do(t, http.MethodPost, "/api/v1/auth/login", `{"username":"nobody","password":"wrong-password"}`,
+		map[string]string{"X-Requested-With": "x"})
+	assert.NotEqual(t, http.StatusTooManyRequests, w.Code, "the login budget is separate")
 }
