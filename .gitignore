@@ -68,5 +68,7 @@ Thumbs.db
 
 # Claude Code local worktrees
 .claude/worktrees/
+# Specs of running work (ship-issue): local state, never committed
+.claude/work/
 # Personal permission grants: never committed (.claude/settings.json is)
 .claude/settings.local.json
