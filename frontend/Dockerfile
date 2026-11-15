@@ -36,6 +36,10 @@ CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 # runs as uid 101 (not root) and listens on 8080: a non-root process cannot
 # bind a port below 1024.
 FROM nginxinc/nginx-unprivileged:alpine AS production
+# The upgrade picks up fixed Alpine packages that are newer than the base
+# image. It needs root; the image goes back to uid 101 below.
+USER root
+RUN apk upgrade --no-cache
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 USER 101
