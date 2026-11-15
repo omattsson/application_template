@@ -32,17 +32,21 @@ check_repo() {
   }
   cd "$root"
 
+  # Test the captured text with a here-string, not "printf | grep -q": grep -q
+  # exits at the first match, printf then dies of SIGPIPE, and pipefail reports
+  # that as "not found" once the rule database is larger than the pipe buffer
+  # (GNU make 4.3 prints about 1700 lines).
   # make -qp prints the rule database without running anything. A target that
   # has a rule appears at the start of a line, followed by a colon.
   rules=$(make -qp 2>/dev/null || true)
   phony=$(printf '%s\n' "$rules" | sed -n 's/^\.PHONY: //p' | tr ' ' '\n')
 
   for target in $TARGETS; do
-    if ! printf '%s\n' "$rules" | grep -Eq "^${target}:"; then
+    if ! grep -Eq "^${target}:" <<<"$rules"; then
       fail "make target '$target' is not defined in the Makefile"
       continue
     fi
-    if ! printf '%s\n' "$phony" | grep -qx "$target"; then
+    if ! grep -qx "$target" <<<"$phony"; then
       fail "make target '$target' is not listed in .PHONY"
     fi
     if ! out=$(make -n "$target" 2>&1); then
@@ -61,7 +65,7 @@ check_repo() {
 
   # The backend Makefile has its own coverage target (the root target calls it).
   backend_rules=$(make -C backend -qp 2>/dev/null || true)
-  if ! printf '%s\n' "$backend_rules" | grep -Eq '^test-coverage:'; then
+  if ! grep -Eq '^test-coverage:' <<<"$backend_rules"; then
     fail "backend/Makefile does not define test-coverage"
   fi
 
@@ -73,10 +77,12 @@ check_repo() {
 }
 
 # plan_has_content succeeds when the output of "make -n" holds a line that is
-# not one of make's "nothing to do" messages.
+# not one of make's "nothing to do" messages or its directory notices. A make
+# that another make started (make check-make-targets, as CI runs it) prints
+# "Entering directory" and "Leaving directory" around every plan.
 plan_has_content() {
   printf '%s\n' "$1" |
-    grep -Ev "^make(\[[0-9]+\])?: (Nothing to be done for|.* is up to date)" |
+    grep -Ev "^make(\[[0-9]+\])?: (Nothing to be done for|.* is up to date|(Entering|Leaving) directory)" |
     grep -q '[^[:space:]]'
 }
 
