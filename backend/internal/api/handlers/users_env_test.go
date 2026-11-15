@@ -152,9 +152,11 @@ func newAdminEnv(t *testing.T, opts ...adminOpt) *adminEnv {
 	e.recorder = middleware.NewAuditRecorder(audit)
 
 	r := gin.New()
-	r.Use(middleware.RequestID())
+	r.Use(middleware.RequestID(), limitBody(1<<20))
 	r.POST("/api/v1/auth/login", e.auth.Login)
+	r.POST("/api/v1/auth/refresh", e.auth.Refresh)
 	r.GET("/open/users", e.handler.ListUsers) // no auth middleware at all
+	r.PUT("/open/me/password", e.auth.ChangePassword)
 	authed := r.Group("/api/v1", middleware.CombinedAuth(middleware.APIKeyAuthDeps{
 		JWTSecret: testJWTSecret, APIKeyRepo: e.keys, UserRepo: e.users, SessionStore: e.store, FailClosedOnStoreError: true,
 	}), e.recorder.Middleware())
@@ -166,6 +168,7 @@ func newAdminEnv(t *testing.T, opts ...adminOpt) *adminEnv {
 	authed.PUT("/users/:id/role", e.handler.ChangeUserRole)
 	authed.PUT("/users/:id/disabled", e.handler.SetUserDisabled)
 	authed.GET("/audit-logs", e.auditH.ListAuditLogs)
+	authed.PUT("/auth/me/password", middleware.RequireSessionAuth(), e.auth.ChangePassword)
 	items := NewHandler(models.NewRepository(db))
 	authed.POST("/items", items.CreateItem)
 	authed.PUT("/items/:id", items.UpdateItem)

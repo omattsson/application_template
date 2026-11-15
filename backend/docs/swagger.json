@@ -686,6 +686,120 @@
                 }
             }
         },
+        "/api/v1/auth/me/password": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Changes the password of the signed-in local user. Login session only (an API key is refused with 403). The body needs the current password and the new one (at least 8 characters, at most 72 bytes, not equal to the current one); unknown fields are refused. A wrong current password answers 401 \"Current password is incorrect\" and counts toward the same per-account failure lock as the password login (5 failures within 15 minutes lock the account for 15 minutes; the locked account answers 429 with Retry-After, also for the right password). A user with no local password (an SSO account) gets 400; with OIDC as the only interactive login (OIDC_LOCAL_AUTH=false) only the service account may change a password (403 otherwise); a disabled user gets 401. On success only the password hash is written and every other session of the user ends: their refresh tokens are revoked and their sessions are blocked, so their access tokens get 401; the open WebSockets of those sessions are closed by the next revalidation (within about a minute). The current session keeps working: its cookie, its access token and its socket are not touched. API keys are kept: delete them separately when the old password may have been exposed. The entry of the audit log has the action change_password and never holds a password. When the password was stored but a revocation step failed, the answer is 500, the new password stands and the entry has revocation_failed; end the remaining sessions with logout-all or change the password again. The login rate limit (LOGIN_RATE_LIMIT per client IP) applies.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Change the own password",
+                "parameters": [
+                    {
+                        "description": "Current and new password",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ChangePasswordRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "An API key cannot change a password, or password sign-in is disabled for the account",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/auth/oidc/callback": {
             "get": {
                 "description": "The identity provider sends the browser here with a code and the state. The state works once and only from the browser that started the login (the oidc_binding cookie); the code is exchanged with the PKCE verifier; the ID token is validated (signature, issuer, audience, expiry, nonce). The account is found by issuer and sub, or created with auth_provider oidc and the role user (admin when a role of the OIDC_ADMIN_ROLES claim matches exactly); an existing OIDC account gets its role from the claim at every login. An existing local account is never linked or taken over. On success the answer sets the httpOnly refresh_token cookie (named __Host-refresh_token unless SECURE_COOKIES=false) and redirects (302) to the fixed web UI path OIDC_FRONTEND_PATH, without any token in the URL; the web UI then calls POST /api/v1/auth/refresh for its access token. Every refusal caused by the request or the provider answers 400 {\"error\":\"Login failed\"}. A provider that does not answer, answers with a server error, or refuses this server's client credentials (a configuration problem, logged at Error level) answers 502.",
@@ -2399,6 +2513,19 @@
                 }
             }
         },
+        "handlers.ChangePasswordRequest": {
+            "type": "object",
+            "properties": {
+                "current_password": {
+                    "description": "CurrentPassword is the password that the account has now.",
+                    "type": "string"
+                },
+                "new_password": {
+                    "description": "NewPassword is the new password: at least 8 characters, at most 72 bytes,\nand not the current one.",
+                    "type": "string"
+                }
+            }
+        },
         "handlers.ChangeRoleRequest": {
             "type": "object",
             "properties": {
@@ -2827,7 +2954,7 @@
     },
     "securityDefinitions": {
         "ApiKeyAuth": {
-            "description": "With AUTH_ENABLED=true: an API key (sk_ and 64 hex characters) from POST /api/v1/api-keys. Not accepted on the key, user and audit log management routes or on logout-all.",
+            "description": "With AUTH_ENABLED=true: an API key (sk_ and 64 hex characters) from POST /api/v1/api-keys. Not accepted on the key, user and audit log management routes, on logout-all or on the password change.",
             "type": "apiKey",
             "name": "X-API-Key",
             "in": "header"

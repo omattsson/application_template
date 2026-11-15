@@ -30,7 +30,7 @@ import (
 // @securityDefinitions.apikey ApiKeyAuth
 // @in                         header
 // @name                       X-API-Key
-// @description                With AUTH_ENABLED=true: an API key (sk_ and 64 hex characters) from POST /api/v1/api-keys. Not accepted on the key, user and audit log management routes or on logout-all.
+// @description                With AUTH_ENABLED=true: an API key (sk_ and 64 hex characters) from POST /api/v1/api-keys. Not accepted on the key, user and audit log management routes, on logout-all or on the password change.
 func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {

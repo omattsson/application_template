@@ -91,7 +91,7 @@ The DSN sets `sql_mode`, `time_zone` (UTC) and `foreign_key_checks` as driver pa
 | `SERVER_SHUTDOWN_TIMEOUT` | `30s` | Budget of each shutdown step; `0` means 5 s. See "Shutdown". |
 | `TRUSTED_PROXIES` | empty | See "Client IP and proxies". |
 | `RATE_LIMIT` | `100` | Requests per minute per client IP on `/api/v1`; must be positive. |
-| `LOGIN_RATE_LIMIT` | `10` | Attempts per minute per client IP on each of login, register, OIDC login and OIDC callback; must be positive. |
+| `LOGIN_RATE_LIMIT` | `10` | Attempts per minute per client IP on each of login, register, OIDC login, OIDC callback and the password change (`PUT /auth/me/password`); must be positive. |
 | `WS_MAX_CONNECTIONS_PER_USER` | `16` | Most `/ws` sockets that one user, and one API key, may have open at once (per replica: the hub is per replica); must be positive. The socket over the limit is closed with code 1008 `too many connections` right after the upgrade; closing a socket frees its slot. Sockets without an identity (`AUTH_ENABLED=false`) are not counted. One line per minute at Warn tells who was refused. A user with many tabs and devices may need a higher value. |
 | `ENABLE_SWAGGER` | `false` | Swagger UI at `/swagger/index.html`. |
 
@@ -189,7 +189,7 @@ Two checkouts, or another project, collide on the fixed host ports 3000, 8081 an
 
 ## Rate limiting
 
-A sliding window per client IP, in memory, per replica. `/api/v1` gets `RATE_LIMIT`; `POST /auth/login`, `POST /auth/register`, `GET /auth/oidc/login` and `GET /auth/oidc/callback` each get their own `LOGIN_RATE_LIMIT` budget on top. `POST /auth/refresh` has no dedicated limiter: only `RATE_LIMIT` applies, because several tabs and page loads refresh often. `/ws` uses `RATE_LIMIT` with auth on and no limiter with auth off (connections are long-lived). `/health/*` is not limited. A limited request gets 429 `rate limit exceeded`.
+A sliding window per client IP, in memory, per replica. `/api/v1` gets `RATE_LIMIT`; `POST /auth/login`, `POST /auth/register`, `GET /auth/oidc/login`, `GET /auth/oidc/callback` and `PUT /auth/me/password` each get their own `LOGIN_RATE_LIMIT` budget on top. `POST /auth/refresh` has no dedicated limiter: only `RATE_LIMIT` applies, because several tabs and page loads refresh often. `/ws` uses `RATE_LIMIT` with auth on and no limiter with auth off (connections are long-lived). `/health/*` is not limited. A limited request gets 429 `rate limit exceeded`.
 
 The username login throttle is separate and in memory per replica: 5 failed logins for one username in 15 minutes lock that username for 15 minutes (429 with `Retry-After`). With N replicas an attacker gets up to N times 5 guesses. The lock also stops the owner, which is a denial of service on the bootstrap admin: set a non-default `ADMIN_USERNAME` and a strong `ADMIN_PASSWORD`. The lock disappears at the next restart of the replica. Details: `auth-sessions.md`.
 
@@ -297,7 +297,7 @@ Structured text on stderr through `slog`, at `LOG_LEVEL`. With `OTEL_ENABLED=tru
 
 ## Audit log
 
-With auth on, every successful `POST`, `PUT`, `PATCH` or `DELETE` of an authenticated user writes an entry (action, entity, user, route, status, client IP, request ID), after the response, on a context the client cannot cancel (30 s). Failed requests, reads, unauthenticated requests and everything under `/auth/` are not recorded: there is no audit entry for login, logout or a password change (there is no self-service password change; an admin resets it through `PUT /users/:id`, which is audited). At most 64 writes run at once; an entry over that bound is dropped with an Error log. `GET /api/v1/audit-logs` (admin session) pages with `limit` and `offset`, or with `next_cursor`; a cursor page has `total: -1`. There is no audit log page in the web UI.
+With auth on, every successful `POST`, `PUT`, `PATCH` or `DELETE` of an authenticated user writes an entry (action, entity, user, route, status, client IP, request ID), after the response, on a context the client cannot cancel (30 s). Failed requests, reads, unauthenticated requests and everything under `/auth/` are not recorded, with one exception: the self-service password change (`PUT /auth/me/password`, action `change_password`, entity type `user`, entity ID the caller) has an entry in `auditRoutes` and is recorded. There is no audit entry for login, logout or refresh. An admin resets a password through `PUT /users/:id`, which is audited too. At most 64 writes run at once; an entry over that bound is dropped with an Error log. `GET /api/v1/audit-logs` (admin session) pages with `limit` and `offset`, or with `next_cursor`; a cursor page has `total: -1`. There is no audit log page in the web UI.
 
 ## Swagger
 

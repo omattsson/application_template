@@ -92,6 +92,12 @@ func auditRouter(rec *AuditRecorder, userID string) *gin.Engine {
 		SetAuditAction(c, AuditActionEnable)
 		c.JSON(http.StatusOK, gin.H{})
 	})
+	r.PUT("/api/v1/auth/me/password", func(c *gin.Context) {
+		SetAuditEntityID(c, "u-1")
+		AddAuditDetail(c, "password_changed", true)
+		c.JSON(http.StatusOK, gin.H{"message": "Password changed", "password": "response-secret"})
+	})
+	r.PUT("/api/v1/auth/me/password-fail", func(c *gin.Context) { c.JSON(http.StatusUnauthorized, gin.H{}) })
 	r.POST("/api/v1/auth/logout-all", ok)
 	r.POST("/api/v1/auth/login", ok)
 	r.DELETE("/api/v1/things/:id", func(c *gin.Context) { c.Status(http.StatusForbidden) })
@@ -261,6 +267,34 @@ func TestAuditRouteTableAndOverrides(t *testing.T) {
 	assert.Equal(t, AuditEntityUser, dis.EntityType)
 }
 
+// The password change is under /auth/ but has an explicit table entry: it is
+// recorded with the action change_password, the entity the handler named and
+// no secret.
+func TestAuditRecordsThePasswordChange(t *testing.T) {
+	t.Parallel()
+	sink := &auditSink{}
+	rec := NewAuditRecorder(sink)
+	r := auditRouter(rec, "u-1")
+
+	serve(r, http.MethodPut, "/api/v1/auth/me/password", `{"current_password":"request-secret","new_password":"request-secret-2"}`)
+	serve(r, http.MethodPut, "/api/v1/auth/me/password-fail", "")
+	waitRecorded(t, rec)
+
+	got := sink.snapshot()
+	require.Len(t, got, 1, "a refused change is not recorded")
+	e := got[0]
+	assert.Equal(t, AuditActionChangePassword, e.Action)
+	assert.Equal(t, AuditEntityUser, e.EntityType)
+	assert.Equal(t, "u-1", e.EntityID)
+	assert.Equal(t, "u-1", e.UserID)
+	d := detailsOf(t, e)
+	assert.Equal(t, "/api/v1/auth/me/password", d["path"])
+	assert.Equal(t, true, d["password_changed"])
+	for _, secret := range []string{"request-secret", "response-secret"} {
+		assert.NotContains(t, e.Details, secret)
+	}
+}
+
 func TestAuditRouteFor(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -276,7 +310,11 @@ func TestAuditRouteFor(t *testing.T) {
 		{"POST", "/api/v1/api-keys", AuditRoute{Action: AuditActionCreate, EntityType: AuditEntityAPIKey, CRUD: true}},
 		{"DELETE", "/api/v1/api-keys/:id", AuditRoute{Action: AuditActionDelete, EntityType: AuditEntityAPIKey, CRUD: true}},
 		{"PUT", "/api/v1/users/:id/role", auditRoutes["PUT /users/:id/role"]},
+		// An explicit table entry wins over the /auth/ skip.
+		{"PUT", "/api/v1/auth/me/password", AuditRoute{Action: AuditActionChangePassword, EntityType: AuditEntityUser, IDFromHandler: true}},
 		{"POST", "/api/v1/auth/logout", AuditRoute{Skip: true}},
+		{"PUT", "/api/v1/auth/me", AuditRoute{Skip: true}},
+		{"POST", "/api/v1/auth/me/password", AuditRoute{Skip: true}},
 		{"POST", "/api/v1/auth/oidc/callback", AuditRoute{Skip: true}},
 		{"POST", "/api/v1/some-things", AuditRoute{Action: AuditActionCreate, EntityType: "some_things", CRUD: true}},
 		{"POST", "", AuditRoute{Action: AuditActionCreate, EntityType: "unknown", CRUD: true}},
@@ -298,9 +336,9 @@ func TestAuditRouteTableUsesKnownValues(t *testing.T) {
 		}
 		assert.Contains(t, KnownAuditActions, route.Action, key)
 		assert.Contains(t, KnownAuditEntityTypes, route.EntityType, key)
-		assert.NotEmpty(t, route.IDParam, key)
+		assert.True(t, route.IDParam != "" || route.IDFromHandler, "%s: the entity ID comes from a path parameter or the handler", key)
 	}
-	for _, a := range []string{AuditActionCreate, AuditActionUpdate, AuditActionDelete, AuditActionChangeRole, AuditActionDisable, AuditActionEnable} {
+	for _, a := range []string{AuditActionCreate, AuditActionUpdate, AuditActionDelete, AuditActionChangeRole, AuditActionDisable, AuditActionEnable, AuditActionChangePassword} {
 		assert.Contains(t, KnownAuditActions, a)
 	}
 	for _, e := range []string{AuditEntityItem, AuditEntityUser, AuditEntityAPIKey} {

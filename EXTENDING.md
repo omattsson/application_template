@@ -98,7 +98,7 @@ Items: `routes.Setup` in `internal/api/routes/routes.go` (`items := api.Group("/
 
 Items: the constants and `KnownAuditEntityTypes` in `internal/api/middleware/audit.go`.
 
-With auth on, every successful `POST`, `PUT`, `PATCH` or `DELETE` is recorded. The entity type comes from the last route segment. Add `AuditEntityNote = "note"` to the constants and to `KnownAuditEntityTypes`, and map the segment in `entityTypeBySegment` (`"notes": AuditEntityNote`). The routes test fails for a mutating route with an unknown entity type, so a missing entry cannot ship. An operation that is not plain CRUD (for example `PUT /notes/:id/archive`) needs an entry in `auditRoutes` and a known action in `KnownAuditActions`.
+With auth on, every successful `POST`, `PUT`, `PATCH` or `DELETE` is recorded. The entity type comes from the last route segment. Add `AuditEntityNote = "note"` to the constants and to `KnownAuditEntityTypes`, and map the segment in `entityTypeBySegment` (`"notes": AuditEntityNote`). The routes test fails for a mutating route with an unknown entity type, so a missing entry cannot ship. An operation that is not plain CRUD (for example `PUT /notes/:id/archive`) needs an entry in `auditRoutes` and a known action in `KnownAuditActions`. Routes under `/auth/` are not audited unless they have such an entry (`PUT /auth/me/password` does).
 
 ### 7. Swagger
 
@@ -129,7 +129,7 @@ Add the route to the Swagger output (step 7), the entity to the table in `ARCHIT
 
 ## Gating by role
 
-Roles are `user` < `devops` < `admin`. `middleware.RequireRole(roles...)`, `RequireAdmin()`, `RequireDevOps()` and `RequireUser()` are Gin handlers for a route or group. A gate for an unknown role, or with no role, closes. The role in the token is a claim: a handler that changes state for another user also reads the user row (see `handlers/users.go`). With `AUTH_ENABLED=false` no gate runs: the whole API is open. Routes that must not be reachable with an API key (key management, user administration, logout-all) add `middleware.RequireSessionAuth()`.
+Roles are `user` < `devops` < `admin`. `middleware.RequireRole(roles...)`, `RequireAdmin()`, `RequireDevOps()` and `RequireUser()` are Gin handlers for a route or group. A gate for an unknown role, or with no role, closes. The role in the token is a claim: a handler that changes state for another user also reads the user row (see `handlers/users.go`). With `AUTH_ENABLED=false` no gate runs: the whole API is open. Routes that must not be reachable with an API key (key management, user administration, logout-all, the password change) add `middleware.RequireSessionAuth()`.
 
 ## Adding a WebSocket event
 

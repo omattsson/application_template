@@ -39,6 +39,10 @@ type RateLimiters struct {
 	// OIDCLogin is LOGIN_RATE_LIMIT per client IP on GET /auth/oidc/login (it
 	// writes one session store row per call).
 	OIDCLogin *handlers.RateLimiter
+	// PasswordChange is LOGIN_RATE_LIMIT per client IP on PUT /auth/me/password
+	// (each request costs up to two bcrypt operations). It has its own budget:
+	// it never uses up the login budget of a shared address.
+	PasswordChange *handlers.RateLimiter
 	// OIDCCallback is LOGIN_RATE_LIMIT per client IP on GET /auth/oidc/callback
 	// (it calls the identity provider). It has its own budget: a user who
 	// starts a login must still have the budget for the return.
@@ -50,7 +54,7 @@ func (r *RateLimiters) Stop() {
 	if r == nil {
 		return
 	}
-	for _, l := range []*handlers.RateLimiter{r.API, r.Login, r.Register, r.OIDCLogin, r.OIDCCallback} {
+	for _, l := range []*handlers.RateLimiter{r.API, r.Login, r.Register, r.OIDCLogin, r.OIDCCallback, r.PasswordChange} {
 		if l != nil {
 			l.Stop()
 		}
@@ -144,8 +148,10 @@ func checkDeps(deps Deps) error {
 //     per route, no same-site check: they are top-level navigations).
 //   - Every other /api/v1 route: CombinedAuth (JWT or API key, revocation
 //     checks fail closed on a store error), then the audit middleware.
-//     /auth/logout-all and /api-keys also need a login session
-//     (RequireSessionAuth); /users and /audit-logs need the admin role.
+//     /auth/logout-all, PUT /auth/me/password (its own LOGIN_RATE_LIMIT
+//     budget, audited although it is under /auth/) and /api-keys also need a
+//     login session (RequireSessionAuth); /users and /audit-logs need the
+//     admin role.
 //   - /ws: RATE_LIMIT, a token (header, or ?token= for browsers) or an API
 //     key, an active user, a re-check after the registration, a periodic
 //     revalidation of the open sockets (fail closed), and authorised topic
@@ -243,6 +249,7 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 		limiters.Register = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
 		limiters.OIDCLogin = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
 		limiters.OIDCCallback = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
+		limiters.PasswordChange = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
 		a.registerPublicAuth(v1, limiters)
 		authMW := []gin.HandlerFunc{a.authenticate}
 		if cfg.Otel.Enabled {
@@ -251,7 +258,7 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 		}
 		authMW = append(authMW, a.recorder.Middleware())
 		api = v1.Group("", authMW...)
-		a.registerAuthenticated(api)
+		a.registerAuthenticated(api, limiters)
 		result.AuthHandler = a.authHandler
 		result.AuditRecorder = a.recorder
 	}
@@ -393,9 +400,13 @@ func (a *authWiring) registerPublicAuth(v1 *gin.RouterGroup, l *RateLimiters) {
 }
 
 // registerAuthenticated registers the routes behind CombinedAuth.
-func (a *authWiring) registerAuthenticated(api *gin.RouterGroup) {
+func (a *authWiring) registerAuthenticated(api *gin.RouterGroup, l *RateLimiters) {
 	g := api.Group("/auth")
 	g.GET("/me", a.authHandler.GetCurrentUser)
+	// Login session only (an API key is refused with 403). The audit table has
+	// an entry for it: the group is under /auth/, which is otherwise not
+	// audited.
+	g.PUT("/me/password", l.PasswordChange.RateLimit(), middleware.RequireSessionAuth(), a.authHandler.ChangePassword)
 	g.POST("/logout-all", middleware.RequireSessionAuth(), a.authHandler.LogoutAll)
 
 	keys := api.Group("/api-keys", middleware.RequireSessionAuth())
