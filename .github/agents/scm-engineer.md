@@ -108,7 +108,7 @@ Adds CRUD endpoints for the Order resource.
 - Unit tests with MockRepository
 
 ## Testing
-- \`cd backend && go test ./... -v -short\`
+- \`cd backend && go test ./... -short\`
 
 Closes #42" \
   --base main

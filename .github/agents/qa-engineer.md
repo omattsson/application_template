@@ -43,7 +43,7 @@ When given a task:
 - **Framework**: Go `testing` + `testify/assert`
 - **Mock**: `MockRepository` in `handlers/mock_repository.go` (in-memory, same package)
 - **Schemas**: JSON response schemas in `handlers/test_schemas.go` via `gojsonschema`
-- **Run**: `cd backend && go test ./... -v -short`
+- **Run**: `cd backend && go test ./... -short`
 - **Coverage**: `cd backend && make test-coverage` (80% threshold)
 
 ### Backend Integration Tests
@@ -227,7 +227,7 @@ When asked to create a test strategy for a feature, use this structure:
 
 ## Commands
 ```bash
-cd backend && go test ./... -v -short    # Backend unit tests
+cd backend && go test ./... -short       # Backend unit tests
 cd backend && go vet ./...                # Backend lint
 cd backend && make test-coverage          # Coverage (80% threshold)
 cd frontend && npm test                   # Frontend unit tests

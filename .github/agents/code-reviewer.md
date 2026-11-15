@@ -36,7 +36,7 @@ When reviewing code:
 3. **Cross-reference with existing patterns** — compare against reference implementations (`items.go`, `Health/index.tsx`)
 4. **Check the instruction files** — verify compliance with `.github/instructions/*.md` rules
 5. **Check diagnostics** — use the `problems` tool to see any compile or lint errors in changed files
-6. **Run tests** — execute `cd backend && go test ./... -v -short` and `cd frontend && npm test`
+6. **Run tests** — execute `cd backend && go test ./... -short` and `cd frontend && npm test`
 7. **Run lint** — execute `make lint`
 8. **Provide structured feedback** — categorize findings by severity
 
@@ -121,7 +121,7 @@ Good practices worth noting — always include at least one.
 
 ## Commands to verify
 ```bash
-cd backend && go test ./... -v -short    # Backend unit tests
+cd backend && go test ./... -short       # Backend unit tests
 cd backend && go vet ./...                # Backend lint
 cd frontend && npm test                   # Frontend unit tests
 cd frontend && npm run lint              # Frontend TypeScript check

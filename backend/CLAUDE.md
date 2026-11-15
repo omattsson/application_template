@@ -57,7 +57,7 @@ The entry point is `api/main.go`. The helpers (database, services, router, HTTP 
 - Use `MockRepository` from `handlers/mock_repository.go` (Item type only). It type-asserts to `*models.Item`: extend it, or write a mock of your own repository interface, for a new entity.
 - Test setup: `setupTestRouter()` returns `(*gin.Engine, *MockRepository)`. `TestMain` of the handlers package sets Gin's mode once.
 - Validate JSON responses with `gojsonschema` against the schemas in `test_schemas.go`.
-- Run unit tests: `go test ./... -v -short`, or `make test-backend-unit` at the root (with `-race`).
+- Run unit tests: `go test ./... -short` (`-v` only for one package), or `make test-backend-unit` at the root (with `-race`).
 - Integration tests need MySQL and the build tag `integration`: `make test-backend-all` at the root starts MySQL and runs them with `-p 1`.
 - Coverage (80% for each package of `coverage-packages.txt`, not a total): `make test-coverage` in this directory or at the root. A package you add goes into that list in the same change.
 

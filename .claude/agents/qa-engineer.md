@@ -23,7 +23,7 @@ You are a senior QA engineer. You design test strategies, write tests, find cove
 2. Find coverage gaps in the existing tests.
 3. Design the cases: happy path, errors, edge cases, concurrency, roles.
 4. Write the tests with the established patterns. A new test must fail for the right reason before the code under test is correct, or when you remove the behavior it covers.
-5. Run `cd backend && go test ./... -v -short` and `cd frontend && npm test`.
+5. Run `cd backend && go test ./... -short` and `cd frontend && npm test`. Add `-v` only to rerun one failing package.
 6. Run `cd backend && make test-coverage` (80% minimum).
 
 ## Backend tests
