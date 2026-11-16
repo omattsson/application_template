@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -147,15 +148,49 @@ func userFilterWhere(q *gorm.DB, f models.UserFilter) *gorm.DB {
 	return q
 }
 
+// userSortColumns maps a sort key (models.UserSortKeys) to its column. It is
+// the only place where a key becomes SQL: a key that is not in it is refused.
+var userSortColumns = map[string]string{
+	"username":   "username",
+	"email":      "email",
+	"role":       "role",
+	"created_at": "created_at",
+}
+
+// userOrder returns the ORDER BY of the filter: the sort column (username by
+// default), then id as the tiebreaker, both in the direction of the filter.
+// The sort never changes the count.
+func userOrder(f models.UserFilter) ([]clause.OrderByColumn, error) {
+	key := f.SortBy
+	if key == "" {
+		key = "username"
+	}
+	col, ok := userSortColumns[key]
+	if !ok {
+		return nil, dberrors.NewDatabaseError("list_paged", fmt.Errorf("%w: sort key", dberrors.ErrValidation))
+	}
+	return []clause.OrderByColumn{
+		{Column: clause.Column{Name: col}, Desc: f.SortDesc},
+		{Column: clause.Column{Name: "id"}, Desc: f.SortDesc},
+	}, nil
+}
+
 // ListPaged returns one page of users and the number of matches. See
 // models.UserRepository.
 func (r *GORMUserRepository) ListPaged(ctx context.Context, filter models.UserFilter, limit, offset int) ([]models.User, int64, error) {
+	order, err := userOrder(filter)
+	if err != nil {
+		return nil, 0, err
+	}
 	db := r.DB.WithContext(ctx)
 	var total int64
 	if err := userFilterWhere(db.Model(&models.User{}), filter).Count(&total).Error; err != nil {
 		return nil, 0, repoError(ctx, "list_paged", err)
 	}
-	q := userFilterWhere(db.Model(&models.User{}), filter).Select(userPublicColumns).Order("username ASC").Order("id ASC")
+	q := userFilterWhere(db.Model(&models.User{}), filter).Select(userPublicColumns)
+	for _, o := range order {
+		q = q.Order(o)
+	}
 	if limit > 0 {
 		q = q.Limit(limit)
 		if offset > 0 {

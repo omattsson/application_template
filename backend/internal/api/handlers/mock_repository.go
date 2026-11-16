@@ -225,8 +225,15 @@ func (m *MockRepository) List(_ context.Context, dest interface{}, conditions ..
 }
 
 // ListPaged implements the Repository interface on top of List, so the mock
-// filters and pages like the handler expects.
+// filters, sorts and pages like the handler expects. The sort follows the
+// repository: the key's column, then id in the same direction, and an unknown
+// key is dberrors.ErrValidation. The total counts the filtered rows only.
 func (m *MockRepository) ListPaged(ctx context.Context, dest interface{}, limit, offset int, filter models.ItemFilter) (int64, error) {
+	column, err := filter.SortColumn()
+	if err != nil {
+		return 0, err
+	}
+
 	var conditions []interface{}
 	if filter.NameExact != "" {
 		conditions = append(conditions, models.Filter{Field: "name", Op: "exact", Value: filter.NameExact})
@@ -241,17 +248,65 @@ func (m *MockRepository) ListPaged(ctx context.Context, dest interface{}, limit,
 	}
 
 	var all []models.Item
-	err := m.List(ctx, &all, conditions...)
-	if err == nil {
-		if limit > 0 {
-			conditions = append(conditions, models.Pagination{Limit: limit, Offset: offset})
-		}
-		err = m.List(ctx, dest, conditions...)
-	}
-	if err != nil {
+	if err := m.List(ctx, &all, conditions...); err != nil {
 		return 0, err
 	}
-	return int64(len(all)), nil
+	total := int64(len(all))
+
+	sort.SliceStable(all, func(i, j int) bool {
+		c := compareItems(all[i], all[j], column)
+		if c == 0 {
+			c = cmpUint(all[i].ID, all[j].ID)
+		}
+		if filter.SortDesc {
+			return c > 0
+		}
+		return c < 0
+	})
+
+	if limit > 0 {
+		start := min(max(offset, 0), len(all))
+		end := min(start+limit, len(all))
+		all = all[start:end]
+	}
+	items, ok := dest.(*[]models.Item)
+	if !ok {
+		return 0, errors.New("invalid destination type")
+	}
+	*items = all
+	return total, nil
+}
+
+// compareItems compares two items by a column of the item sort whitelist.
+// Names compare case-insensitively, as the default MySQL collation does.
+func compareItems(a, b models.Item, column string) int {
+	switch column {
+	case "name":
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	case "price":
+		switch {
+		case a.Price < b.Price:
+			return -1
+		case a.Price > b.Price:
+			return 1
+		}
+		return 0
+	case "created_at":
+		return a.CreatedAt.Compare(b.CreatedAt)
+	case "updated_at":
+		return a.UpdatedAt.Compare(b.UpdatedAt)
+	}
+	return cmpUint(a.ID, b.ID)
+}
+
+func cmpUint(a, b uint) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
 }
 
 // Ping implements the Repository interface

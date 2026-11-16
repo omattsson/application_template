@@ -64,14 +64,14 @@ func NewGORMNoteRepository(db *gorm.DB) *GORMNoteRepository {
 ```
 
 - Write through `r.Write(ctx, ...)` (one statement) or `r.Tx(ctx, ...)` (several), so a deadlock or lock wait timeout is retried. Map every error with `repoError(ctx, "create", err)`; it gives `dberrors.ErrNotFound`, `ErrDuplicateKey` and a context error that the handler maps to 499. Validation failures go through `validationError("create", err)`.
-- `ListPaged`: one filter struct, a count query and a page query with the same `where`, column projection, a stable indexed `ORDER BY`. Never return all rows.
+- `ListPaged`: one filter struct, a count query and a page query with the same `where`, column projection, a stable indexed `ORDER BY`. Never return all rows. For a client-chosen order add `SortBy string` and `SortDesc bool` to the filter, a `NoteSortKeys` list in the model and a private map from key to column in the repository (the only place where a key becomes a column; an unknown key is `validationError`/`dberrors.ErrValidation`). Order with `clause.OrderByColumn{Column: clause.Column{Name: col}, Desc: f.SortDesc}`, then `id` in the same direction. Never put the key into a SQL string.
 - Never interpolate a request value into SQL: use `?` placeholders.
 
 ### 3. Migration
 
 Items: `createBaseTablesMigration` in `internal/database/migrations.go`.
 
-Add a function that returns a `schema.Migration` with the next version string (`YYYYMMDDNNNNNN`, after the last one in `registerMigrations`), a `Name`, a `Description`, an `Up` and a `Down`, and register it with `migrator.AddMigration(...)`. Define the table in a private struct of its own (like `sessionEntryV1`) and call `tx.AutoMigrate` on it, so the migration keeps its behavior when the model changes later; the `Down` drops the table. **Never edit a migration that exists**: add a new one. Run `make test-backend-all` (the integration tests apply every migration to a real MySQL).
+Add a function that returns a `schema.Migration` with the next version string (`YYYYMMDDNNNNNN`, after the last one in `registerMigrations`), a `Name`, a `Description`, an `Up` and a `Down`, and register it with `migrator.AddMigration(...)`. Define the table in a private struct of its own (like `sessionEntryV1`) and call `tx.AutoMigrate` on it, so the migration keeps its behavior when the model changes later; the `Down` drops the table. **Never edit a migration that exists**: add a new one. A sortable column needs an index so that `ORDER BY col, id` (and `DESC`) does not filesort: InnoDB appends the primary key to a secondary index, so one index on `(col)` serves both directions. Migration `20261115000001` (`add_sort_indexes`, `addSortIndexesMigration`) is the example; it creates an index only when it is missing and its `Down` drops only its own. Run `make test-backend-all` (the integration tests apply every migration to a real MySQL).
 
 ### 4. Handler
 
@@ -83,7 +83,7 @@ Items: `internal/api/handlers/items.go`. Create `handlers/notes.go` with a `Note
 - Map every repository error with `mapError(err, "Note")`: 404, 409, 400, 499 for a cancelled request and `Internal server error` for a 500. Never return `err.Error()` for a 500.
 - Parse path IDs and answer 400 `Invalid ID format` (Items parses a `uint`; a UUID resource checks the format).
 - In a create handler call `middleware.SetAuditEntityID(c, note.ID)`; in a handler that changes nothing call `middleware.SkipAudit(c)`.
-- A list handler reads `limit` and `offset`, rejects a bad value with 400 and calls `ListPaged`. Cap the page size with `models.MaxPageSize`.
+- A list handler reads `limit` and `offset`, rejects a bad value with 400 and calls `ListPaged`. Cap the page size with `models.MaxPageSize`. For sorting call `key, desc, ok := parseSort(c, models.NoteSortKeys)` (`handlers/sort.go`): it answers 400 for a `sort` outside the whitelist or an `order` other than `asc` or `desc`. Add `@Param sort query string false "..." Enums(...)` and `@Param order query string false "..." Enums(asc, desc)`.
 - To publish an event, take a `websocket.BroadcastSender` as Items does (`NewHandlerWithHub`) and call `Broadcast` with a `{"type": "note.created", "payload": ...}` message.
 
 ### 5. Routes and wiring

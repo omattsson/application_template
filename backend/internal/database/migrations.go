@@ -87,6 +87,7 @@ func registerMigrations(migrator *schema.Migrator) {
 	migrator.AddMigration(replaceUsersAndAddAuthTablesMigration())
 	migrator.AddMigration(createSessionEntriesMigration())
 	migrator.AddMigration(createReplicaTablesMigration())
+	migrator.AddMigration(addSortIndexesMigration())
 }
 
 // legacyUser is the users table of migrations 20231201000001 and
@@ -409,6 +410,61 @@ func createReplicaTablesMigration() schema.Migration {
 		},
 		Down: func(tx *gorm.DB) error {
 			return dropTables(tx, "leader_leases", "replica_heartbeats")
+		},
+	}
+}
+
+// sortIndex is a single-column index that serves one whitelisted sort.
+type sortIndex struct {
+	table, name, column string
+}
+
+// sortIndexes cover the columns of models.ItemSortKeys and
+// models.UserSortKeys that no index covers yet: the id of items is the primary
+// key, username and role have idx_users_username and idx_users_role. The
+// index on (name, price) of 20231201000002 does not serve ORDER BY name, id.
+// InnoDB appends the primary key to a secondary index, so (col) serves both
+// ORDER BY col, id and ORDER BY col DESC, id DESC.
+var sortIndexes = []sortIndex{
+	{"items", "idx_items_name", "name"},
+	{"items", "idx_items_price", "price"},
+	{"items", "idx_items_created_at", "created_at"},
+	{"items", "idx_items_updated_at", "updated_at"},
+	{"users", "idx_users_email", "email"},
+	{"users", "idx_users_created_at", "created_at"},
+}
+
+// addSortIndexesMigration adds the indexes of the sort query parameter of the
+// item and user lists. It creates an index only when it is missing and drops
+// only its own indexes, so both directions are idempotent and no existing
+// index is touched. It needs no data rewrite.
+func addSortIndexesMigration() schema.Migration {
+	return schema.Migration{
+		Version:     "20261115000001",
+		Name:        "add_sort_indexes",
+		Description: "Add the indexes that serve the sort parameter of the item and user lists",
+		Up: func(tx *gorm.DB) error {
+			for _, ix := range sortIndexes {
+				if tx.Migrator().HasIndex(ix.table, ix.name) {
+					continue
+				}
+				if err := tx.Exec("CREATE INDEX ? ON ? (?)",
+					clause.Column{Name: ix.name}, clause.Table{Name: ix.table}, clause.Column{Name: ix.column}).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		Down: func(tx *gorm.DB) error {
+			for _, ix := range sortIndexes {
+				if !tx.Migrator().HasIndex(ix.table, ix.name) {
+					continue
+				}
+				if err := tx.Migrator().DropIndex(ix.table, ix.name); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
 }

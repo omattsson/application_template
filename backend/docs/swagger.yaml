@@ -1168,7 +1168,51 @@ paths:
       - auth
   /api/v1/items:
     get:
-      description: Get a list of all items
+      description: Get a list of all items. Sort with sort and order; without them
+        the order is id ascending. Rows with an equal sort value are ordered by id
+        in the same direction, so pages never repeat or skip a row.
+      parameters:
+      - description: Page size (omit for all items)
+        in: query
+        name: limit
+        type: integer
+      - description: Rows to skip (needs limit)
+        in: query
+        name: offset
+        type: integer
+      - description: Name contains the text
+        in: query
+        name: name
+        type: string
+      - description: Name equals the text
+        in: query
+        name: name_exact
+        type: string
+      - description: Lowest price
+        in: query
+        name: min_price
+        type: number
+      - description: Highest price
+        in: query
+        name: max_price
+        type: number
+      - description: Sort key (default id)
+        enum:
+        - id
+        - name
+        - price
+        - created_at
+        - updated_at
+        in: query
+        name: sort
+        type: string
+      - description: Sort direction (default asc)
+        enum:
+        - asc
+        - desc
+        in: query
+        name: order
+        type: string
       produces:
       - application/json
       responses:
@@ -1490,10 +1534,12 @@ paths:
       - ui
   /api/v1/users:
     get:
-      description: Returns one page of users ordered by username, never with a password
-        hash. Admin only, with a login session (an API key is refused with 403); the
-        caller must still be an enabled admin in the database. Filter by role (exact)
-        or search (username, display name or email contains the text).
+      description: Returns one page of users, ordered by username unless sort says
+        otherwise, never with a password hash. Rows with an equal sort value are ordered
+        by id in the same direction, so pages never repeat or skip a row. Admin only,
+        with a login session (an API key is refused with 403); the caller must still
+        be an enabled admin in the database. Filter by role (exact) or search (username,
+        display name or email contains the text).
       parameters:
       - description: Page, from 1
         in: query
@@ -1514,6 +1560,22 @@ paths:
       - description: Text in the username, display name or email (at most 100 characters)
         in: query
         name: search
+        type: string
+      - description: Sort key (default username)
+        enum:
+        - username
+        - email
+        - role
+        - created_at
+        in: query
+        name: sort
+        type: string
+      - description: Sort direction (default asc)
+        enum:
+        - asc
+        - desc
+        in: query
+        name: order
         type: string
       produces:
       - application/json

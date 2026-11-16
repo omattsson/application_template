@@ -1128,7 +1128,7 @@
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Get a list of all items",
+                "description": "Get a list of all items. Sort with sort and order; without them the order is id ascending. Rows with an equal sort value are ordered by id in the same direction, so pages never repeat or skip a row.",
                 "produces": [
                     "application/json"
                 ],
@@ -1136,6 +1136,67 @@
                     "items"
                 ],
                 "summary": "Get all items",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page size (omit for all items)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Rows to skip (needs limit)",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Name contains the text",
+                        "name": "name",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Name equals the text",
+                        "name": "name_exact",
+                        "in": "query"
+                    },
+                    {
+                        "type": "number",
+                        "description": "Lowest price",
+                        "name": "min_price",
+                        "in": "query"
+                    },
+                    {
+                        "type": "number",
+                        "description": "Highest price",
+                        "name": "max_price",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "id",
+                            "name",
+                            "price",
+                            "created_at",
+                            "updated_at"
+                        ],
+                        "type": "string",
+                        "description": "Sort key (default id)",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "asc",
+                            "desc"
+                        ],
+                        "type": "string",
+                        "description": "Sort direction (default asc)",
+                        "name": "order",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1624,7 +1685,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns one page of users ordered by username, never with a password hash. Admin only, with a login session (an API key is refused with 403); the caller must still be an enabled admin in the database. Filter by role (exact) or search (username, display name or email contains the text).",
+                "description": "Returns one page of users, ordered by username unless sort says otherwise, never with a password hash. Rows with an equal sort value are ordered by id in the same direction, so pages never repeat or skip a row. Admin only, with a login session (an API key is refused with 403); the caller must still be an enabled admin in the database. Filter by role (exact) or search (username, display name or email contains the text).",
                 "produces": [
                     "application/json"
                 ],
@@ -1660,6 +1721,28 @@
                         "type": "string",
                         "description": "Text in the username, display name or email (at most 100 characters)",
                         "name": "search",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "username",
+                            "email",
+                            "role",
+                            "created_at"
+                        ],
+                        "type": "string",
+                        "description": "Sort key (default username)",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "asc",
+                            "desc"
+                        ],
+                        "type": "string",
+                        "description": "Sort direction (default asc)",
+                        "name": "order",
                         "in": "query"
                     }
                 ],
