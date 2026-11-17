@@ -423,17 +423,19 @@ type CreateUserRequest struct {
 
 // CreateUser godoc
 // @Summary      Create a user
-// @Description  Creates a local user with the given role. Admin only, with a login session. The username is 3 to 100 characters (ASCII letters, digits and . _ - @, starting with a letter or digit), the password at least 8 characters and at most 72 bytes; the role is required. A display name that is empty defaults to the username. Unknown request fields are refused. A username that exists is 409. The response never holds the password or its hash.
+// @Description  Creates a local user with the given role. Admin only, with a login session. The username is 3 to 100 characters (ASCII letters, digits and . _ - @, starting with a letter or digit), the password at least 8 characters and at most 72 bytes; the role is required. A display name that is empty defaults to the username. Unknown request fields are refused. A username that exists is 409. The response never holds the password or its hash. With IDEMPOTENCY_ENABLED=true the request may carry an Idempotency-Key header: the same key with the same request replays the stored response (header Idempotency-Replayed: true) and creates no second user.
 // @Tags         users
 // @Accept       json
 // @Produce      json
 // @Security     BearerAuth
 // @Param        request  body      CreateUserRequest  true  "New user"
+// @Param        Idempotency-Key  header  string  false  "Optional key (1 to 255 printable ASCII characters) that makes the request safe to retry; used only with IDEMPOTENCY_ENABLED=true"  maxlength(255)
 // @Success      201  {object}  models.User
 // @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
 // @Failure      403  {object}  map[string]string
-// @Failure      409  {object}  map[string]string
+// @Failure      409  {object}  map[string]string  "A username that exists, or a request with the same Idempotency-Key is still in progress (Retry-After)"
+// @Failure      422  {object}  map[string]string  "The Idempotency-Key was used with a different request"
 // @Failure      413  {object}  map[string]string "Request body too large"
 // @Failure      499  {object}  map[string]string "Client closed request"
 // @Failure      500  {object}  map[string]string

@@ -122,6 +122,7 @@ Directory rules: `backend/CLAUDE.md`, `frontend/CLAUDE.md`. GitHub Copilot reads
 - Global middleware order: RequestID, RedactWSToken, Logger, Recovery, SecurityHeaders, CORS, MaxBodySize (1 MB).
 - `/api/v1` adds the API rate limiter (`RATE_LIMIT`, default 100 per minute per client IP). With auth on, login, register, the OIDC routes and the password change (`PUT /auth/me/password`) get their own `LOGIN_RATE_LIMIT` budgets (default 10).
 - With auth on, the API group adds `CombinedAuth` (JWT and API key) and the audit recorder. Role gates are `RequireAdmin()` and `RequireRole`.
+- Optional idempotency keys (`IDEMPOTENCY_ENABLED=true`, off by default): `middleware.Idempotency` makes a `POST` with an `Idempotency-Key` header run once and replays the stored response on a repeat. A new `/api/v1` POST route lists the header in its Swagger annotations. Rules: `docs/claude/operations.md`.
 - WebSocket: `/ws`. Health: `/health/live`, `/health/ready`, `/health`. Swagger UI: `/swagger/*` only with `ENABLE_SWAGGER=true`; it stays open with auth on.
 - Client IP: only peers in `TRUSTED_PROXIES` may set it with `X-Forwarded-For` or `X-Real-IP`.
 

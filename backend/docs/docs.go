@@ -119,7 +119,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a key for the caller. The key has the role of its owner at the time of each request (a demoted owner's keys are demoted). An expiry is required: set expires_at (YYYY-MM-DD or RFC3339) or expires_in_days, not both, at most 365 days ahead by default. The caller can have 25 active keys by default (409 above that). The raw key (sk_ and 64 hex characters) is returned once in raw_key, with Cache-Control no-store, and cannot be retrieved again; only its SHA-256 is stored. A request authenticated with an API key is refused (403): manage keys with a login session. Unknown request fields are refused.",
+                "description": "Creates a key for the caller. The key has the role of its owner at the time of each request (a demoted owner's keys are demoted). An expiry is required: set expires_at (YYYY-MM-DD or RFC3339) or expires_in_days, not both, at most 365 days ahead by default. The caller can have 25 active keys by default (409 above that). The raw key (sk_ and 64 hex characters) is returned once in raw_key, with Cache-Control no-store, and cannot be retrieved again; only its SHA-256 is stored. A request authenticated with an API key is refused (403): manage keys with a login session. Unknown request fields are refused. An Idempotency-Key header is ignored on this route (also with IDEMPOTENCY_ENABLED=true): the response holds the raw key, which the idempotency module must never store.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1256,7 +1256,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Create a new item with the provided information",
+                "description": "Create a new item with the provided information. With IDEMPOTENCY_ENABLED=true the request may carry an Idempotency-Key header: the same key with the same request replays the stored response (header Idempotency-Replayed: true) and creates no second item, the same key with another request is 422 and while the first request still runs it is 409 with Retry-After. A response that is a 5xx or 499 is not stored, so the client can retry.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1276,6 +1276,13 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/models.Item"
                         }
+                    },
+                    {
+                        "maxLength": 255,
+                        "type": "string",
+                        "description": "Optional key (1 to 255 printable ASCII characters) that makes the request safe to retry; used only with IDEMPOTENCY_ENABLED=true",
+                        "name": "Idempotency-Key",
+                        "in": "header"
                     }
                 ],
                 "responses": {
@@ -1304,7 +1311,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Conflict",
+                        "description": "Duplicate, or a request with the same Idempotency-Key is still in progress (Retry-After)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1314,6 +1321,15 @@ const docTemplate = `{
                     },
                     "413": {
                         "description": "Request body too large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "The Idempotency-Key was used with a different request",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1808,7 +1824,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a local user with the given role. Admin only, with a login session. The username is 3 to 100 characters (ASCII letters, digits and . _ - @, starting with a letter or digit), the password at least 8 characters and at most 72 bytes; the role is required. A display name that is empty defaults to the username. Unknown request fields are refused. A username that exists is 409. The response never holds the password or its hash.",
+                "description": "Creates a local user with the given role. Admin only, with a login session. The username is 3 to 100 characters (ASCII letters, digits and . _ - @, starting with a letter or digit), the password at least 8 characters and at most 72 bytes; the role is required. A display name that is empty defaults to the username. Unknown request fields are refused. A username that exists is 409. The response never holds the password or its hash. With IDEMPOTENCY_ENABLED=true the request may carry an Idempotency-Key header: the same key with the same request replays the stored response (header Idempotency-Replayed: true) and creates no second user.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1828,6 +1844,13 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.CreateUserRequest"
                         }
+                    },
+                    {
+                        "maxLength": 255,
+                        "type": "string",
+                        "description": "Optional key (1 to 255 printable ASCII characters) that makes the request safe to retry; used only with IDEMPOTENCY_ENABLED=true",
+                        "name": "Idempotency-Key",
+                        "in": "header"
                     }
                 ],
                 "responses": {
@@ -1865,7 +1888,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Conflict",
+                        "description": "A username that exists, or a request with the same Idempotency-Key is still in progress (Retry-After)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1875,6 +1898,15 @@ const docTemplate = `{
                     },
                     "413": {
                         "description": "Request body too large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "The Idempotency-Key was used with a different request",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

@@ -13,6 +13,22 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// CORSOption changes what CORS allows. Without options the lists are the
+// default ones.
+type CORSOption func(*corsOptions)
+
+type corsOptions struct {
+	idempotency bool
+}
+
+// WithIdempotencyHeaders allows the Idempotency-Key request header and
+// exposes Idempotency-Replayed and Retry-After to browser scripts. routes.Setup
+// passes it with IDEMPOTENCY_ENABLED=true only, so with the module off the
+// response headers are unchanged.
+func WithIdempotencyHeaders() CORSOption {
+	return func(o *corsOptions) { o.idempotency = true }
+}
+
 // CORS middleware with configurable allowed origins.
 // Pass "*" or "" to allow all origins (development only).
 // For production, pass a comma-separated list of allowed origins.
@@ -25,7 +41,16 @@ import (
 // Access-Control-Allow-Credentials (without it a browser does not send or
 // accept cookies on a cross-origin fetch at all). TestCORSNeverEnablesCookieCSRFHeader
 // fails when either one changes.
-func CORS(allowedOrigins string) gin.HandlerFunc {
+func CORS(allowedOrigins string, opts ...CORSOption) gin.HandlerFunc {
+	var o corsOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	allowHeaders := "Content-Type, Content-Length, Accept-Encoding, Authorization, X-Request-ID"
+	if o.idempotency {
+		allowHeaders += ", " + IdempotencyKeyHeader
+	}
+
 	return func(c *gin.Context) {
 		if allowedOrigins == "" || allowedOrigins == "*" {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
@@ -52,7 +77,11 @@ func CORS(allowedOrigins string) gin.HandlerFunc {
 			// allow it through without setting Access-Control-Allow-Origin.
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, Authorization, X-Request-ID")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", allowHeaders)
+		if o.idempotency {
+			// Without it a browser script cannot read these two response headers.
+			c.Writer.Header().Set("Access-Control-Expose-Headers", IdempotencyReplayedHeader+", Retry-After")
+		}
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)

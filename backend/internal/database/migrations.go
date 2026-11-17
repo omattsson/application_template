@@ -88,6 +88,7 @@ func registerMigrations(migrator *schema.Migrator) {
 	migrator.AddMigration(createSessionEntriesMigration())
 	migrator.AddMigration(createReplicaTablesMigration())
 	migrator.AddMigration(addSortIndexesMigration())
+	migrator.AddMigration(createIdempotencyKeysMigration())
 }
 
 // legacyUser is the users table of migrations 20231201000001 and
@@ -465,6 +466,73 @@ func addSortIndexesMigration() schema.Migration {
 				}
 			}
 			return nil
+		},
+	}
+}
+
+// Column sizes of idempotency_keys (the sizes in idempotencyKeyV1).
+const (
+	idempotencyScopeSize = 64
+	idempotencyKeySize   = 255
+)
+
+// idempotencyKeyV1 is idempotency_keys as 20261117000001 creates it, a frozen
+// copy of models.IdempotencyKey: a model change needs a new migration
+// (TestIdempotencyKeysMatchModel fails without one).
+type idempotencyKeyV1 struct {
+	ExpiresAt   time.Time `gorm:"column:expires_at;type:datetime(3);not null;index:idx_idempotency_keys_expires_at"`
+	LockedAt    time.Time `gorm:"column:locked_at;type:datetime(3);not null"`
+	Scope       string    `gorm:"column:scope;primaryKey;size:64"`
+	Key         string    `gorm:"column:idempotency_key;primaryKey;size:255"`
+	RequestHash string    `gorm:"column:request_hash;size:64;not null"`
+	LockID      string    `gorm:"column:lock_id;size:36;not null"`
+	ContentType string    `gorm:"column:content_type;size:255;not null"`
+	Body        []byte    `gorm:"column:body;type:mediumblob"`
+	StatusCode  int       `gorm:"column:status_code;type:smallint;not null"`
+}
+
+func (idempotencyKeyV1) TableName() string { return "idempotency_keys" }
+
+// createIdempotencyKeysMigration creates idempotency_keys, the table of the
+// optional idempotency module (IDEMPOTENCY_ENABLED): one row per (scope, key)
+// that holds the claim and then the stored response of a POST. The index on
+// expires_at serves the janitor. The table exists whether or not the module is
+// on, so the switch never needs a migration; nothing reads it while the module
+// is off.
+//
+// On MySQL the scope and key columns get the binary NO PAD collation
+// utf8mb4_0900_bin (MySQL 8.0.17 and later): a key that differs only in letter
+// case or in trailing spaces is another key. Both directions are idempotent.
+func createIdempotencyKeysMigration() schema.Migration {
+	return schema.Migration{
+		Version:     "20261117000001",
+		Name:        "create_idempotency_keys",
+		Description: "Create idempotency_keys for the optional Idempotency-Key module",
+		Up: func(tx *gorm.DB) error {
+			if err := tx.AutoMigrate(&idempotencyKeyV1{}); err != nil {
+				return err
+			}
+			if tx.Dialector.Name() != dialectMySQL {
+				return nil
+			}
+			for col, size := range map[string]int{"scope": idempotencyScopeSize, "idempotency_key": idempotencyKeySize} {
+				var collation string
+				if err := tx.Raw("SELECT COLLATION_NAME FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'idempotency_keys' AND column_name = ?", col).Scan(&collation).Error; err != nil {
+					return err
+				}
+				if collation == "utf8mb4_0900_bin" {
+					continue
+				}
+				// col and size come from the constant map above, never from input.
+				stmt := fmt.Sprintf("ALTER TABLE idempotency_keys MODIFY %s VARCHAR(%d) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL", col, size)
+				if err := tx.Exec(stmt).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		Down: func(tx *gorm.DB) error {
+			return dropTables(tx, "idempotency_keys")
 		},
 	}
 }

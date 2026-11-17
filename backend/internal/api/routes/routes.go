@@ -26,6 +26,19 @@ import (
 // its session store: every revocation check would be skipped.
 var ErrAuthDepsMissing = errors.New("auth is enabled but an auth dependency is missing")
 
+// ErrIdempotencyDepsMissing is returned by Setup when IDEMPOTENCY_ENABLED is
+// true and the idempotency repository is missing or the settings are unusable.
+// The module is never silently skipped: a client that sends an Idempotency-Key
+// relies on it.
+var ErrIdempotencyDepsMissing = errors.New("idempotency is enabled but its repository or settings are missing")
+
+// idempotencySkipPrefixes are the paths that the idempotency middleware never
+// touches, because it stores the response body and replays it:
+//   - /auth/: a replayed login, register or refresh would replay tokens.
+//   - /api-keys: the response of a create holds the raw key, which must be
+//     shown once and never stored ("raw_key is never stored").
+var idempotencySkipPrefixes = []string{"/api/v1/auth/", "/api/v1/api-keys"}
+
 // RateLimiters groups the rate limiters created by Setup. The auth limiters
 // are nil with AUTH_ENABLED=false.
 type RateLimiters struct {
@@ -85,6 +98,9 @@ type Deps struct {
 	Hub           *websocket.Hub
 	// Auth is required when Config.Auth.Enabled and ignored otherwise.
 	Auth *AuthDeps
+	// Idempotency is required when Config.Idempotency.Enabled and ignored
+	// otherwise.
+	Idempotency models.IdempotencyRepository
 }
 
 // Result is what Setup built and what the caller must stop.
@@ -112,6 +128,14 @@ func isNil(v any) bool {
 func checkDeps(deps Deps) error {
 	if deps.Config == nil {
 		return errors.New("routes: no configuration")
+	}
+	if ic := deps.Config.Idempotency; ic.Enabled {
+		if isNil(deps.Idempotency) {
+			return fmt.Errorf("%w: no repository", ErrIdempotencyDepsMissing)
+		}
+		if ic.TTL <= 0 || ic.LockTimeout <= 0 {
+			return fmt.Errorf("%w: the TTL and the lock timeout must be positive", ErrIdempotencyDepsMissing)
+		}
 	}
 	if !deps.Config.Auth.Enabled {
 		return nil
@@ -209,7 +233,11 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 	router.Use(middleware.Logger())
 	router.Use(middleware.Recovery())
 	router.Use(middleware.SecurityHeaders())
-	router.Use(middleware.CORS(cfg.CORS.AllowedOrigins))
+	var corsOpts []middleware.CORSOption
+	if cfg.Idempotency.Enabled {
+		corsOpts = append(corsOpts, middleware.WithIdempotencyHeaders())
+	}
+	router.Use(middleware.CORS(cfg.CORS.AllowedOrigins, corsOpts...))
 	router.Use(middleware.MaxBodySize(1 << 20)) // 1 MB default
 
 	// Rate limiter for API routes: RATE_LIMIT requests per minute per client IP.
@@ -238,6 +266,25 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 	v1 := router.Group("/api/v1")
 	v1.Use(limiters.API.RateLimit())
 
+	// Idempotency-Key for POST (optional module, off by default: nothing is
+	// mounted without it). With auth on it runs after the authentication (the
+	// user is the scope) and the audit recorder (it reads the status after
+	// the handler); with auth off all clients share one scope and it runs
+	// here, after the rate limiter.
+	var idempotency gin.HandlerFunc
+	if cfg.Idempotency.Enabled {
+		idempotency = middleware.Idempotency(middleware.IdempotencyOptions{
+			Store:            deps.Idempotency,
+			SkipPathPrefixes: idempotencySkipPrefixes,
+			TTL:              cfg.Idempotency.TTL,
+			LockTimeout:      cfg.Idempotency.LockTimeout,
+			PerUser:          a != nil,
+		})
+		if a == nil {
+			v1.Use(idempotency)
+		}
+	}
+
 	// Public UI config (no auth, so the login page can read it)
 	v1.GET("/ui-config", handlers.NewUIConfigHandler(handlers.UIConfigFromConfig(cfg)))
 
@@ -257,6 +304,9 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 			authMW = append(authMW, middleware.SpanEnrichUser())
 		}
 		authMW = append(authMW, a.recorder.Middleware())
+		if idempotency != nil {
+			authMW = append(authMW, idempotency)
+		}
 		api = v1.Group("", authMW...)
 		a.registerAuthenticated(api, limiters)
 		result.AuthHandler = a.authHandler

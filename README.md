@@ -12,6 +12,7 @@ A modern, production-ready template for full-stack web applications using Go (Gi
 - 🧪 Comprehensive test suite
 - 🛠️ Development and production Docker configurations
 - 🔒 Middleware support (logging, recovery, CORS, security headers, rate limiting)
+- ♻️ Optional idempotency keys (off by default): a `POST` with an `Idempotency-Key` header runs once and a retry replays the stored response
 - 🔑 Optional authentication (off by default): local login with refresh sessions, API keys, OIDC single sign-on, user administration, audit log
 
 ### Frontend (React + TypeScript)
@@ -160,6 +161,7 @@ Backend:
 - `LOGIN_RATE_LIMIT` - Login attempts per minute per client IP (default: 10)
 - `SERVER_SHUTDOWN_TIMEOUT` - Budget of each shutdown step (default: 30s). Compose gives the backend `stop_grace_period: 170s` (5 steps x 30s, plus 2s each for the diagnostics servers and the replica heartbeat, plus a margin); raise both together.
 - `AUTH_ENABLED`, `JWT_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SECURE_COOKIES`, `OIDC_*` - Optional authentication, see [Authentication](#authentication)
+- `IDEMPOTENCY_ENABLED`, `IDEMPOTENCY_TTL`, `IDEMPOTENCY_LOCK_TIMEOUT` - Optional idempotency keys for `POST` (default: off, 24h, 60s); see [docs/claude/operations.md](docs/claude/operations.md), "Idempotency keys"
 - `CORS_ALLOWED_ORIGINS` - Allowed origins (default `*`: for development only; the bundled web UI is same-origin and needs no entry)
 
 Every variable the backend reads, with its default, is in [backend/.env.example](backend/.env.example) and in [docs/claude/operations.md](docs/claude/operations.md); `make check-env-docs` keeps them in step with the code.

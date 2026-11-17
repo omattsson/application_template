@@ -14,7 +14,7 @@ Packages in `internal/`:
 - `health`: liveness and readiness checks.
 - `inflight`: `Tracker` for work that outlives its request.
 - `leader`: `Worker` and `Group` for leader-only background jobs; `Lease`, the MySQL row lease that elects the leader.
-- `models`: Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, validation, repository interfaces, `GenericRepository`, `RetryOnLock`.
+- `models`: Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, IdempotencyKey, validation, repository interfaces, `GenericRepository`, `RetryOnLock`.
 - `logutil`: `Limiter`, one log line per interval for an error that repeats on every request.
 - `replica`: `ProcessID` (host name plus a random suffix) and `Heartbeat`, the per-process row in `replica_heartbeats`.
 - `telemetry`: OpenTelemetry (`Init`, `Shutdown`, `LogHandler`, `StartDBMetrics`). Off by default and then a true no-op.
@@ -85,6 +85,7 @@ Key groups:
 - `PPROF_ENABLED` (default false, strict), `PPROF_ADDR` (default `127.0.0.1:6060`), `PPROF_ALLOW_NON_LOOPBACK`, `PPROF_MUTEX_FRACTION`, `PPROF_BLOCK_RATE`. The metrics and pprof servers are in `api/servers.go`, on ports of their own (never the API router), and `shutdown` stops them first. pprof refuses a non-loopback address unless `PPROF_ALLOW_NON_LOOPBACK=true`: a heap dump exposes secrets. `/metrics` has no authentication: keep it on a private network.
 - `CORS_ALLOWED_ORIGINS` (default `*`, development only). It also gates the WebSocket `Origin` header.
 - `LEADER_ELECTION_ENABLED` and `REPLICA_HEARTBEAT_ENABLED` (both default false, strict booleans). The lease timing is fixed in code (`leader.DefaultLeaseConfig`).
+- `IDEMPOTENCY_ENABLED` (default false, strict boolean), `IDEMPOTENCY_TTL` (default 24h) and `IDEMPOTENCY_LOCK_TIMEOUT` (default 60s): the durations are read leniently while the module is off and must be positive with it on (`config/idempotency.go`).
 
 ## Migrations
 
@@ -92,7 +93,7 @@ Key groups:
 
 ## Background Workers
 
-- Leader-only workers are built in `buildServices` (`api/bootstrap.go`) and run in a `leader.Group`. With auth on they are `refresh-token-cleanup` (hourly) and `session-store-cleanup` (every 15 minutes); with `REPLICA_HEARTBEAT_ENABLED=true` also `replica-heartbeat-cleanup` (every 15 minutes). With `LEADER_ELECTION_ENABLED=false` (the default) every process runs them. With `true` the group runs only on the replica that holds the MySQL lease (`leader.Lease`, table `leader_leases`, database clock; `electedLeader` in the bootstrap): it starts on acquisition and stops when renewals fail for the renew deadline (10 s, 5 s before the 15 s lease expires) or another holder appears. A job must still be idempotent and safe on several replicas (no fencing token), and return within 5 s after its context is cancelled. Details: `docs/claude/operations.md` ("Leader election").
+- Leader-only workers are built in `buildServices` (`api/bootstrap.go`) and run in a `leader.Group`. With auth on they are `refresh-token-cleanup` (hourly) and `session-store-cleanup` (every 15 minutes); with `REPLICA_HEARTBEAT_ENABLED=true` also `replica-heartbeat-cleanup` (every 15 minutes); with `IDEMPOTENCY_ENABLED=true` also `idempotency-cleanup` (hourly, batches of 1000). With `LEADER_ELECTION_ENABLED=false` (the default) every process runs them. With `true` the group runs only on the replica that holds the MySQL lease (`leader.Lease`, table `leader_leases`, database clock; `electedLeader` in the bootstrap): it starts on acquisition and stops when renewals fail for the renew deadline (10 s, 5 s before the 15 s lease expires) or another holder appears. A job must still be idempotent and safe on several replicas (no fencing token), and return within 5 s after its context is cancelled. Details: `docs/claude/operations.md` ("Leader election").
 - With `REPLICA_HEARTBEAT_ENABLED=true` `replica.Heartbeat` upserts this process's row in `replica_heartbeats` every 30 s and deletes it in the shutdown step before the database closes.
 - A worker has `Run(ctx)`. It blocks until `ctx` is done and must work again after it returned: no closed stop channels, no one-shot state. Use `periodicWorker` for an interval job.
 - Add a new periodic job as a `leader.Worker` passed to `leader.NewGroup` before the group starts (`Group.Add` takes effect only at the next term), not as a goroutine in `main.go`. Keep state that must survive a leader change in the database.
@@ -104,6 +105,7 @@ Key groups:
 
 - The `/api/v1` group adds the API rate limiter.
 - With auth on, the authenticated group adds `CombinedAuth` (JWT and API key) and the audit recorder.
+- With `IDEMPOTENCY_ENABLED=true` `middleware.Idempotency` follows them (with auth off it sits right after the rate limiter): a `POST` with an `Idempotency-Key` runs once and a repeat replays the stored response. MySQL arbitrates (`models.IdempotencyRepository`, one atomic statement per decision); the store of the response and the release use `ctxutil.Detach`. `/auth/*` and `/api-keys` are on its skip list (`idempotencySkipPrefixes`): never add a route whose response holds a secret. A new `/api/v1` POST needs the `Idempotency-Key` header in its Swagger annotations (`@Param Idempotency-Key header string false`). With the module off nothing is mounted and CORS is unchanged.
 - `Setup` returns `*Result`: call `Result.RateLimiters.Stop()` on shutdown and `Result.AuditRecorder.Shutdown(ctx)` before the database closes (the bootstrap does).
 
 ## Telemetry
