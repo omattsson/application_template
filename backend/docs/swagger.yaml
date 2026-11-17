@@ -412,7 +412,9 @@ paths:
         by default (409 above that). The raw key (sk_ and 64 hex characters) is returned
         once in raw_key, with Cache-Control no-store, and cannot be retrieved again;
         only its SHA-256 is stored. A request authenticated with an API key is refused
-        (403): manage keys with a login session. Unknown request fields are refused.'
+        (403): manage keys with a login session. Unknown request fields are refused.
+        An Idempotency-Key header is ignored on this route (also with IDEMPOTENCY_ENABLED=true):
+        the response holds the raw key, which the idempotency module must never store.'
       parameters:
       - description: Key name and expiry
         in: body
@@ -1255,7 +1257,12 @@ paths:
     post:
       consumes:
       - application/json
-      description: Create a new item with the provided information
+      description: 'Create a new item with the provided information. With IDEMPOTENCY_ENABLED=true
+        the request may carry an Idempotency-Key header: the same key with the same
+        request replays the stored response (header Idempotency-Replayed: true) and
+        creates no second item, the same key with another request is 422 and while
+        the first request still runs it is 409 with Retry-After. A response that is
+        a 5xx or 499 is not stored, so the client can retry.'
       parameters:
       - description: Item object
         in: body
@@ -1263,6 +1270,12 @@ paths:
         required: true
         schema:
           $ref: '#/definitions/models.Item'
+      - description: Optional key (1 to 255 printable ASCII characters) that makes
+          the request safe to retry; used only with IDEMPOTENCY_ENABLED=true
+        in: header
+        maxLength: 255
+        name: Idempotency-Key
+        type: string
       produces:
       - application/json
       responses:
@@ -1283,13 +1296,20 @@ paths:
               type: string
             type: object
         "409":
-          description: Conflict
+          description: Duplicate, or a request with the same Idempotency-Key is still
+            in progress (Retry-After)
           schema:
             additionalProperties:
               type: string
             type: object
         "413":
           description: Request body too large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "422":
+          description: The Idempotency-Key was used with a different request
           schema:
             additionalProperties:
               type: string
@@ -1622,12 +1642,15 @@ paths:
     post:
       consumes:
       - application/json
-      description: Creates a local user with the given role. Admin only, with a login
+      description: 'Creates a local user with the given role. Admin only, with a login
         session. The username is 3 to 100 characters (ASCII letters, digits and .
         _ - @, starting with a letter or digit), the password at least 8 characters
         and at most 72 bytes; the role is required. A display name that is empty defaults
         to the username. Unknown request fields are refused. A username that exists
-        is 409. The response never holds the password or its hash.
+        is 409. The response never holds the password or its hash. With IDEMPOTENCY_ENABLED=true
+        the request may carry an Idempotency-Key header: the same key with the same
+        request replays the stored response (header Idempotency-Replayed: true) and
+        creates no second user.'
       parameters:
       - description: New user
         in: body
@@ -1635,6 +1658,12 @@ paths:
         required: true
         schema:
           $ref: '#/definitions/handlers.CreateUserRequest'
+      - description: Optional key (1 to 255 printable ASCII characters) that makes
+          the request safe to retry; used only with IDEMPOTENCY_ENABLED=true
+        in: header
+        maxLength: 255
+        name: Idempotency-Key
+        type: string
       produces:
       - application/json
       responses:
@@ -1661,13 +1690,20 @@ paths:
               type: string
             type: object
         "409":
-          description: Conflict
+          description: A username that exists, or a request with the same Idempotency-Key
+            is still in progress (Retry-After)
           schema:
             additionalProperties:
               type: string
             type: object
         "413":
           description: Request body too large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "422":
+          description: The Idempotency-Key was used with a different request
           schema:
             additionalProperties:
               type: string

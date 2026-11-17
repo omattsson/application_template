@@ -68,6 +68,9 @@ type Config struct {
 	// Replica holds the multi-replica switches (LEADER_ELECTION_ENABLED,
 	// REPLICA_HEARTBEAT_ENABLED).
 	Replica ReplicaConfig
+	// Idempotency holds the settings of the optional idempotency module
+	// (IDEMPOTENCY_*).
+	Idempotency IdempotencyConfig
 	// LogLevel is LOG_LEVEL parsed to a slog level; main applies it to the
 	// default slog logger. An invalid value makes LoadConfig fail.
 	LogLevel slog.Level
@@ -436,6 +439,13 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// With the module off its durations are not used.
+	if c.Idempotency.Enabled {
+		if err := c.Idempotency.Validate(); err != nil {
+			return fmt.Errorf("idempotency config: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -646,6 +656,10 @@ func LoadConfig() (*Config, error) {
 	}
 
 	if cfg.Replica, err = loadReplicaConfig(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	if cfg.Idempotency, err = loadIdempotencyConfig(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 

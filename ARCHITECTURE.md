@@ -24,7 +24,7 @@ How the template fits together. Items is the example entity. For commands and ru
 
 1. The proxy forwards the request to `:8081` with `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Real-IP`.
 2. Gin middleware, in order: `RequestID`, `RedactWSToken`, `Logger`, `Recovery`, `SecurityHeaders`, `CORS`, `MaxBodySize` (1 MB).
-3. `/api/v1` adds the per-IP rate limiter. With auth on, the protected routes add `CombinedAuth` (bearer JWT or `X-API-Key`; revocation checks that fail closed) and the audit recorder.
+3. `/api/v1` adds the per-IP rate limiter. With auth on, the protected routes add `CombinedAuth` (bearer JWT or `X-API-Key`; revocation checks that fail closed) and the audit recorder. With `IDEMPOTENCY_ENABLED=true` the idempotency middleware follows (after the authentication, so the user is the scope; with auth off, after the rate limiter).
 4. A handler (`internal/api/handlers`) binds and validates the input and calls a repository interface from `internal/models`.
 5. The repository (`internal/models.GenericRepository` for Items, `internal/database` for the rest) talks to MySQL through GORM. Errors are wrapped as `*dberrors.DatabaseError` with a sentinel (`ErrNotFound`, `ErrDuplicateKey`, `ErrValidation`).
 6. `mapError` turns the sentinel into a status and a safe message: 400, 404, 409, 501, 499 for a cancelled request, and 500 with the text `Internal server error` for anything else.
@@ -69,6 +69,7 @@ The complete file tree is in `docs/claude/structure.md`.
 | `refresh_tokens` | `models.RefreshToken` | SHA-256 of the opaque token, `family_id` (the session), `revoked`, expiry. |
 | `api_keys` | `models.APIKey` | SHA-256 of the key, prefix, owner, expiry, last used. |
 | `audit_logs` | `models.AuditLog` | Who, action, entity type and ID, details (JSON), timestamp. |
+| `idempotency_keys` | `models.IdempotencyKey` | The claim and the stored response of a `POST` with an `Idempotency-Key` (optional module). Primary key `(scope, idempotency_key)`, request hash, lock owner, status, content type, body, expiry (indexed). |
 | `session_entries` | session store | One table: `token_block`, `session_block`, `user_block` and `oidc_state` rows with an expiry. |
 | `schema_versions` | migrator (`schema.SchemaVersion`) | The applied migration versions. |
 
@@ -94,8 +95,9 @@ The session design (tokens, rotation, logout, revocation, WebSocket auth, audit)
 | Session store | `SESSION_STORE=mysql` (default) or `memory` (one replica) | `internal/sessionstore` |
 | Swagger UI | `ENABLE_SWAGGER=true` | `/swagger/index.html`; open even with auth on |
 | Trusted proxies | `TRUSTED_PROXIES=<ips or CIDRs>` | client IP for rate limits and audit entries |
+| Idempotency keys | `IDEMPOTENCY_ENABLED=true` (`IDEMPOTENCY_TTL`, `IDEMPOTENCY_LOCK_TIMEOUT`) | `middleware.Idempotency` on `/api/v1` (a `POST` with an `Idempotency-Key` header runs once, a repeat replays the stored response), table `idempotency_keys`, worker `idempotency-cleanup`; rules in `docs/claude/operations.md` |
 
-The WebSocket hub, the leader worker group and the in-flight tracker are always built. Which workers run depends on the modules: with auth on, `refresh-token-cleanup` (hourly) and `session-store-cleanup` (every 15 minutes).
+The WebSocket hub, the leader worker group and the in-flight tracker are always built. Which workers run depends on the modules: with auth on, `refresh-token-cleanup` (hourly) and `session-store-cleanup` (every 15 minutes); with the idempotency module on, `idempotency-cleanup` (hourly).
 
 ## WebSocket
 

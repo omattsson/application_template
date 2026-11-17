@@ -49,6 +49,8 @@ type authEnv struct {
 	store   sessionstore.SessionStore
 	hub     *websocket.Hub
 	cfg     *config.Config
+	// idem is the idempotency repository (set by an envOption; nil: module off).
+	idem models.IdempotencyRepository
 }
 
 // authOn returns a config with AUTH_ENABLED=true and the defaults that
@@ -132,6 +134,7 @@ func newAuthEnv(t *testing.T, cfg *config.Config, opts ...envOption) *authEnv {
 		HealthChecker: healthChecker,
 		Hub:           hub,
 		Auth:          deps,
+		Idempotency:   env.idem,
 	})
 	require.NoError(t, err)
 	t.Cleanup(res.RateLimiters.Stop)

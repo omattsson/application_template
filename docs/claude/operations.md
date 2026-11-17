@@ -155,6 +155,16 @@ Off by default: a single process behaves as before. Details: "Replicas" below.
 
 The lease timing is fixed in code (`leader.DefaultLeaseConfig`: 15 s lease, 10 s renew deadline, 2 s retry period), not configurable.
 
+### Idempotency keys
+
+Off by default: with the switch off no middleware, repository or worker exists, no query touches the table and the `Idempotency-Key` header is ignored. Details: "Idempotency keys" below.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `IDEMPOTENCY_ENABLED` | `false` | Strict boolean. With `true` a `POST` with an `Idempotency-Key` header runs once and a repeat replays the stored response. |
+| `IDEMPOTENCY_TTL` | `24h` | How long a key and its stored response live. Read leniently while the module is off; with it on it must parse, be positive and not be shorter than `IDEMPOTENCY_LOCK_TIMEOUT`. |
+| `IDEMPOTENCY_LOCK_TIMEOUT` | `60s` | How long a request in progress blocks a retry (409 with `Retry-After`) before the next request with the same key and the same request may take the key over. Set it above the longest `POST`. Read leniently while the module is off; with it on it must parse and be positive. |
+
 ### Compose and Makefile variables
 
 These are read by `docker-compose.yml`, the Makefile or the scripts, not by the backend.
@@ -171,7 +181,7 @@ These are read by `docker-compose.yml`, the Makefile or the scripts, not by the 
 | `FRONTEND_PROXY_IP`, `FRONTEND_NET_SUBNET` | `172.30.80.10`, `172.30.80.0/24` | Fixed proxy address on `frontend-net` and its subnet; change both together. |
 | `VITE_API_URL` | `http://localhost:8081` | Target of the Vite dev proxy; Compose sets `http://backend:8081`. |
 
-`docker-compose.yml` also passes three backend variables documented above, with an empty default that keeps the backend's own default (their parsers treat an empty value as unset): `LEADER_ELECTION_ENABLED` (`false`), `REPLICA_HEARTBEAT_ENABLED` (`false`) and `WS_MAX_CONNECTIONS_PER_USER` (`16`). It does not pass the `PPROF_*` variables: profiling needs an override file of your own (see "Profiling (pprof)"), and `docker-compose.otel.yml` sets the telemetry and metrics variables. The backend healthcheck (`/health/live`, every 30 s) has `start_period: 120s`, so a cold development compile (`go run` with an empty module cache) is not counted as failing; the frontend waits for it (`depends_on: service_healthy`).
+`docker-compose.yml` also passes six backend variables documented above, with an empty default that keeps the backend's own default (their parsers treat an empty value as unset): `LEADER_ELECTION_ENABLED` (`false`), `REPLICA_HEARTBEAT_ENABLED` (`false`), `WS_MAX_CONNECTIONS_PER_USER` (`16`), `IDEMPOTENCY_ENABLED` (`false`), `IDEMPOTENCY_TTL` (`24h`) and `IDEMPOTENCY_LOCK_TIMEOUT` (`60s`). It does not pass the `PPROF_*` variables: profiling needs an override file of your own (see "Profiling (pprof)"), and `docker-compose.otel.yml` sets the telemetry and metrics variables. The backend healthcheck (`/health/live`, every 30 s) has `start_period: 120s`, so a cold development compile (`go run` with an empty module cache) is not counted as failing; the frontend waits for it (`depends_on: service_healthy`).
 
 `docker-compose.yml` also passes `APP_ENV`, `PORT`, `API_VERSION`, `API_PREFIX`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS` and `CORS_MAX_AGE` to the backend. The backend reads none of them (it reads `GO_ENV`, `SERVER_PORT` and `CORS_ALLOWED_ORIGINS`), so they have no effect. Set the listening port with `SERVER_PORT`, never `PORT`. The development frontend does not read a `PORT` either: the Vite server is fixed to port 3000.
 
@@ -259,7 +269,7 @@ Both run on ports of their own, started by `main` (`backend/api/servers.go`) and
 - Shared through MySQL: all data, the token blocklist and OIDC login states (`SESSION_STORE=mysql`), the refresh-token families and the audit log. A logout on one replica is seen by all others at their next request. A WebSocket on another replica closes at the next revalidation pass (every `websocket.DefaultRevalidateInterval`) or at token expiry.
 - Per replica, in memory: the rate limiters, the username login throttle, the WebSocket hub and its connections. WebSocket broadcasts reach only the sockets of the replica that sent them.
 - `SESSION_STORE=memory` is for one replica: a restart forgets every revocation and a second replica does not see any.
-- Leader workers (`refresh-token-cleanup`, hourly, `session-store-cleanup`, every 15 minutes, and with the heartbeat on `replica-heartbeat-cleanup`, every 15 minutes) run in a `leader.Group`. With `LEADER_ELECTION_ENABLED=false` (the default) each process starts them itself; they only delete expired rows, so several replicas running them is safe. With `LEADER_ELECTION_ENABLED=true` they run on one replica at a time (below). A new worker must still be safe to run twice for a short time: see "Failure semantics".
+- Leader workers (`refresh-token-cleanup`, hourly, `session-store-cleanup`, every 15 minutes, with the heartbeat on `replica-heartbeat-cleanup`, every 15 minutes, and with the idempotency module on `idempotency-cleanup`, hourly) run in a `leader.Group`. With `LEADER_ELECTION_ENABLED=false` (the default) each process starts them itself; they only delete expired rows, so several replicas running them is safe. With `LEADER_ELECTION_ENABLED=true` they run on one replica at a time (below). A new worker must still be safe to run twice for a short time: see "Failure semantics".
 - `EnsureAdminUser` is safe when replicas start together: it never changes an existing user and treats a duplicate key as success.
 
 ### Leader election
@@ -287,6 +297,32 @@ Both run on ports of their own, started by `main` (`backend/api/servers.go`) and
 ### Replica heartbeat
 
 With `REPLICA_HEARTBEAT_ENABLED=true` every process (leader or not) upserts its row in `replica_heartbeats` (`id` `varchar(253)` primary key, the process ID; `last_seen` `datetime(3)`, the database server's UTC clock, indexed) every 30 s, and deletes it on a clean shutdown (step 9). A failed write is logged once until the next success and does not stop the process. A row older than 2 minutes (`replica.StaleAfter`) belongs to a process that ended without a clean shutdown; the `replica-heartbeat-cleanup` leader worker deletes those rows. The table lists the running processes, for example `SELECT id, last_seen FROM replica_heartbeats ORDER BY last_seen DESC`.
+
+## Idempotency keys
+
+With `IDEMPOTENCY_ENABLED=true` a `POST` on `/api/v1` is safe to retry. A client sends `Idempotency-Key: <key>` (1 to 255 bytes of printable ASCII, white space around it is removed; an empty, longer or non-ASCII key is 400). A request without the header, and every method other than `POST`, passes through unchanged.
+
+**Rules** (`middleware.Idempotency`, table `idempotency_keys`, primary key `(scope, idempotency_key)`):
+
+- The scope is the authenticated user ID (JWT and API key of one user share it) with auth on, and one shared scope with auth off. Two users may use the same key.
+- The first request claims the key (an insert), runs the handler and stores the status, the `Content-Type` and the body of the response (nothing else: no other header). The response is sent after it is stored, so a client that retries after it saw the answer always gets a replay.
+- The same key with the same user, method, path, query and body replays the stored response (same status, content type and body) with `Idempotency-Replayed: true`. The handler does not run: no second change, no second audit entry (`SkipAudit`), no second WebSocket event.
+- The same key with another method, path, query or body answers 422. The same key while the first request still runs answers 409 with `Retry-After` (the seconds until the lock can be taken over).
+- A stored response is replayed as it was, also a 4xx. A 5xx, a 499 (client left), a handler panic, a response over 256 KiB and a flushed (streamed) response release the key (the row is deleted; the large response is still sent), so the client can retry and the handler runs again. 2xx, 3xx and 4xx are stored.
+- A request that runs longer than `IDEMPOTENCY_LOCK_TIMEOUT` may lose its key to a retry with the same request: the retry takes the key over (one winner, decided by one `UPDATE`) and runs the handler again. Only the owner of the row (`lock_id`) may store a response or release the key, so the slow request cannot overwrite its successor; its own response is still sent. Set the timeout above the longest `POST`. The same takeover frees the key of a crashed process.
+- The middleware runs before the route-level role gates (`RequireAdmin`, `RequireRole`). A 4xx answer is stored like any other, so a user who was refused (403) and is promoted later gets the stored 403 for that key until the TTL ends: use a new key. A replay does not run the gates again.
+- With auth off every client shares one scope, and any client can add rows. The per-IP `RATE_LIMIT`, the TTL and the 256 KiB response cap bound the table; size `IDEMPOTENCY_TTL` accordingly.
+- A key is not protected when the handler committed but no response was stored: a 5xx answer (key released), a 2xx or 3xx over 256 KiB, a flushed response, or a failed store (the key stays locked until the lock timeout). A retry then runs the handler again.
+- A replay returns the status, `Content-Type` and body only. Other headers that a handler set (for example `Location` or `Cache-Control`) are not stored.
+- The claim, the store of the response and the release run on a detached context with a deadline (`ctxutil.Detach`), never the request context. A failing claim answers 500 `Internal server error` and never runs the handler unprotected; a failing store of the response is logged (once per minute at Error) and the response is sent anyway, and the key then times out like a crashed one.
+- `POST /api/v1/auth/*` and `POST /api/v1/api-keys` are never touched: a replayed login would replay tokens, and the response of an API key create holds the raw key, which is shown once and never stored.
+- CORS (only with the module on): `Idempotency-Key` is an allowed request header, `Idempotency-Replayed` and `Retry-After` are exposed to browser scripts.
+
+**Several replicas.** MySQL is the arbiter, no state is kept in a process: a claim is one insert on the primary key, a takeover one conditional `UPDATE`, and every time (`locked_at`, `expires_at`) is written and compared with the database clock (`UTC_TIMESTAMP(3)`). Any replica answers a replay or a 409 for a key that another replica runs.
+
+**Cleanup.** The leader worker `idempotency-cleanup` (hourly, only with the module on) deletes the rows past `expires_at` in batches of 1000 (the index `idx_idempotency_keys_expires_at`) and loops until a batch is short. A request that finds an expired row takes it over, so the replay window never outlives the TTL even before the worker ran. The table exists after the migrations whether or not the module is on, and turning the module off leaves its rows (they are not read).
+
+**Stored data.** The body of a response is stored unencrypted for the TTL. A `POST` whose response holds a secret belongs on the skip list (`idempotencySkipPrefixes` in `routes.go`).
 
 ## Health
 

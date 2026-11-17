@@ -34,7 +34,7 @@ backend/
 │   ├── api/
 │   │   ├── routes/routes.go   # Setup(): every route, middleware order, auth wiring, rate limiters
 │   │   ├── middleware/        # RequestID, RedactWSToken, Logger, Recovery, SecurityHeaders, CORS, MaxBodySize,
-│   │   │                      # JWT + API key auth (CombinedAuth), roles, audit recorder, /ws token helpers,
+│   │   │                      # JWT + API key auth (CombinedAuth), roles, audit recorder, idempotency.go, /ws token helpers,
 │   │   │                      # HTTPMetrics, SpanEnrichUser, auth_metrics.go (auth outcome counters)
 │   │   └── handlers/          # items.go (reference CRUD), auth*.go, oidc.go, users.go, api_keys.go,
 │   │                          # audit_logs.go, websocket*.go, ui_config.go, rate_limiter.go, errors.go,
@@ -43,11 +43,11 @@ backend/
 │   ├── config/                # LoadConfig, AuthConfig, OIDCConfig, TrustedProxies
 │   ├── ctxutil/               # Detach: a bounded context that a leaving client cannot cancel
 │   ├── database/              # factory, migrations, schema/ (migrator), repositories (users, refresh tokens,
-│   │                          # API keys, audit log, replica heartbeats), BaseRepository (lock retry), gorm logger
+│   │                          # API keys, audit log, replica heartbeats, idempotency keys), BaseRepository (lock retry), gorm logger
 │   ├── health/                # Liveness and readiness checks
 │   ├── inflight/              # Tracker for work that outlives its request
 │   ├── leader/                # Worker and Group: leader-only background jobs; Lease: MySQL row lease election
-│   ├── models/                # Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, validation,
+│   ├── models/                # Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, IdempotencyKey, validation,
 │   │                          # GenericRepository, RetryOnLock
 │   ├── logutil/               # Limiter: one log line per interval for a repeating error
 │   ├── replica/               # ProcessID and Heartbeat (replica_heartbeats row per process)

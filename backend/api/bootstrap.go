@@ -53,6 +53,17 @@ const (
 	ensureAdminTimeout = 30 * time.Second
 )
 
+// The janitor of the idempotency module (IDEMPOTENCY_ENABLED).
+const (
+	// idempotencyCleanupInterval is how often the leader deletes the keys
+	// whose life ended.
+	idempotencyCleanupInterval = time.Hour
+	// idempotencyCleanupBatch is the most rows one DELETE removes, so a large
+	// backlog never holds the table for long. A run loops until a batch is
+	// short.
+	idempotencyCleanupBatch = 1000
+)
+
 // Replica coordination (LEADER_ELECTION_ENABLED, REPLICA_HEARTBEAT_ENABLED).
 const (
 	// leaderLeaseName is the row of leader_leases that the replicas elect
@@ -274,6 +285,9 @@ type routerDeps struct {
 	InFlight *inflight.Tracker
 	// Auth holds the auth stores; required with AUTH_ENABLED=true.
 	Auth *routes.AuthDeps
+	// Idempotency is the repository of the idempotency module; required with
+	// IDEMPOTENCY_ENABLED=true.
+	Idempotency models.IdempotencyRepository
 }
 
 // newSessionStore builds the session store of SESSION_STORE on db. Tests
@@ -349,6 +363,33 @@ func periodicWorker(name string, interval time.Duration, fn func(ctx context.Con
 			}
 		}
 	}}
+}
+
+// idempotencyCleanupJob returns the run of the idempotency-cleanup worker: it
+// deletes the expired keys in batches of at most batch rows and loops until a
+// batch is short. Every call uses ctx, so the run ends within one statement
+// of a cancel (a lost leadership or shutdown). It is idempotent and safe on
+// several replicas: a row is deleted once and a second DELETE finds none.
+func idempotencyCleanupJob(repo models.IdempotencyRepository, batch int) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		total := int64(0)
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			n, err := repo.DeleteExpired(ctx, batch)
+			total += n
+			if err != nil {
+				return err
+			}
+			if n < int64(batch) {
+				if total > 0 {
+					slog.Info("Deleted expired idempotency keys", "count", total)
+				}
+				return nil
+			}
+		}
+	}
 }
 
 // electedLeader runs a leader.Group under a leader election: the group
@@ -441,6 +482,7 @@ func buildRouter(cfg *config.Config, deps routerDeps) (*gin.Engine, *routes.Resu
 		HealthChecker: deps.HealthChecker,
 		Hub:           deps.Hub,
 		Auth:          deps.Auth,
+		Idempotency:   deps.Idempotency,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build the router: %w", err)
@@ -460,7 +502,10 @@ func buildRouter(cfg *config.Config, deps routerDeps) (*gin.Engine, *routes.Resu
 // With AUTH_ENABLED=true it also builds the auth stores on the database of
 // repo (SESSION_STORE), creates the admin user (EnsureAdminUser: an invalid
 // ADMIN_PASSWORD or a failed lookup stops the start) and adds the
-// refresh-token-cleanup and session-store-cleanup workers. On an error it
+// refresh-token-cleanup and session-store-cleanup workers. With
+// IDEMPOTENCY_ENABLED=true it builds the idempotency repository on the same
+// database (the module's middleware and the idempotency-cleanup worker); with
+// it off nothing of the module exists. On an error it
 // stops what it started (not repo: the caller closes it) and returns it.
 func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.Engine, error) {
 	healthChecker := health.New()
@@ -495,12 +540,24 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		return nil, nil, err
 	}
 
+	// The idempotency module (off by default): its repository exists only
+	// with the switch on, so with it off nothing touches the table.
+	var idempotencyRepo models.IdempotencyRepository
+	if cfg.Idempotency.Enabled {
+		g, ok := repo.(gormRepository)
+		if !ok || g.DB() == nil {
+			return fail(nil, errors.New("IDEMPOTENCY_ENABLED needs the database repository"))
+		}
+		idempotencyRepo = database.NewGORMIdempotencyRepository(g.DB())
+	}
+
 	router, res, err := buildRouter(cfg, routerDeps{
 		Repository:    repo,
 		HealthChecker: healthChecker,
 		Hub:           hub,
 		InFlight:      tracker,
 		Auth:          authDeps,
+		Idempotency:   idempotencyRepo,
 	})
 	if err != nil {
 		return fail(nil, err)
@@ -548,6 +605,10 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		)
 		s.auditRecorder = res.AuditRecorder
 		s.sessionStore = authDeps.SessionStore
+	}
+	if idempotencyRepo != nil {
+		leaderWorkers = append(leaderWorkers,
+			periodicWorker("idempotency-cleanup", idempotencyCleanupInterval, idempotencyCleanupJob(idempotencyRepo, idempotencyCleanupBatch)))
 	}
 	var heartbeats models.ReplicaHeartbeatRepository
 	if cfg.Replica.HeartbeatEnabled {

@@ -203,7 +203,7 @@ func validKeyName(name string) (string, bool) {
 
 // CreateAPIKey godoc
 // @Summary      Create an API key
-// @Description  Creates a key for the caller. The key has the role of its owner at the time of each request (a demoted owner's keys are demoted). An expiry is required: set expires_at (YYYY-MM-DD or RFC3339) or expires_in_days, not both, at most 365 days ahead by default. The caller can have 25 active keys by default (409 above that). The raw key (sk_ and 64 hex characters) is returned once in raw_key, with Cache-Control no-store, and cannot be retrieved again; only its SHA-256 is stored. A request authenticated with an API key is refused (403): manage keys with a login session. Unknown request fields are refused.
+// @Description  Creates a key for the caller. The key has the role of its owner at the time of each request (a demoted owner's keys are demoted). An expiry is required: set expires_at (YYYY-MM-DD or RFC3339) or expires_in_days, not both, at most 365 days ahead by default. The caller can have 25 active keys by default (409 above that). The raw key (sk_ and 64 hex characters) is returned once in raw_key, with Cache-Control no-store, and cannot be retrieved again; only its SHA-256 is stored. A request authenticated with an API key is refused (403): manage keys with a login session. Unknown request fields are refused. An Idempotency-Key header is ignored on this route (also with IDEMPOTENCY_ENABLED=true): the response holds the raw key, which the idempotency module must never store.
 // @Tags         api-keys
 // @Accept       json
 // @Produce      json

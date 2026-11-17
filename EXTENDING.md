@@ -158,6 +158,8 @@ Authentication is the model: a module has one switch that is off by default, val
 5. Test both modes: the route table with the module off and on, the config validation, and an e2e pass (`scripts/e2e.sh` runs the auth module as a mode).
 6. Document the switch in `README.md`, `docs/claude/operations.md` and `ARCHITECTURE.md` ("Optional Modules").
 
+The idempotency module (`IDEMPOTENCY_ENABLED`, see `docs/claude/operations.md`, "Idempotency keys") is the smallest example: `config/idempotency.go` (strict switch, lenient durations while off), `routes.Setup` mounts `middleware.Idempotency` only when the switch is on and returns `ErrIdempotencyDepsMissing` without its repository, `buildServices` builds the repository and the `idempotency-cleanup` worker only when it is on. It has no UI, so it skips step 4. A module that stores a response must keep secrets out of it: the module's skip list (`idempotencySkipPrefixes`) names the routes it never touches.
+
 ## Authentication modes
 
 The behaviour of the three modes (off, local login, OIDC) and what a new route inherits in each is in `docs/claude/auth-sessions.md` ("Modes"). A new route on the `api` group needs no auth code: with auth on it already sits behind `CombinedAuth` and the audit recorder, and with auth off it is open.

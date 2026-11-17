@@ -52,14 +52,16 @@ func handleDBError(err error) (int, string) {
 
 // CreateItem godoc
 // @Summary Create a new item
-// @Description Create a new item with the provided information
+// @Description Create a new item with the provided information. With IDEMPOTENCY_ENABLED=true the request may carry an Idempotency-Key header: the same key with the same request replays the stored response (header Idempotency-Replayed: true) and creates no second item, the same key with another request is 422 and while the first request still runs it is 409 with Retry-After. A response that is a 5xx or 499 is not stored, so the client can retry.
 // @Tags items
 // @Accept json
 // @Produce json
 // @Param item body models.Item true "Item object"
+// @Param Idempotency-Key header string false "Optional key (1 to 255 printable ASCII characters) that makes the request safe to retry; used only with IDEMPOTENCY_ENABLED=true" maxlength(255)
 // @Success 201 {object} models.Item
 // @Failure 400 {object} map[string]string
-// @Failure 409 {object} map[string]string
+// @Failure 409 {object} map[string]string "Duplicate, or a request with the same Idempotency-Key is still in progress (Retry-After)"
+// @Failure 422 {object} map[string]string "The Idempotency-Key was used with a different request"
 // @Failure 413 {object} map[string]string "Request body too large"
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
