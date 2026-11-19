@@ -64,7 +64,7 @@ The complete file tree is in `docs/claude/structure.md`.
 
 | Table | Entity | Notes |
 |---|---|---|
-| `items` | `models.Item` | The example entity. Numeric ID, `version` for optimistic locking. Hard delete. |
+| `items` | `models.Item` | The example entity. Numeric ID, `version` for optimistic locking. Hard delete (soft delete is an opt-in of the repository, see "Hard by default"). |
 | `users` | `models.User` | String UUID ID. Unique username; `(auth_provider, external_id)` unique for SSO accounts. Role `user`, `devops` or `admin`. `service_account` marks the break-glass admin. |
 | `refresh_tokens` | `models.RefreshToken` | SHA-256 of the opaque token, `family_id` (the session), `revoked`, expiry. |
 | `api_keys` | `models.APIKey` | SHA-256 of the key, prefix, owner, expiry, last used. |
@@ -126,7 +126,7 @@ The steps 1, 2, 3, 4 and 7 have their own detached budgets, so the worst case is
 ## Design Decisions
 
 - **MySQL only.** The production factory always builds MySQL. SQLite exists for unit tests only (`DB_TYPE=sqlite`).
-- **Hard deletes.** `Base.DeletedAt` is a plain field, not `gorm.DeletedAt`, so `Delete` removes the row.
+- **Hard by default, soft delete per repository.** `Base.DeletedAt` is a plain field, not `gorm.DeletedAt`, so `Delete` removes the row and GORM adds no filter. A repository opts in to soft delete with `models.WithSoftDelete()` (`WithSoftDeleteOf(&Note{})` for another entity): `Delete` then sets `deleted_at` to the database time, every read (`FindByID`, `ListPaged` and its count, `List`, `Update`) skips the marked rows through one condition (`GenericRepository.live`), and `SoftDeleter` adds `Restore` and `PurgeDeleted` (a purge worker removes old rows). The option fits `GenericRepository` entities that embed `Base` (numeric ID); `ListPaged` is Item-specific. `Create` clears a `deleted_at` that the body carries. Soft delete is not erasure: the data stays in the table, the backups and the outbox payloads until a purge runs, so the retention is set on purpose. The template ships no soft delete entity and Items stay hard; the steps are in `EXTENDING.md`, "Adding soft delete to an entity".
 - **Server-owned version.** An item create forces `version` to 1; an update compares the stored version, and a mismatch is a 409.
 - **Detached post-commit writes.** Side effects that must follow a commit (token blocks, audit entries) run on a context that a leaving client cannot cancel, with a 30 second deadline.
 - **Secrets never in the browser.** The access token lives in memory only; the refresh token is an httpOnly cookie that JavaScript cannot read.

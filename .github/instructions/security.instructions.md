@@ -16,7 +16,7 @@ The security rules are in `CLAUDE.md` ("Security Rules") and `docs/claude/auth-s
 - **Never remove** the `SecurityHeaders`, `Recovery` or `RedactWSToken` middleware. `/ws` carries the token as `?token=`: a proxy in front must not log its query (the bundled nginx neither access-logs `/ws` nor writes its errors below `crit`, so an ordinary upstream error does not log the request line; see `docs/claude/operations.md`).
 - **Swagger** (`ENABLE_SWAGGER=true`) stays open with auth on: keep it off in production.
 - **Audit**: with auth on, every successful mutating request of an authenticated user is recorded; `/auth/*` is not.
-- **Hard deletes**: `Base.DeletedAt` is a plain field, not `gorm.DeletedAt`; `Delete` removes the row.
+- **Hard deletes by default**: `Base.DeletedAt` is a plain field, not `gorm.DeletedAt`; `Delete` removes the row unless the repository was built with `models.WithSoftDelete()`.
 
 ## Graceful shutdown
 

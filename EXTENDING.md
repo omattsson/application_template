@@ -42,10 +42,10 @@ type NoteRepository interface {
 func (n *Note) Validate() error { ... }
 ```
 
-- The auth models use a string UUID `ID` that the repository sets in `Create` (`uuid.New().String()`); `Item` has a numeric ID through `Base` and a `Version` for optimistic locking. Do not embed `Base` in a new model: it is only for Item.
+- The auth models use a string UUID `ID` that the repository sets in `Create` (`uuid.New().String()`); `Item` has a numeric ID through `Base` and a `Version` for optimistic locking. Do not embed `Base` in a new model: it is only for Item (the one exception is an entity that opts in to soft delete, see "Adding soft delete to an entity").
 - Put sentinel validation errors next to the existing ones in `validation.go` or in the model file.
 - Order the struct fields for memory alignment (8-byte fields first): the `fieldalignment` linter fails otherwise.
-- Deletes are hard deletes. `Base.DeletedAt` is a plain field, not `gorm.DeletedAt`.
+- Deletes are hard deletes. `Base.DeletedAt` is a plain field, not `gorm.DeletedAt`. A repository can opt in to soft delete: see "Adding soft delete to an entity" below.
 
 ### 2. Repository
 
@@ -140,6 +140,48 @@ With the outbox module (`OUTBOX_ENABLED=true`) an event that must survive a cras
 ## Adding a background job
 
 A periodic job is a `leader.Worker` with a restartable `Run(ctx)` (use `periodicWorker(name, interval, fn)` in `api/bootstrap.go`). Add it to the `leaderWorkers` list in `buildServices`, before the group starts. With `LEADER_ELECTION_ENABLED=false` (the default) every process runs it; with `true` only the lease holder does, but a paused or cut-off leader can overlap its successor briefly, so the job must be idempotent and safe on several replicas either way, and must return within 5 s after its context is cancelled. Keep state that must survive in the database. Work that outlives its request starts with `inflight.Tracker.Go` and must respect cancellation. A new external dependency gets `healthChecker.AddCheck`.
+
+## Adding soft delete to an entity
+
+Deletes are hard by default. A repository opts in to soft delete when a deleted row must be recoverable or kept for a while. The template ships no soft delete entity (Items stay hard); `internal/models/soft_delete_test.go` and `internal/database/soft_delete_mysql_integration_test.go` show the pattern with test-only entities.
+
+**What fits.** The option belongs to `models.GenericRepository`, so it fits the entities that repository serves: Items-shaped entities that embed `Base` (numeric `uint` ID, indexed `deleted_at`). That is the exception to "do not embed `Base` in a new model" in step 1: embed it here, and only for such an entity. Two limits follow:
+
+- `GenericRepository.ListPaged` is Item-specific (it queries `Model(&Item{})` and its `dest` must be `*[]Item`). The option covers its queries for Items. Another `GenericRepository` entity has `Create`, `FindByID`, `Update`, `Delete` and the deprecated `List` with the option; its own list queries add `deleted_at IS NULL` themselves.
+- An entity on `BaseRepository` with its own interface and string IDs (steps 1 and 2) has no option: write its soft delete in its own repository, set `deleted_at` in `Delete` with the database clock, and repeat `deleted_at IS NULL` in every query of that repository (qualify it with the table name in a join: `notes.deleted_at IS NULL`). `Restore(ctx, id uint)` of `SoftDeleter` has a numeric ID, so it does not fit such an entity either.
+
+**Soft delete is not erasure.** The row stays in the table, in the backups and (with the outbox) in the payload of its events until a purge removes it, so set the retention of step 4 on purpose.
+
+The steps, with `Note` as a `GenericRepository` entity that embeds `Base`:
+
+1. **The option.** Build the repository with `models.NewRepositoryWithFilterFields(db, fields, models.WithSoftDeleteOf(&Note{}))`. For Items add `models.WithSoftDelete()` to the options that `repositoryOptions(cfg)` returns in `internal/database/repository.go` (today it returns nil without the outbox; return a slice that holds the option, with or without the change hook). The option is per repository: another repository on the same table is unaffected. Without it nothing changes (same SQL, hard deletes). With it:
+   - `Create` sets `deleted_at` to nil first: the field binds from JSON, and a row must never be created already deleted (hidden, outside the unique guard of step 5, back-dated past the retention).
+   - `Delete` sets `deleted_at` to the database time (`UTC_TIMESTAMP(3)`, UTC, milliseconds; the replica clock does not matter) instead of removing the row, through the same lock retry, and the change hook still runs in that transaction (the outbox gets its delete event). A deleted or missing row is `ErrNotFound`. The entity you pass is not changed.
+   - Every read skips the rows with a `deleted_at`: `FindByID` and `Update` give `ErrNotFound` for a deleted row (also for an entity with a `Version`: a stale version on a live row stays a version mismatch), and `List` (and, for Items, `ListPaged` and its count query) do not return it. The condition is added in one place (`GenericRepository.live`), so no query of the repository can forget it. A query of your own on the table (a join, a raw count) must add it.
+   - `Update` never writes `deleted_at`: only `Delete` and `Restore` do.
+2. **The JSON.** `deleted_at` is `omitempty`: a live row never shows it. A delete handler answers as before and a deleted row is a `404` on a read. No endpoint returns a deleted row unless you add one (an admin list of the deleted rows needs its own query).
+3. **Restore.** `GenericRepository` always implements `models.SoftDeleter` (`Restore(ctx, id)` and `PurgeDeleted(ctx, before, limit)`), so a type assertion always succeeds: check `SoftDeleteEnabled()` to know whether the option is on (both methods return an `ErrNotImplemented` error without it). Add `POST /api/v1/notes/:id/restore` under `RequireAdmin()` (or `RequireRole`), answer through `mapError(err, "Note")` (`ErrNotFound` for a row that is missing or not deleted, `ErrDuplicateKey` as 409 when a unique index now conflicts, see step 5) and add an `auditRoutes` entry (`"POST /notes/:id/restore": {Action: AuditActionRestore, EntityType: AuditEntityNote, IDParam: "id"}`), with `AuditActionRestore = "restore"` in `KnownAuditActions` (section "6. Audit"). Restore runs no change hook: send the WebSocket event from the handler, or extend the hook of your repository.
+4. **Purge.** Soft deleted rows stay until you remove them. Register a worker in `buildServices`, before the leader group starts (section "Adding a background job"):
+
+   ```go
+   if repo.SoftDeleteEnabled() { // repo is the *models.GenericRepository
+       leaderWorkers = append(leaderWorkers, purgeWorker("note-purge", time.Hour, 30*24*time.Hour, repo))
+   }
+   ```
+
+   `purgeWorker` (`api/soft_delete.go`) calls `PurgeDeleted` in batches of 1000 (at most 100 per run) until a batch is short, stops at once when its context ends, and is safe on several replicas (a second call finds the rows gone). The cutoff is `now - retention` by the clock of the process: use a retention of hours or days. Nothing registers it for you, because nothing in the template deletes softly.
+5. **Unique names.** A unique index on `name` would keep a deleted name taken forever. A unique index ignores NULLs, so index a value that is the name for a live row and NULL for a deleted one: a generated column. MySQL 8:
+
+   ```sql
+   ALTER TABLE notes
+     ADD COLUMN active_name VARCHAR(255)
+       GENERATED ALWAYS AS (IF(deleted_at IS NULL, name, NULL)) STORED,
+     ADD UNIQUE KEY uq_notes_active_name (active_name);
+   ```
+
+   A composite `UNIQUE (name, deleted_at)` does not work: `deleted_at` is NULL for every live row, so two live rows with the same name would both pass. With the generated column, creating a name that a deleted row had works, and a restore that would make two live rows with the same name fails with `ErrDuplicateKey` (409). Put the column in a migration (section "3. Migration"), never in the model: MySQL refuses a write to a generated column, so the GORM struct must have no field for it, and `AutoMigrate` must not manage it. The integration test `TestDatabaseMySQLSoftDeleteUniqueName` proves the behavior.
+6. **Indexes.** `Base` already indexes `deleted_at`, and an InnoDB secondary index ends with the primary key, so `WHERE deleted_at IS NULL ORDER BY id LIMIT n` can be served in id order without a sort, and the purge (`deleted_at < ?`, oldest first) uses the same index. Which index the optimizer picks for the default order depends on the statistics: usually PRIMARY in id order, skipping the deleted rows, which is cheap while most rows are live. A table that is mostly deleted rows needs a purge more than an index. A list sorted by another column (`sort=name`) needs a composite index with `deleted_at` first: `KEY (deleted_at, name)`; without it MySQL sorts the live rows. Add one for each sort key you expose and check the plan with `EXPLAIN`. `TestDatabaseMySQLSoftDeleteIndexes` checks the order property (no filesort, with `FORCE INDEX` for the single column index) and, on a mostly deleted table, that an ordered query by name has no filesort with the composite index (`FORCE INDEX` proves it can serve the order); it does not prove which index the optimizer chooses for the default order.
+7. **Tests.** Cover delete, the hidden reads, update of a deleted row, restore, purge by cutoff, the unique reuse on MySQL, a create with `deleted_at` in the body, and that a repository built without the option still deletes hard.
 
 ## Adding a configuration variable
 

@@ -29,7 +29,8 @@ Where things are. Run `ls` when a file is missing here: the tree below lists the
 backend/
 ├── api/
 │   ├── main.go                # config -> telemetry -> database -> services -> HTTP server -> signal -> shutdown; Swagger header
-│   └── bootstrap.go           # initTelemetry, initDatabase, buildServices, buildRouter, startHTTPServer, shutdown (ordered)
+│   ├── bootstrap.go           # initTelemetry, initDatabase, buildServices, buildRouter, startHTTPServer, shutdown (ordered)
+│   └── soft_delete.go         # purgeWorker: leader worker that purges soft deleted rows (not registered by default)
 ├── internal/
 │   ├── api/
 │   │   ├── routes/routes.go   # Setup(): every route, middleware order, auth wiring, rate limiters
@@ -48,7 +49,7 @@ backend/
 │   ├── inflight/              # Tracker for work that outlives its request
 │   ├── leader/                # Worker and Group: leader-only background jobs; Lease: MySQL row lease election
 │   ├── models/                # Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, IdempotencyKey, OutboxEvent, validation,
-│   │                          # GenericRepository (optional change hook), RetryOnLock
+│   │                          # GenericRepository (optional change hook, opt-in soft delete in soft_delete.go), RetryOnLock
 │   ├── logutil/               # Limiter: one log line per interval for a repeating error
 │   ├── outbox/                # Poller (delivers outbox_events to the hub, gap window), ItemHook, Metrics
 │   ├── replica/               # ProcessID and Heartbeat (replica_heartbeats row per process)
