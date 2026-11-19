@@ -446,11 +446,12 @@ func (p *Poller) deliverGaps(ctx context.Context, stats *Stats, newest *uint64) 
 // belong to transactions that are still open; the memory never grows past
 // maxMissing.
 func (p *Poller) trackGap(from, to uint64) {
-	if to-from+1 > uint64(p.maxMissing) {
+	// maxMissing is a positive limit (DefaultMaxMissing), so the conversions are safe.
+	if to-from+1 > uint64(p.maxMissing) { // #nosec G115 -- positive limit
 		slog.Debug("Outbox id gap larger than the tracking limit; the oldest ids are not tracked", "from", from, "to", to, "limit", p.maxMissing)
-		from = to - uint64(p.maxMissing) + 1
+		from = to - uint64(p.maxMissing) + 1 // #nosec G115 -- positive limit
 	}
-	n := int(to - from + 1)
+	n := int(to - from + 1) // #nosec G115 -- at most maxMissing
 	if over := len(p.missing) + n - p.maxMissing; over > 0 {
 		ids := make([]uint64, 0, len(p.missing))
 		for id := range p.missing {
