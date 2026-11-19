@@ -86,12 +86,16 @@ type GenericRepository struct {
 	// (WithChangeHook); nil means none and the writes run as single
 	// statements.
 	hook ChangeHook
+	// softModel is set by WithSoftDelete or WithSoftDeleteOf: the repository
+	// then deletes softly and hides the deleted rows (soft_delete.go). nil
+	// means hard deletes and no deleted_at condition anywhere.
+	softModel interface{}
 }
 
 // NewRepository creates a new GenericRepository with filter fields for the Item
 // entity ("name", "price"). For other entity types, use NewRepositoryWithFilterFields.
 //
-// Options (WithChangeHook) are set here and never change afterwards.
+// Options (WithChangeHook, WithSoftDelete) are set here and never change afterwards.
 func NewRepository(db *gorm.DB, opts ...RepositoryOption) Repository {
 	r := &GenericRepository{
 		db: db,
@@ -186,6 +190,9 @@ func (r *GenericRepository) Close() error {
 }
 
 func (r *GenericRepository) Create(ctx context.Context, entity interface{}) error {
+	if r.softModel != nil {
+		clearDeletedAt(entity)
+	}
 	if v, ok := entity.(Validator); ok {
 		if err := v.Validate(); err != nil {
 			return dberrors.NewDatabaseError("validate",
@@ -208,7 +215,7 @@ func (r *GenericRepository) Create(ctx context.Context, entity interface{}) erro
 }
 
 func (r *GenericRepository) FindByID(ctx context.Context, id uint, dest interface{}) error {
-	if err := r.db.WithContext(ctx).First(dest, id).Error; err != nil {
+	if err := r.live(r.db.WithContext(ctx)).First(dest, id).Error; err != nil {
 		return r.handleError("find", err)
 	}
 	return nil
@@ -220,6 +227,10 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 			return dberrors.NewDatabaseError("validate",
 				fmt.Errorf("%w: %s", dberrors.ErrValidation, err.Error()))
 		}
+	}
+
+	if r.softModel != nil {
+		return r.softUpdate(ctx, entity)
 	}
 
 	// Optimistic locking for Versionable entities.
@@ -287,6 +298,9 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 }
 
 func (r *GenericRepository) Delete(ctx context.Context, entity interface{}) error {
+	if r.softModel != nil {
+		return r.softDelete(ctx, entity)
+	}
 	if r.hook != nil {
 		// A delete that matches no row is rolled back before the hook runs,
 		// so a missing item leaves no event.
@@ -325,7 +339,7 @@ func (r *GenericRepository) Delete(ctx context.Context, entity interface{}) erro
 //
 // Deprecated: use ListPaged.
 func (r *GenericRepository) List(ctx context.Context, dest interface{}, conditions ...interface{}) error {
-	query := r.db.WithContext(ctx)
+	query := r.live(r.db.WithContext(ctx))
 	for _, cond := range conditions {
 		switch c := cond.(type) {
 		case Filter:
@@ -464,11 +478,11 @@ func (r *GenericRepository) ListPaged(ctx context.Context, dest interface{}, lim
 	}
 
 	var total int64
-	if err := filter.where(r.db.WithContext(ctx).Model(&Item{})).Count(&total).Error; err != nil {
+	if err := filter.where(r.live(r.db.WithContext(ctx).Model(&Item{}))).Count(&total).Error; err != nil {
 		return 0, r.handleError("list_paged", err)
 	}
 
-	query, err := filter.orderBy(filter.where(r.db.WithContext(ctx).Model(&Item{})).Select(itemListColumns))
+	query, err := filter.orderBy(filter.where(r.live(r.db.WithContext(ctx).Model(&Item{}))).Select(itemListColumns))
 	if err != nil {
 		return 0, err
 	}
