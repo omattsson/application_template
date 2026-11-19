@@ -14,6 +14,8 @@ Where things are. Run `ls` when a file is missing here: the tree below lists the
 ├── Makefile                   # Every developer and CI command (make help is not defined: read the file)
 ├── docker-compose.yml         # db, backend, frontend; networks backend-net and frontend-net
 ├── docker-compose.otel.yml    # override: collector, Prometheus, Tempo, Grafana (make dev-otel)
+├── docker-compose.mail.yml    # override: Mailpit mail catcher and mail settings for the backend (make dev-mail)
+├── docker-compose.mail-e2e.yml # override for scripts/e2e.sh: also publishes the Mailpit SMTP port (loopback)
 ├── config/otel/               # collector, Prometheus, Tempo and Grafana provisioning files
 ├── backend/                   # Go service
 ├── frontend/                  # React app
@@ -39,16 +41,17 @@ backend/
 │   │   │                      # HTTPMetrics, SpanEnrichUser, auth_metrics.go (auth outcome counters)
 │   │   └── handlers/          # items.go (reference CRUD), auth*.go, oidc.go, users.go, api_keys.go,
 │   │                          # audit_logs.go, websocket*.go, ui_config.go, rate_limiter.go, errors.go,
-│   │                          # login_failure.go, mock_repository.go and test_schemas.go (test support)
+│   │                          # password_reset.go, login_failure.go, mock_repository.go and test_schemas.go (test support)
 │   ├── auth/                  # OIDC provider client (discovery, PKCE, ID token validation); authtest/ fake IdP
 │   ├── config/                # LoadConfig, AuthConfig, OIDCConfig, TrustedProxies
 │   ├── ctxutil/               # Detach: a bounded context that a leaving client cannot cancel
 │   ├── database/              # factory, migrations, schema/ (migrator), repositories (users, refresh tokens,
-│   │                          # API keys, audit log, replica heartbeats, idempotency keys, outbox events), BaseRepository (lock retry), gorm logger
+│   │                          # API keys, audit log, replica heartbeats, idempotency keys, outbox events, password reset tokens), BaseRepository (lock retry), gorm logger
 │   ├── health/                # Liveness and readiness checks
+│   ├── mail/                  # Mailer interface, SMTP implementation (go-mail), FakeMailer, cached readiness check
 │   ├── inflight/              # Tracker for work that outlives its request
 │   ├── leader/                # Worker and Group: leader-only background jobs; Lease: MySQL row lease election
-│   ├── models/                # Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, IdempotencyKey, OutboxEvent, validation,
+│   ├── models/                # Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, IdempotencyKey, OutboxEvent, PasswordResetToken, validation,
 │   │                          # GenericRepository (optional change hook, opt-in soft delete in soft_delete.go), RetryOnLock
 │   ├── logutil/               # Limiter: one log line per interval for a repeating error
 │   ├── outbox/                # Poller (delivers outbox_events to the hub, gap window), ItemHook, Metrics

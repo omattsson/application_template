@@ -49,8 +49,10 @@ type UserHandler struct {
 	keys      models.APIKeyRepository
 	sessions  sessionstore.SessionStore
 	wsRevoker websocket.ClientRevoker
-	cfg       *config.AuthConfig
-	logger    *slog.Logger // nil uses slog.Default() (tests set it)
+	// resetTokens is the repository of the password reset module (nil: off).
+	resetTokens models.PasswordResetTokenRepository
+	cfg         *config.AuthConfig
+	logger      *slog.Logger // nil uses slog.Default() (tests set it)
 	// blockRetryDelays are the waits between the attempts to write a user
 	// block: len+1 attempts in all. Tests shorten them.
 	blockRetryDelays []time.Duration
@@ -75,6 +77,14 @@ func (h *UserHandler) SetSessionStore(store sessionstore.SessionStore) { h.sessi
 // SetWebSocketRevoker sets the hub that closes the WebSocket connections of a
 // user whose access was revoked. nil: sockets close at token expiry only.
 func (h *UserHandler) SetWebSocketRevoker(r websocket.ClientRevoker) { h.wsRevoker = r }
+
+// SetPasswordResetTokens sets the reset token repository of the optional
+// password reset module: a password set through UpdateUser then deletes the
+// unused reset tokens of the user. nil (the default, module off): nothing is
+// deleted.
+func (h *UserHandler) SetPasswordResetTokens(repo models.PasswordResetTokenRepository) {
+	h.resetTokens = repo
+}
 
 func (h *UserHandler) log() *slog.Logger {
 	if h.logger != nil {
@@ -543,7 +553,7 @@ func validateUserUpdate(req *UpdateUserRequest) string {
 
 // UpdateUser godoc
 // @Summary      Update a user
-// @Description  Changes the display name, the email and/or the password of a user. Admin only, with a login session. Only these fields are accepted; any other field (role, disabled, username, ...) is refused with 400, because role and disabled have endpoints of their own that enforce the last-admin rule and end the user's sessions. A password can be set only for a local user (400 otherwise); setting it ends every session of the user (access tokens issued before are rejected, refresh tokens are revoked, WebSockets are closed) and keeps the API keys. The display name and email of an SSO user are overwritten by the identity provider at the next login. The response never holds a password or hash.
+// @Description  Changes the display name, the email and/or the password of a user. Admin only, with a login session. Only these fields are accepted; any other field (role, disabled, username, ...) is refused with 400, because role and disabled have endpoints of their own that enforce the last-admin rule and end the user's sessions. A password can be set only for a local user (400 otherwise); setting it ends every session of the user (access tokens issued before are rejected, refresh tokens are revoked, WebSockets are closed) and keeps the API keys. The display name and email of an SSO user are overwritten by the identity provider at the next login. The response never holds a password or hash. With the password reset module on, a changed email address (or a new password) also deletes the user's unused reset tokens.
 // @Tags         users
 // @Accept       json
 // @Produce      json
@@ -617,6 +627,14 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 		}
 		middleware.SetAuditEntityID(c, target.ID)
 		middleware.AuditCommitted(c)
+
+		// A reset link mailed to the old address must not work for the new
+		// owner of the account's mailbox: a changed address drops the unused
+		// tokens (best effort). The same address or the display name alone
+		// keeps them.
+		if req.Email != nil && *req.Email != target.Email {
+			dropPasswordResetTokens(ctx, h.log(), h.resetTokens, target.ID)
+		}
 	}
 	if req.Password != nil {
 		// Write only the password hash: a full-row save would overwrite a
@@ -628,6 +646,8 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 		middleware.SetAuditEntityID(c, target.ID)
 		middleware.AuditCommitted(c)
 		middleware.AddAuditDetail(c, "password_changed", true)
+		// A reset mail that was sent before is useless now.
+		dropPasswordResetTokens(ctx, h.log(), h.resetTokens, target.ID)
 	}
 	middleware.SetAuditEntityID(c, target.ID) // also for a request that changed nothing
 
@@ -770,7 +790,7 @@ type SetDisabledResponse struct {
 
 // SetUserDisabled godoc
 // @Summary      Disable or enable a user
-// @Description  Disables (disabled=true) or enables (disabled=false) a user. Admin only, with a login session; the caller must still be an enabled admin in the database (403). The last enabled admin cannot be disabled (409); an admin may disable themselves when another enabled admin exists. Disabling ends every session of the user: access tokens issued before it are rejected (user block), refresh tokens are revoked and the WebSockets are closed. The user's API keys are kept but stop authenticating while the owner is disabled. Enabling writes no new block: tokens issued before the disable stay rejected, and a login after the enable works. A request that does not change the state is a no-op (changed=false, no audit entry; a repeated disable still ends the sessions). Unknown request fields are refused.
+// @Description  Disables (disabled=true) or enables (disabled=false) a user. Admin only, with a login session; the caller must still be an enabled admin in the database (403). The last enabled admin cannot be disabled (409); an admin may disable themselves when another enabled admin exists. Disabling ends every session of the user: access tokens issued before it are rejected (user block), refresh tokens are revoked and the WebSockets are closed. The user's API keys are kept but stop authenticating while the owner is disabled. Enabling writes no new block: tokens issued before the disable stay rejected, and a login after the enable works. A request that does not change the state is a no-op (changed=false, no audit entry; a repeated disable still ends the sessions). Unknown request fields are refused. With the password reset module on, disabling also deletes the user's unused reset tokens.
 // @Tags         users
 // @Accept       json
 // @Produce      json
@@ -826,6 +846,11 @@ func (h *UserHandler) SetUserDisabled(c *gin.Context) {
 	// A repeated disable still ends the sessions: it makes a retry after a
 	// failed revocation work. Enabling needs no revocation.
 	if disabled {
+		// A disabled account gets no reset mail and its confirm is refused, but
+		// enabling it again must not revive a link mailed before: the unused
+		// tokens go (best effort, also on a repeated disable).
+		dropPasswordResetTokens(ctx, h.log(), h.resetTokens, target.ID)
+
 		if err := h.revokeUserAccess(ctx, target.ID, revokeOptions{}); err != nil {
 			respondRevocationFailed(c)
 			return

@@ -12,6 +12,7 @@ A modern, production-ready template for full-stack web applications using Go (Gi
 - 🧪 Comprehensive test suite
 - 🛠️ Development and production Docker configurations
 - 🔒 Middleware support (logging, recovery, CORS, security headers, rate limiting)
+- 📧 Optional mail and password reset (off by default): a mailed, single-use link lets a local user set a new password, with no account enumeration; a local Mailpit catcher for development (`make dev-mail`)
 - ♻️ Optional idempotency keys (off by default): a `POST` with an `Idempotency-Key` header runs once and a retry replays the stored response
 - 📬 Optional transactional outbox (off by default): the Items WebSocket events are committed with the change and every replica delivers them to its own sockets
 - 🔑 Optional authentication (off by default): local login with refresh sessions, API keys, OIDC single sign-on, user administration, audit log
@@ -164,6 +165,8 @@ Backend:
 - `AUTH_ENABLED`, `JWT_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SECURE_COOKIES`, `OIDC_*` - Optional authentication, see [Authentication](#authentication)
 - `IDEMPOTENCY_ENABLED`, `IDEMPOTENCY_TTL`, `IDEMPOTENCY_LOCK_TIMEOUT` - Optional idempotency keys for `POST` (default: off, 24h, 60s); see [docs/claude/operations.md](docs/claude/operations.md), "Idempotency keys"
 - `OUTBOX_ENABLED`, `OUTBOX_POLL_INTERVAL`, `OUTBOX_RETENTION` - Optional transactional outbox for the Items WebSocket events (default: off, 500ms, 1h); see [docs/claude/operations.md](docs/claude/operations.md), "Outbox"
+- `MAIL_ENABLED`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `MAIL_FROM`, `SMTP_TIMEOUT` - Optional SMTP sender (default: off, port 587, `starttls`, 10s); an unreachable server shows as DEGRADED in `/health/ready` and never turns it DOWN; see [docs/claude/operations.md](docs/claude/operations.md), "Mail and password reset"
+- `PASSWORD_RESET_ENABLED`, `PASSWORD_RESET_URL`, `PASSWORD_RESET_TOKEN_TTL`, `PASSWORD_RESET_MIN_INTERVAL` - Optional password reset by mail (default: off, 1h, 60s); needs `AUTH_ENABLED`, `MAIL_ENABLED` and the password login. `make dev-mail` adds a Mailpit catcher on `http://localhost:8025` (development only; `make prod*` never starts it); see [docs/claude/auth-sessions.md](docs/claude/auth-sessions.md), "Password reset"
 - `COMPRESSION_ENABLED`, `COMPRESSION_MIN_SIZE` - Gzip of compressible responses for clients that send `Accept-Encoding: gzip` (default: on, 1024 bytes); see [docs/claude/operations.md](docs/claude/operations.md), "Response compression"
 - `CORS_ALLOWED_ORIGINS` - Allowed origins (default `*`: for development only; the bundled web UI is same-origin and needs no entry)
 

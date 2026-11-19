@@ -18,6 +18,13 @@ declare module 'axios' {
 
 const api = axios.create(axiosConfig);
 
+/**
+ * Client of the public password reset routes. It sends no bearer header and
+ * no cookie, and it has no 401 interceptor: a refused reset call must never
+ * start a token refresh. The routes set no cookie and read none.
+ */
+export const unauthenticatedApi = axios.create(axiosConfig);
+
 /** Read the bearer token that a request was sent with, or null. */
 function bearerOf(config: InternalAxiosRequestConfig): string | null {
   const header: unknown = config.headers?.Authorization;
@@ -357,6 +364,49 @@ export const userService = {
   },
 };
 
+/**
+ * Public password reset (only with PASSWORD_RESET_ENABLED on the backend; the
+ * pages exist only then). No call of this object carries a token or a cookie.
+ */
+export const passwordResetService = {
+  /**
+   * Ask for a reset mail. The server answers 202 for every well-formed username,
+   * whether or not the account exists, so the answer never tells. The caller
+   * shows the same confirmation for every result except a 400.
+   * @param username - Login name (sent once, never logged)
+   * @returns Nothing
+   * @throws The request error (400 for an empty or over-long username, 429, 413, network)
+   * @see POST /api/v1/auth/password-reset
+   */
+  requestPasswordReset: async (username: string): Promise<void> => {
+    try {
+      await unauthenticatedApi.post('/api/v1/auth/password-reset', { username });
+    } catch (error) {
+      console.error('Password reset request failed:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+
+  /**
+   * Set a new password with the token of the mail link. The token and the
+   * password travel in the JSON body only. The server ends every session of the
+   * user on success.
+   * @param token - The token read from the link fragment
+   * @param newPassword - The new password (sent once, never logged)
+   * @returns Nothing (204)
+   * @throws The request error: 400 (invalid or expired token, or a password that breaks the rules), 429, 413, 500 (the password stands but the sessions could not be ended)
+   * @see POST /api/v1/auth/password-reset/confirm
+   */
+  confirmPasswordReset: async (token: string, newPassword: string): Promise<void> => {
+    try {
+      await unauthenticatedApi.post('/api/v1/auth/password-reset/confirm', { token, new_password: newPassword });
+    } catch (error) {
+      console.error('Password reset confirmation failed:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+};
+
 /** Check the shape of a UI config answer. */
 function isUIConfig(value: unknown): value is UIConfig {
   if (!value || typeof value !== 'object') return false;
@@ -386,6 +436,7 @@ export const uiConfigService = {
         auth_enabled: data.auth_enabled,
         oidc_enabled: data.oidc_enabled,
         local_auth_enabled: data.local_auth_enabled,
+        password_reset_enabled: data.password_reset_enabled === true,
       };
     } catch (error) {
       console.error('Failed to load the UI config:', summarizeRequestError(error));

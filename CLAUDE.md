@@ -125,6 +125,7 @@ Directory rules: `backend/CLAUDE.md`, `frontend/CLAUDE.md`. GitHub Copilot reads
 - `/api/v1` adds the API rate limiter (`RATE_LIMIT`, default 100 per minute per client IP). With auth on, login, register, the OIDC routes and the password change (`PUT /auth/me/password`) get their own `LOGIN_RATE_LIMIT` budgets (default 10).
 - With auth on, the API group adds `CombinedAuth` (JWT and API key) and the audit recorder. Role gates are `RequireAdmin()` and `RequireRole`.
 - Optional idempotency keys (`IDEMPOTENCY_ENABLED=true`, off by default): `middleware.Idempotency` makes a `POST` with an `Idempotency-Key` header run once and replays the stored response on a repeat. A new `/api/v1` POST route lists the header in its Swagger annotations. Rules: `docs/claude/operations.md`.
+- Optional mail and password reset (`MAIL_ENABLED=true`, `PASSWORD_RESET_ENABLED=true`, both off by default): `internal/mail` (`Mailer`, SMTP and fake) and `handlers/password_reset.go`. `POST /auth/password-reset` always answers 202 with one body and does the lookup and the send after the answer in `inflight.Tracker.Go`; never add work or a branch that changes its status, body, headers or timing. `POST /auth/password-reset/confirm` answers one generic 400 for every unusable token. The token is in the URL fragment, only its SHA-256 is stored, the bootstrap admin (a service account) never gets a mail. Flow: `docs/claude/auth-sessions.md` ("Password reset"); variables: `docs/claude/operations.md`.
 - WebSocket: `/ws`. Health: `/health/live`, `/health/ready`, `/health`. Swagger UI: `/swagger/*` only with `ENABLE_SWAGGER=true`; it stays open with auth on.
 - Client IP: only peers in `TRUSTED_PROXIES` may set it with `X-Forwarded-For` or `X-Real-IP`.
 
@@ -174,7 +175,7 @@ Details: `docs/claude/operations.md`.
 - Work that outlives its request starts with `inflight.Tracker.Go`. Shutdown waits for it before the database closes.
 - With `OUTBOX_ENABLED=true` write an event through the repository hook (`models.WithChangeHook`) in the transaction of the change and never broadcast it directly; the poller of each replica delivers it (`docs/claude/operations.md`, "Outbox").
 - Send WebSocket messages through the hub (`Broadcast`, `BroadcastToTopic`, `BroadcastToUser`) and revoke through `DisconnectUser`, `DisconnectToken` or `DisconnectAPIKey`, never by writing to a connection. Hub state is per replica: a message reaches only the sockets of the replica that sent it.
-- Register every external dependency with `healthChecker.AddCheck()`.
+- Register every external dependency with `healthChecker.AddCheck()`, or with `AddInformationalCheck()` when the service works without it (it shows as DEGRADED and never gates readiness).
 - The rate limiters, the username login throttle and the WebSocket hub are per replica and in memory.
 - Struct field order: put 8-byte fields first for memory alignment (`govet fieldalignment`).
 

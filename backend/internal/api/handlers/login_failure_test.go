@@ -422,3 +422,71 @@ func TestLoginFailureLogBoundsTheUsername(t *testing.T) {
 	assert.Contains(t, out, strings.Repeat("u", maxLoggedUsernameLen)+"...")
 	assert.NotContains(t, out, "pw-in-the-log?")
 }
+
+func TestLoginThrottleClear(t *testing.T) {
+	t.Parallel()
+
+	lock := func(th *loginThrottle, key string) {
+		for range loginFailureThreshold {
+			a, _ := th.begin(key)
+			require.NotNil(t, a)
+			a.outcome = outcomeFailure
+			a.settle()
+		}
+		_, blocked := th.check(key)
+		require.True(t, blocked, "the key is locked")
+	}
+
+	t.Run("a lock is lifted and the entry goes", func(t *testing.T) {
+		t.Parallel()
+		th := newLoginThrottle(loginFailureThreshold, loginFailureWindow, 100)
+		lock(th, "n:alice")
+
+		th.clear("n:alice")
+		_, blocked := th.check("n:alice")
+		assert.False(t, blocked)
+		assert.Zero(t, th.size())
+
+		a, retry := th.begin("n:alice")
+		require.NotNil(t, a, "a new attempt is allowed: %v", retry)
+		a.settle()
+	})
+
+	t.Run("failures below the threshold are forgotten", func(t *testing.T) {
+		t.Parallel()
+		th := newLoginThrottle(loginFailureThreshold, loginFailureWindow, 100)
+		for range loginFailureThreshold - 1 {
+			a, _ := th.begin("u:1")
+			a.outcome = outcomeFailure
+			a.settle()
+		}
+
+		th.clear("u:1")
+		assert.Zero(t, th.size())
+	})
+
+	t.Run("an attempt in flight keeps its slot", func(t *testing.T) {
+		t.Parallel()
+		th := newLoginThrottle(loginFailureThreshold, loginFailureWindow, 100)
+		a, _ := th.begin("u:1")
+		require.NotNil(t, a)
+
+		th.clear("u:1")
+		assert.Equal(t, 1, th.size(), "the entry stays while the attempt runs")
+
+		a.outcome = outcomeFailure
+		a.settle()
+		_, blocked := th.check("u:1")
+		assert.False(t, blocked)
+	})
+
+	t.Run("another key and an unknown key are untouched", func(t *testing.T) {
+		t.Parallel()
+		th := newLoginThrottle(loginFailureThreshold, loginFailureWindow, 100)
+		lock(th, "n:bob")
+
+		th.clear("n:alice")
+		_, blocked := th.check("n:bob")
+		assert.True(t, blocked)
+	})
+}

@@ -1,4 +1,4 @@
-.PHONY: test-e2e test-e2e-auth test-coverage test-backend-repeat seed loadtest loadtest-stress check-make-targets gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs check-agents check-dockerfiles check-trivyignore check-domain-terms shellcheck check-prod-credentials test-prod-credentials test-backend-unit dev dev-backend dev-frontend dev-otel mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
+.PHONY: dev-mail test-e2e test-e2e-auth test-coverage test-backend-repeat seed loadtest loadtest-stress check-make-targets gosec lint-backend lint-frontend lint-docs check-workflows check-env-docs check-agents check-dockerfiles check-trivyignore check-domain-terms shellcheck check-prod-credentials test-prod-credentials test-backend-unit dev dev-backend dev-frontend dev-otel mysql mysql-start mysql-stop mysql-logs mysql-shell build clean test install docs fmt lint
 
 # MySQL service management
 mysql-start:
@@ -49,6 +49,13 @@ dev-frontend:
 # docker-compose.otel.yml and "Observability setup" in docs/claude/operations.md.
 dev-otel:
 	$(DEV_ENV) docker compose -f docker-compose.yml -f docker-compose.otel.yml up --build
+
+# Development mode with a local mail catcher (Mailpit, web UI on
+# http://localhost:8025). Development only: see docker-compose.mail.yml and
+# "Mail and password reset" in docs/claude/operations.md. Set AUTH_ENABLED=true
+# to turn the password reset on.
+dev-mail:
+	$(DEV_ENV) docker compose -f docker-compose.yml -f docker-compose.mail.yml up --build
 
 # The production targets refuse to start with the placeholder database
 # credentials of docker-compose.yml (set MYSQL_PASSWORD and MYSQL_ROOT_PASSWORD
@@ -213,12 +220,18 @@ test-frontend:
 # and starts the backend natively (E2E_BACKEND_PORT), runs Playwright (which
 # starts the Vite dev server on E2E_FRONTEND_PORT) and removes the database and
 # the backend afterwards, also on a failure. A port in use is an error.
+# test-e2e-auth also starts Mailpit (docker-compose.mail.yml, SMTP on
+# E2E_MAILPIT_SMTP_PORT, web UI and API on E2E_MAILPIT_UI_PORT) for the password
+# reset specs; test-e2e starts none.
 E2E_COMPOSE_PROJECT ?= app-template-e2e
 E2E_MYSQL_PORT ?= 13306
 E2E_BACKEND_PORT ?= 8081
 E2E_FRONTEND_PORT ?= 3000
+E2E_MAILPIT_SMTP_PORT ?= 11025
+E2E_MAILPIT_UI_PORT ?= 18025
 E2E_RUN_ENV = E2E_COMPOSE_PROJECT=$(E2E_COMPOSE_PROJECT) E2E_MYSQL_PORT=$(E2E_MYSQL_PORT) \
-	E2E_BACKEND_PORT=$(E2E_BACKEND_PORT) E2E_FRONTEND_PORT=$(E2E_FRONTEND_PORT)
+	E2E_BACKEND_PORT=$(E2E_BACKEND_PORT) E2E_FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+	E2E_MAILPIT_SMTP_PORT=$(E2E_MAILPIT_SMTP_PORT) E2E_MAILPIT_UI_PORT=$(E2E_MAILPIT_UI_PORT)
 
 # Auth run: TEST VALUES ONLY, for the throwaway e2e backend. They are not
 # defaults of the application (it has none for JWT_SECRET and ADMIN_PASSWORD)
@@ -230,7 +243,8 @@ E2E_ADMIN_PASSWORD ?= e2e-only-admin-password
 # production setting, __Host-refresh_token with Secure (Chromium accepts it on
 # http://localhost too).
 E2E_SECURE_COOKIES ?= false
-E2E_AUTH_SPECS ?= e2e/auth.spec.ts e2e/accessibility.spec.ts
+# e2e/password-reset matches the password reset spec(s) as a pattern.
+E2E_AUTH_SPECS ?= e2e/auth.spec.ts e2e/accessibility.spec.ts e2e/password-reset
 
 # Auth off: every spec. auth.spec.ts skips itself (it needs AUTH_ENABLED=true),
 # and the accessibility spec skips the Login and Admin Users pages.
@@ -239,7 +253,8 @@ test-e2e:
 
 # Auth on (AUTH_ENABLED=true, test JWT_SECRET and ADMIN_PASSWORD): the sign-in
 # specs and the accessibility spec in strict mode (A11Y_REQUIRE_AUTH=1), so the
-# Login and Admin Users pages are really checked.
+# Login and Admin Users pages are really checked, and the password reset spec
+# (Mailpit, the module on, the seeded user e2e-reset-user).
 test-e2e-auth:
 	$(E2E_RUN_ENV) E2E_JWT_SECRET=$(E2E_JWT_SECRET) E2E_ADMIN_USERNAME=$(E2E_ADMIN_USERNAME) \
 		E2E_ADMIN_PASSWORD=$(E2E_ADMIN_PASSWORD) E2E_SECURE_COOKIES=$(E2E_SECURE_COOKIES) \

@@ -379,6 +379,29 @@ func (t *loginThrottle) release(key string, outcome attemptOutcome) {
 	}
 }
 
+// clear forgets the failures and the lock of key. A password reset by mail
+// calls it for the account and the name of the user: the owner proved control
+// of the mailbox, so a lock that guessing caused must not keep them out. An
+// attempt in flight keeps its slot (its release still balances), and the entry
+// goes when nothing is left in it.
+func (t *loginThrottle) clear(key string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	e, ok := t.entries[key]
+	if !ok {
+		return
+	}
+
+	e.failures = 0
+	e.lockedUntil = time.Time{}
+	e.windowStart = time.Time{}
+
+	if e.idle() {
+		delete(t.entries, key)
+	}
+}
+
 // check reports whether key is locked and for how long. It reserves nothing.
 func (t *loginThrottle) check(key string) (retryAfter time.Duration, blocked bool) {
 	t.mu.Lock()

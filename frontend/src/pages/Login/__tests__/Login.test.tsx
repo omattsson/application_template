@@ -211,3 +211,30 @@ describe('Login page', () => {
     expect(sessionStorage.getItem('auth-return-path')).toBe('/');
   });
 });
+
+describe('Login page: forgot password link', () => {
+  afterEach(() => {
+    resetRefreshForTesting();
+    resetSessionForTesting();
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it('links to the request form when the password reset is on and the password form shows', async () => {
+    renderLogin({ ...LOCAL, password_reset_enabled: true });
+    const link = await screen.findByRole('link', { name: 'Forgot password?' });
+    expect(link).toHaveAttribute('href', '/forgot-password');
+  });
+
+  it('hides the link when the password reset is off', async () => {
+    renderLogin({ ...LOCAL, password_reset_enabled: false });
+    expect(await screen.findByLabelText(/username/i)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Forgot password?' })).not.toBeInTheDocument();
+  });
+
+  it('hides the link when the password form is hidden (SSO only), even with the flag on', async () => {
+    renderLogin({ auth_enabled: true, oidc_enabled: true, local_auth_enabled: false, password_reset_enabled: true });
+    expect(await screen.findByRole('button', { name: 'Sign in with SSO' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Forgot password?' })).not.toBeInTheDocument();
+  });
+});

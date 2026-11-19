@@ -4,7 +4,8 @@ name: E2E Tests
 # checkout and a fresh MySQL. scripts/e2e.sh (called by make test-e2e and make
 # test-e2e-auth) starts MySQL itself with Docker Compose under its own project
 # on host port 13306, so the job needs no service container, and no port clash
-# is possible. One job runs three passes in a row, each with its own database:
+# is possible. The two auth passes also start Mailpit (the mail catcher of
+# docker-compose.mail.yml) the same way, for the password reset spec. One job runs three passes in a row, each with its own database:
 #   1. auth off                      make test-e2e
 #   2. auth on, strict accessibility make test-e2e-auth
 #   3. auth on, production cookies   make test-e2e-auth E2E_SECURE_COOKIES=true
@@ -18,6 +19,8 @@ on:
       - 'frontend/**'
       - 'backend/**'
       - 'docker-compose.yml'
+      - 'docker-compose.mail.yml'
+      - 'docker-compose.mail-e2e.yml'
       - 'Makefile'
       - 'scripts/e2e.sh'
       - '.github/workflows/e2e.yml'

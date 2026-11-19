@@ -21,6 +21,7 @@
 ./internal/inflight
 ./internal/leader
 ./internal/logutil
+./internal/mail
 ./internal/models
 ./internal/outbox
 ./internal/replica

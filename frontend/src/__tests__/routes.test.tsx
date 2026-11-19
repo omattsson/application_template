@@ -5,8 +5,13 @@ import { Link, MemoryRouter } from 'react-router-dom';
 import AppRoutes from '../routes';
 import { useAuth } from '../context/AuthContext';
 import type { AuthContextValue } from '../context/AuthContext';
+import { useUIConfig } from '../context/UIConfigContext';
+import type { UIConfig } from '../context/UIConfigContext';
 
 vi.mock('../context/AuthContext', () => ({ useAuth: vi.fn() }));
+vi.mock('../context/UIConfigContext', () => ({ useUIConfig: vi.fn() }));
+vi.mock('../pages/ForgotPassword', () => ({ default: () => <h1>Forgot password page</h1> }));
+vi.mock('../pages/ResetPassword', () => ({ default: () => <h1>Reset password page</h1> }));
 vi.mock('../pages/Login', () => ({ default: () => <h1>Login page</h1> }));
 vi.mock('../pages/AuthCallback', () => ({ default: () => <h1>Callback page</h1> }));
 
@@ -35,6 +40,20 @@ vi.mock('../pages/Items', () => ({
   },
 }));
 
+function uiConfig(overrides: Partial<UIConfig> = {}): { config: UIConfig; loading: boolean } {
+  return {
+    config: {
+      title: 'Test App',
+      auth_enabled: true,
+      oidc_enabled: false,
+      local_auth_enabled: true,
+      password_reset_enabled: false,
+      ...overrides,
+    },
+    loading: false,
+  };
+}
+
 function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -46,6 +65,7 @@ function renderAt(path: string) {
 describe('AppRoutes', () => {
   beforeEach(() => {
     vi.mocked(useAuth).mockReturnValue(authState());
+    vi.mocked(useUIConfig).mockReturnValue(uiConfig());
   });
 
   afterEach(() => {
@@ -103,6 +123,43 @@ describe('AppRoutes', () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
       renderAt('/admin/users');
       expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+    });
+  });
+
+  describe('password reset pages', () => {
+    const PATHS = [
+      ['/forgot-password', 'Forgot password page'],
+      ['/reset-password', 'Reset password page'],
+    ] as const;
+
+    it.each(PATHS)('renders %s for a visitor when the reset is on', (path, heading) => {
+      vi.mocked(useUIConfig).mockReturnValue(uiConfig({ password_reset_enabled: true }));
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
+      renderAt(path);
+      expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+    });
+
+    it.each(PATHS)('has no %s route when the reset is off (NotFound)', (path) => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
+      renderAt(path);
+      expect(screen.getByText('Page not found')).toBeInTheDocument();
+    });
+
+    it.each(PATHS)('has no %s route for a signed-in user (NotFound)', (path) => {
+      vi.mocked(useUIConfig).mockReturnValue(uiConfig({ password_reset_enabled: true }));
+      vi.mocked(useAuth).mockReturnValue(
+        authState({ authEnabled: true, isAuthenticated: true, user: { id: 'u1', username: 'alice', display_name: 'Alice', role: 'user' }, role: 'user' }),
+      );
+      renderAt(path);
+      expect(screen.getByText('Page not found')).toBeInTheDocument();
+    });
+
+    it.each(PATHS)('shows the loading state on %s while the session loads, not NotFound', (path) => {
+      vi.mocked(useUIConfig).mockReturnValue({ config: uiConfig().config, loading: true });
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isLoading: true }));
+      renderAt(path);
+      expect(screen.getByRole('status')).toBeInTheDocument();
+      expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
     });
   });
 

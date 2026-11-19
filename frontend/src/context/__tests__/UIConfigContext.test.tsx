@@ -12,7 +12,7 @@ function Probe() {
   if (loading) return <p>loading</p>;
   return (
     <p>
-      {config.title}|{String(config.auth_enabled)}|{String(config.oidc_enabled)}|{String(config.local_auth_enabled)}
+      {config.title}|{String(config.auth_enabled)}|{String(config.oidc_enabled)}|{String(config.local_auth_enabled)}|{String(config.password_reset_enabled)}
     </p>
   );
 }
@@ -29,6 +29,7 @@ describe('UIConfigProvider', () => {
       auth_enabled: true,
       oidc_enabled: false,
       local_auth_enabled: true,
+      password_reset_enabled: true,
     });
     render(
       <UIConfigProvider>
@@ -36,7 +37,7 @@ describe('UIConfigProvider', () => {
       </UIConfigProvider>,
     );
     expect(screen.getByText('loading')).toBeInTheDocument();
-    expect(await screen.findByText('My App|true|false|true')).toBeInTheDocument();
+    expect(await screen.findByText('My App|true|false|true|true')).toBeInTheDocument();
   });
 
   it('falls back to the default title with auth off when the request fails', async () => {
@@ -47,12 +48,13 @@ describe('UIConfigProvider', () => {
         <Probe />
       </UIConfigProvider>,
     );
-    expect(await screen.findByText('Application Template|false|false|false')).toBeInTheDocument();
+    expect(await screen.findByText('Application Template|false|false|false|false')).toBeInTheDocument();
     expect(FALLBACK_UI_CONFIG).toEqual({
       title: 'Application Template',
       auth_enabled: false,
       oidc_enabled: false,
       local_auth_enabled: false,
+      password_reset_enabled: false,
     });
   });
 

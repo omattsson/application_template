@@ -34,6 +34,10 @@ const (
 	auditKeyEntityID = "audit.entity_id"
 	auditKeyDetails  = "audit.details"
 	auditKeyForce    = "audit.force"
+	// auditKeyActorID and auditKeyActorName name the account of a request that
+	// has no session (the password reset).
+	auditKeyActorID   = "audit.actor_id"
+	auditKeyActorName = "audit.actor_name"
 )
 
 // SkipAudit tells the audit middleware not to record this request, although
@@ -47,6 +51,18 @@ func SkipAudit(c *gin.Context) { c.Set(auditKeySkip, true) }
 // a change and then answers with an error (for example a failed revocation
 // after a role change): the change happened and must be in the log.
 func AuditCommitted(c *gin.Context) { c.Set(auditKeyForce, true) }
+
+// SetAuditActor names the account that a request without a session acted for:
+// the confirm of a password reset has no login, but the account that was
+// reset is the actor of the change. The recorder uses it only when the
+// request has no authenticated user (an authenticated caller always wins), so
+// it cannot be used to write an entry in someone else's name through an
+// authenticated route. Only a handler that has proven the identity (a token
+// that it consumed) may call it.
+func SetAuditActor(c *gin.Context, userID, username string) {
+	c.Set(auditKeyActorID, userID)
+	c.Set(auditKeyActorName, username)
+}
 
 // SetAuditAction replaces the action of the route table for this request. A
 // handler that serves two actions on one route (disable and enable) uses it.
@@ -208,6 +224,11 @@ func (a *AuditRecorder) Middleware() gin.HandlerFunc {
 		}
 		userID := GetUserIDFromContext(c)
 		if userID == "" {
+			// No session: only a handler that named the account it acted for
+			// (SetAuditActor) is recorded.
+			userID = c.GetString(auditKeyActorID)
+		}
+		if userID == "" {
 			return
 		}
 		entry := buildAuditEntry(c, route, userID, status)
@@ -293,6 +314,10 @@ const (
 	// AuditActionChangePassword is a user changing their own password
 	// (PUT /auth/me/password).
 	AuditActionChangePassword = "change_password"
+	// AuditActionPasswordReset is the confirm of a password reset by mail
+	// (POST /auth/password-reset/confirm): the account sets a new password with
+	// a token, without a session. The actor is that account.
+	AuditActionPasswordReset = "password_reset"
 
 	AuditEntityItem   = "item"
 	AuditEntityUser   = "user"
@@ -303,7 +328,7 @@ const (
 // audit log page offers the same list as filter options.
 var KnownAuditActions = []string{
 	AuditActionCreate, AuditActionUpdate, AuditActionDelete,
-	AuditActionDisable, AuditActionEnable, AuditActionChangeRole, AuditActionChangePassword,
+	AuditActionDisable, AuditActionEnable, AuditActionChangeRole, AuditActionChangePassword, AuditActionPasswordReset,
 }
 
 // KnownAuditEntityTypes lists every entity type that new audit entries can
@@ -336,6 +361,11 @@ var auditRoutes = map[string]AuditRoute{
 	// handler names the caller as the entity (SetAuditEntityID) and never puts
 	// a password in the details.
 	"PUT /auth/me/password": {Action: AuditActionChangePassword, EntityType: AuditEntityUser, IDFromHandler: true},
+	// The confirm of a password reset has no session. The handler names the
+	// account that it reset (SetAuditActor, SetAuditEntityID) once the new hash
+	// is stored. The request route (POST /auth/password-reset) has no entry: it
+	// changes nothing and is skipped like the other /auth/ routes.
+	"POST /auth/password-reset/confirm": {Action: AuditActionPasswordReset, EntityType: AuditEntityUser, IDFromHandler: true},
 }
 
 // AuditRouteFor returns how the audit middleware records a request with this
@@ -418,7 +448,7 @@ func buildAuditEntry(c *gin.Context, route AuditRoute, userID string, status int
 	entry := &models.AuditLog{
 		ID:         uuid.New().String(),
 		UserID:     userID,
-		Username:   truncateAuditText(GetUsernameFromContext(c), models.MaxUsernameLen),
+		Username:   truncateAuditText(auditUsername(c), models.MaxUsernameLen),
 		Action:     action,
 		EntityType: route.EntityType,
 		EntityID:   truncateEntityID(auditEntityID(c, route)),
@@ -428,6 +458,16 @@ func buildAuditEntry(c *gin.Context, route AuditRoute, userID string, status int
 		entry.Details = string(raw)
 	}
 	return entry
+}
+
+// auditUsername is the username of the authenticated caller, or of the actor
+// that a handler named for a request without a session.
+func auditUsername(c *gin.Context) string {
+	if GetUserIDFromContext(c) != "" {
+		return GetUsernameFromContext(c)
+	}
+
+	return c.GetString(auditKeyActorName)
 }
 
 // truncateAuditText cuts s to at most limit bytes at a UTF-8 rune start.

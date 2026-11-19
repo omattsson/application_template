@@ -51,6 +51,9 @@ type authEnv struct {
 	cfg     *config.Config
 	// idem is the idempotency repository (set by an envOption; nil: module off).
 	idem models.IdempotencyRepository
+	// reset holds the password reset dependencies (set by an envOption; nil:
+	// module off).
+	reset *PasswordResetDeps
 }
 
 // authOn returns a config with AUTH_ENABLED=true and the defaults that
@@ -84,7 +87,7 @@ func openAuthDB(t *testing.T) *gorm.DB {
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, db.AutoMigrate(&models.User{}, &models.APIKey{}, &models.RefreshToken{},
-		&models.AuditLog{}, &models.Item{}))
+		&models.AuditLog{}, &models.Item{}, &models.PasswordResetToken{}))
 	return db
 }
 
@@ -135,6 +138,7 @@ func newAuthEnv(t *testing.T, cfg *config.Config, opts ...envOption) *authEnv {
 		Hub:           hub,
 		Auth:          deps,
 		Idempotency:   env.idem,
+		PasswordReset: env.reset,
 	})
 	require.NoError(t, err)
 	t.Cleanup(res.RateLimiters.Stop)

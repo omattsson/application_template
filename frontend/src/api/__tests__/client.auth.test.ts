@@ -244,13 +244,14 @@ describe('uiConfigService', () => {
   it('reads GET /api/v1/ui-config', async () => {
     const adapter = installMockBackend([api, authApi], () => ({
       status: 200,
-      data: { title: 'My App', auth_enabled: true, oidc_enabled: true, local_auth_enabled: false },
+      data: { title: 'My App', auth_enabled: true, oidc_enabled: true, local_auth_enabled: false, password_reset_enabled: false },
     }));
     await expect(uiConfigService.get()).resolves.toEqual({
       title: 'My App',
       auth_enabled: true,
       oidc_enabled: true,
       local_auth_enabled: false,
+      password_reset_enabled: false,
     });
     expect(pathOf(adapter.mock.calls[0][0])).toBe('/api/v1/ui-config');
   });

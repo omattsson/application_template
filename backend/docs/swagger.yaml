@@ -120,6 +120,31 @@ definitions:
       user:
         $ref: '#/definitions/models.User'
     type: object
+  handlers.PasswordResetAcceptedResponse:
+    properties:
+      message:
+        example: If the account exists and can receive mail, a reset link has been
+          sent.
+        type: string
+    type: object
+  handlers.PasswordResetConfirmRequest:
+    properties:
+      new_password:
+        description: 'NewPassword is the new password: at least 8 characters, at most
+          72 bytes.'
+        type: string
+      token:
+        description: Token is the token from the link of the mail (the fragment of
+          the URL).
+        type: string
+    type: object
+  handlers.PasswordResetRequest:
+    properties:
+      username:
+        description: Username is the name of the local account that forgot its password.
+        example: alice
+        type: string
+    type: object
   handlers.RefreshResponse:
     properties:
       token:
@@ -176,6 +201,14 @@ definitions:
         description: |-
           OIDCEnabled tells the UI to offer the single sign-on button
           (AUTH_ENABLED and OIDC_ENABLED).
+        example: false
+        type: boolean
+      password_reset_enabled:
+        description: |-
+          PasswordResetEnabled tells the UI to offer "Forgot password?" and the
+          pages behind it: PASSWORD_RESET_ENABLED, with auth on and the password
+          form shown (local_auth_enabled). It is false whenever the two routes do
+          not exist (404).
         example: false
         type: boolean
       title:
@@ -1057,6 +1090,133 @@ paths:
       summary: Start the OIDC login
       tags:
       - auth
+  /api/v1/auth/password-reset:
+    post:
+      consumes:
+      - application/json
+      description: 'Sends a mail with a single-use reset link to the local account
+        with this username, when the account exists, is enabled, has an email address,
+        is not a service account (the bootstrap admin) and is not an SSO account.
+        Public. Only available when PASSWORD_RESET_ENABLED=true (otherwise 404). The
+        answer is always 202 with the same body, whether or not the account exists
+        or got a mail (an unknown, ineligible, throttled or mailed account, and a
+        mail failure, cannot be told apart by the status, the body, the headers or
+        the time): the lookup and the send run after the answer. At most one mail
+        per account in PASSWORD_RESET_MIN_INTERVAL; a request in that time sends nothing.
+        The link is PASSWORD_RESET_URL + /reset-password#token=... and the token is
+        valid for PASSWORD_RESET_TOKEN_TTL. A request that asks again replaces the
+        unused earlier token. Unknown fields are refused. It has its own LOGIN_RATE_LIMIT
+        budget per client IP. No cookie is set or read.'
+      parameters:
+      - description: The username of the account
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.PasswordResetRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/handlers.PasswordResetAcceptedResponse'
+        "400":
+          description: No username, a username that cannot exist, or an invalid body
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: The password reset is not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Request Entity Too Large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Request a password reset mail
+      tags:
+      - auth
+  /api/v1/auth/password-reset/confirm:
+    post:
+      consumes:
+      - application/json
+      description: 'Sets a new password with the token from the mail. Public. Only
+        available when PASSWORD_RESET_ENABLED=true (otherwise 404). The password follows
+        the password rules (at least 8 characters, at most 72 bytes) and is checked
+        first: a bad password answers 400 and does not use up the token. Then the
+        token is consumed atomically (single use: of two requests with the same token
+        exactly one succeeds) and the new password is stored. A token that is malformed,
+        unknown, used or expired, or of an account that was disabled, deleted, turned
+        into a service account or lost its email address, answers one generic 400
+        "Invalid or expired token". On success (204, no body) every session of the
+        user ends the way an admin password reset ends it: the refresh tokens are
+        revoked, every access token issued before is rejected (user block), the open
+        WebSockets are closed and the failed-login lock of the account is cleared;
+        the account can sign in with the new password at once, also when it was locked.
+        API keys are kept: delete them separately when the account may have been exposed.
+        The audit log gets an entry with the action password_reset (actor and entity:
+        the account). When the password was stored but a revocation step failed, the
+        answer is 500, the new password stands and the entry has revocation_failed.
+        Unknown fields are refused. It has its own LOGIN_RATE_LIMIT budget per client
+        IP. No cookie is set or read.'
+      parameters:
+      - description: The token and the new password
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.PasswordResetConfirmRequest'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: The password was changed
+        "400":
+          description: Invalid or expired token, or a password that breaks the rules
+            (the token is not used up)
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: The password reset is not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Request Entity Too Large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set a new password with a reset token
+      tags:
+      - auth
   /api/v1/auth/refresh:
     post:
       description: Issues a new access token for the session of the refresh token
@@ -1534,8 +1694,10 @@ paths:
         whether authentication is enabled (AUTH_ENABLED), whether the single sign-on
         login is offered (oidc_enabled: AUTH_ENABLED and OIDC_ENABLED) and whether
         the password form is shown (local_auth_enabled: AUTH_ENABLED, and OIDC off
-        or OIDC_LOCAL_AUTH). Public in both auth modes: no authentication, so the
-        login page can use it. Cached for 5 minutes.'
+        or OIDC_LOCAL_AUTH) and whether the web UI offers the password reset by mail
+        (password_reset_enabled: PASSWORD_RESET_ENABLED with the password form shown;
+        false while the two routes do not exist). Public in both auth modes: no authentication,
+        so the login page can use it. Cached for 5 minutes.'
       produces:
       - application/json
       responses:
@@ -1866,7 +2028,8 @@ paths:
         before are rejected, refresh tokens are revoked, WebSockets are closed) and
         keeps the API keys. The display name and email of an SSO user are overwritten
         by the identity provider at the next login. The response never holds a password
-        or hash.
+        or hash. With the password reset module on, a changed email address (or a
+        new password) also deletes the user's unused reset tokens.
       parameters:
       - description: User ID (UUID)
         in: path
@@ -1947,7 +2110,8 @@ paths:
         writes no new block: tokens issued before the disable stay rejected, and a
         login after the enable works. A request that does not change the state is
         a no-op (changed=false, no audit entry; a repeated disable still ends the
-        sessions). Unknown request fields are refused.'
+        sessions). Unknown request fields are refused. With the password reset module
+        on, disabling also deletes the user''s unused reset tokens.'
       parameters:
       - description: User ID (UUID)
         in: path

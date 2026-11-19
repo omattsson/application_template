@@ -10,6 +10,7 @@ import type { DecisionInput } from './skipDecision';
 //   administrator.
 // - Login: only exists with auth on (with auth off it redirects home).
 // - Admin Users: needs auth on and the local administrator.
+// - Forgot password and Reset password: need auth on and PASSWORD_RESET_ENABLED.
 //
 // A page that did not load must not pass: before axe runs, each test checks the
 // heading, the URL, the colour mode, that no spinner is left and that no API
@@ -30,6 +31,19 @@ const PAGES: PageCase[] = [
   {
     name: 'login',
     spec: { path: '/login', heading: 'Sign in' },
+    needs: { needsAuth: true, needsSignIn: false, signInWhenAuthOn: false },
+  },
+  // The two reset pages exist only with PASSWORD_RESET_ENABLED on the backend and
+  // a visitor who is not signed in (`make test-e2e-auth` turns the module on). The
+  // reset page without a token shows its invalid-link state, which is checked here.
+  {
+    name: 'forgot password',
+    spec: { path: '/forgot-password', heading: 'Forgot password' },
+    needs: { needsAuth: true, needsSignIn: false, signInWhenAuthOn: false },
+  },
+  {
+    name: 'reset password',
+    spec: { path: '/reset-password', heading: 'Reset password' },
     needs: { needsAuth: true, needsSignIn: false, signInWhenAuthOn: false },
   },
   {

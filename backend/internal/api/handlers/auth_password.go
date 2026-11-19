@@ -217,6 +217,8 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	middleware.SetAuditEntityID(c, user.ID)
 	middleware.AuditCommitted(c)
 	middleware.AddAuditDetail(c, "password_changed", true)
+	// A reset mail that was sent before is useless now.
+	dropPasswordResetTokens(wctx, h.log(), h.resetTokens, user.ID)
 
 	if err := h.endOtherSessions(wctx, c, user.ID); err != nil {
 		respondRevocationFailed(c)
