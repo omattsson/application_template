@@ -71,6 +71,8 @@ type Config struct {
 	// Idempotency holds the settings of the optional idempotency module
 	// (IDEMPOTENCY_*).
 	Idempotency IdempotencyConfig
+	// Outbox holds the settings of the optional outbox module (OUTBOX_*).
+	Outbox OutboxConfig
 	// LogLevel is LOG_LEVEL parsed to a slog level; main applies it to the
 	// default slog logger. An invalid value makes LoadConfig fail.
 	LogLevel slog.Level
@@ -446,6 +448,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Outbox.Enabled {
+		if err := c.Outbox.Validate(); err != nil {
+			return fmt.Errorf("outbox config: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -660,6 +668,9 @@ func LoadConfig() (*Config, error) {
 	}
 
 	if cfg.Idempotency, err = loadIdempotencyConfig(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	if cfg.Outbox, err = loadOutboxConfig(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 

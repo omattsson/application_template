@@ -317,7 +317,10 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 	api.GET("/ping", handlers.Ping)
 
 	// Items endpoints
-	itemsHandler := handlers.NewHandlerWithHub(deps.Repository, deps.Hub)
+	// With the outbox module on, the repository writes the event in the
+	// transaction of the change and the poller of every replica delivers it:
+	// the handler must not broadcast too, or each socket gets two copies.
+	itemsHandler := newItemsHandler(cfg, deps)
 	items := api.Group("/items")
 	{
 		items.GET("", itemsHandler.GetItems)
@@ -476,4 +479,14 @@ func (a *authWiring) registerAuthenticated(api *gin.RouterGroup, l *RateLimiters
 	users.PUT("/:id/disabled", a.users.SetUserDisabled)
 
 	api.GET("/audit-logs", middleware.RequireSessionAuth(), middleware.RequireAdmin(), a.auditLogs.ListAuditLogs)
+}
+
+// newItemsHandler builds the Items handler. With OUTBOX_ENABLED=true it has no
+// hub, so it never broadcasts directly; otherwise it broadcasts after the
+// commit, as before.
+func newItemsHandler(cfg *config.Config, deps Deps) *handlers.Handler {
+	if cfg.Outbox.Enabled {
+		return handlers.NewHandler(deps.Repository)
+	}
+	return handlers.NewHandlerWithHub(deps.Repository, deps.Hub)
 }

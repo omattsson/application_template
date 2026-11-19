@@ -271,6 +271,25 @@ func (h *Hub) Broadcast(message []byte) {
 	}
 }
 
+// BroadcastBacklog returns how full the busiest queue of a broadcast is: the
+// highest number of waiting messages among the broadcast queue and the send
+// queue of every client, and their capacity (the two have the same size). A
+// message that does not fit the broadcast queue is dropped, and a client whose
+// send queue is full is disconnected as too slow, so a sender that feeds the
+// hub in bursts (the outbox poller) waits while the backlog is half the
+// capacity.
+func (h *Hub) BroadcastBacklog() (pending, capacity int) {
+	pending, capacity = len(h.broadcast), cap(h.broadcast)
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for client := range h.clients {
+		if n := len(client.send); n > pending {
+			pending = n
+		}
+	}
+	return pending, capacity
+}
+
 // Shutdown gracefully stops the hub's Run loop and closes all client connections.
 // It is safe to call multiple times and concurrently.
 func (h *Hub) Shutdown() {

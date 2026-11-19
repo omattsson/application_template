@@ -44,7 +44,7 @@ services:
     # each (HTTP drain, audit log writes with AUTH_ENABLED=true, leader
     # workers, in-flight work, telemetry): 5 x 30s with the default, plus 2s
     # for the metrics and pprof servers and 2s for the replica heartbeat
-    # (154s), plus a margin. Raise it with SERVER_SHUTDOWN_TIMEOUT.
+    # (156s), plus a margin. Raise it with SERVER_SHUTDOWN_TIMEOUT.
     stop_grace_period: 170s
     environment:
       - APP_NAME=${APP_NAME:-application}
@@ -125,6 +125,11 @@ services:
       - IDEMPOTENCY_ENABLED=${IDEMPOTENCY_ENABLED:-}
       - IDEMPOTENCY_TTL=${IDEMPOTENCY_TTL:-}
       - IDEMPOTENCY_LOCK_TIMEOUT=${IDEMPOTENCY_LOCK_TIMEOUT:-}
+      # Transactional outbox for the Items WebSocket events (optional module, off
+      # by default). Empty keeps the backend default (false, 500ms and 1h).
+      - OUTBOX_ENABLED=${OUTBOX_ENABLED:-}
+      - OUTBOX_POLL_INTERVAL=${OUTBOX_POLL_INTERVAL:-}
+      - OUTBOX_RETENTION=${OUTBOX_RETENTION:-}
       # OpenID Connect single sign-on (needs AUTH_ENABLED=true): off by default.
       - OIDC_ENABLED=${OIDC_ENABLED:-false}
       - OIDC_ISSUER=${OIDC_ISSUER:-}

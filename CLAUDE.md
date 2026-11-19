@@ -27,14 +27,15 @@ signal -> shutdown              # ordered, see below
 2. Audit recorder (auth on): drain the pending audit writes.
 3. Leader worker group: stop the background workers.
 4. In-flight work (`inflight.Tracker`): wait for work that outlives its request.
-5. WebSocket hub: close the client connections.
-6. Telemetry flush (OpenTelemetry; a no-op with `OTEL_ENABLED=false` and `METRICS_ENABLED=false`).
-7. Rate limiters: stop their cleanup goroutines.
-8. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
-9. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): stop it and delete this process's row, within a fixed 2 s.
-10. Database: close the pool last.
+5. Outbox poller (`OUTBOX_ENABLED=true`): stop it within a fixed 2 s, after the HTTP server and the in-flight work and before the hub and the database close.
+6. WebSocket hub: close the client connections.
+7. Telemetry flush (OpenTelemetry; a no-op with `OTEL_ENABLED=false` and `METRICS_ENABLED=false`).
+8. Rate limiters: stop their cleanup goroutines.
+9. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
+10. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): stop it and delete this process's row, within a fixed 2 s.
+11. Database: close the pool last.
 
-The steps 1, 2, 3, 4 and 6 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0 and the 2 s of step 9 (154 s with the default 30 s). The orchestrator's stop grace period must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s. Details: `docs/claude/operations.md`.
+The steps 1, 2, 3, 4 and 7 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0, the 2 s of step 5 and the 2 s of step 10 (156 s with the default 30 s). The orchestrator's stop grace period must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s. Details: `docs/claude/operations.md`.
 
 **Gin mode.** `GIN_MODE` wins when it is set. Otherwise the mode is debug when `APP_DEBUG` is true and release when it is false. The code default of `APP_DEBUG` is `true` and nothing warns about it: set `APP_DEBUG=false` in production (`make prod*` does).
 
@@ -126,7 +127,7 @@ Directory rules: `backend/CLAUDE.md`, `frontend/CLAUDE.md`. GitHub Copilot reads
 - WebSocket: `/ws`. Health: `/health/live`, `/health/ready`, `/health`. Swagger UI: `/swagger/*` only with `ENABLE_SWAGGER=true`; it stays open with auth on.
 - Client IP: only peers in `TRUSTED_PROXIES` may set it with `X-Forwarded-For` or `X-Real-IP`.
 
-**WebSocket messages.** Client to server: `subscribe` and `unsubscribe` with `{"topic": "..."}`. Server to client: `item.created`, `item.updated`, `item.deleted` (Items handler, to every socket). With auth on, topics are authorised per user. Details: `docs/claude/auth-sessions.md`.
+**WebSocket messages.** Client to server: `subscribe` and `unsubscribe` with `{"topic": "..."}`. Server to client: `item.created`, `item.updated`, `item.deleted` (Items handler, to every socket; with `OUTBOX_ENABLED=true` the repository writes them to `outbox_events` in the transaction of the change and the poller of every replica delivers them, the handler does not broadcast). With auth on, topics are authorised per user. Details: `docs/claude/auth-sessions.md`.
 
 ## Frontend
 
@@ -170,6 +171,7 @@ Details: `docs/claude/operations.md`.
 - Paginate every new list endpoint (`limit` and `offset` with `ListPaged`). Select only the columns that the list needs. Give the query an index that covers its filter and its order. Use batch queries instead of N+1 loops.
 - Add a periodic job as a `leader.Worker` with a restartable `Run(ctx)`, passed to `leader.NewGroup` in `buildServices` before the group starts. Keep state that must survive a leader change in the database. With `LEADER_ELECTION_ENABLED=false` (the default) every process runs the workers; with `true` only the holder of the MySQL lease (`leader.Lease`) does. Either way a job must be idempotent and safe on several replicas, and return within 5 s after its context is cancelled.
 - Work that outlives its request starts with `inflight.Tracker.Go`. Shutdown waits for it before the database closes.
+- With `OUTBOX_ENABLED=true` write an event through the repository hook (`models.WithChangeHook`) in the transaction of the change and never broadcast it directly; the poller of each replica delivers it (`docs/claude/operations.md`, "Outbox").
 - Send WebSocket messages through the hub (`Broadcast`, `BroadcastToTopic`, `BroadcastToUser`) and revoke through `DisconnectUser`, `DisconnectToken` or `DisconnectAPIKey`, never by writing to a connection. Hub state is per replica: a message reaches only the sockets of the replica that sent it.
 - Register every external dependency with `healthChecker.AddCheck()`.
 - The rate limiters, the username login throttle and the WebSocket hub are per replica and in memory.

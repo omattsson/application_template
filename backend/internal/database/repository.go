@@ -6,7 +6,19 @@ import (
 
 	"backend/internal/config"
 	"backend/internal/models"
+	"backend/internal/outbox"
 )
+
+// repositoryOptions returns the options of the Items repository for cfg. With
+// OUTBOX_ENABLED=true the repository writes the Items events to outbox_events
+// in the transaction of each change (outbox.ItemHook); with false it has no
+// hook and touches no outbox table.
+func repositoryOptions(cfg *config.Config) []models.RepositoryOption {
+	if cfg == nil || !cfg.Outbox.Enabled {
+		return nil
+	}
+	return []models.RepositoryOption{models.WithChangeHook(outbox.ItemHook(InsertOutboxEvent))}
+}
 
 // NewRepository creates a new repository based on the configuration.
 // DB_TYPE=sqlite is accepted by config validation for unit-test configs only;
@@ -27,5 +39,5 @@ func NewRepository(cfg *config.Config) (models.Repository, error) {
 		return nil, fmt.Errorf("failed to run database migrations: %w", err)
 	}
 
-	return models.NewRepository(db.DB), nil
+	return models.NewRepository(db.DB, repositoryOptions(cfg)...), nil
 }

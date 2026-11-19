@@ -165,6 +165,16 @@ Off by default: with the switch off no middleware, repository or worker exists, 
 | `IDEMPOTENCY_TTL` | `24h` | How long a key and its stored response live. Read leniently while the module is off; with it on it must parse, be positive and not be shorter than `IDEMPOTENCY_LOCK_TIMEOUT`. |
 | `IDEMPOTENCY_LOCK_TIMEOUT` | `60s` | How long a request in progress blocks a retry (409 with `Retry-After`) before the next request with the same key and the same request may take the key over. Set it above the longest `POST`. Read leniently while the module is off; with it on it must parse and be positive. |
 
+### Outbox
+
+Off by default: with the switch off no table is read or written, there is no poller and no janitor, and the Items handler broadcasts after the commit as before. Details: "Outbox" below.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `OUTBOX_ENABLED` | `false` | Strict boolean. With `true` the Items events are written to `outbox_events` in the transaction of the change, and every replica polls the table and delivers them to its own sockets. |
+| `OUTBOX_POLL_INTERVAL` | `500ms` | How often each replica reads the new rows. Read leniently while the module is off; with it on it must parse and be positive. |
+| `OUTBOX_RETENTION` | `1h` | How long a row is kept before the `outbox-cleanup` leader worker deletes it. Read leniently while the module is off; with it on it must parse, be at least 1 minute and at least 10 times `OUTBOX_POLL_INTERVAL`. |
+
 ### Compose and Makefile variables
 
 These are read by `docker-compose.yml`, the Makefile or the scripts, not by the backend.
@@ -181,7 +191,7 @@ These are read by `docker-compose.yml`, the Makefile or the scripts, not by the 
 | `FRONTEND_PROXY_IP`, `FRONTEND_NET_SUBNET` | `172.30.80.10`, `172.30.80.0/24` | Fixed proxy address on `frontend-net` and its subnet; change both together. |
 | `VITE_API_URL` | `http://localhost:8081` | Target of the Vite dev proxy; Compose sets `http://backend:8081`. |
 
-`docker-compose.yml` also passes six backend variables documented above, with an empty default that keeps the backend's own default (their parsers treat an empty value as unset): `LEADER_ELECTION_ENABLED` (`false`), `REPLICA_HEARTBEAT_ENABLED` (`false`), `WS_MAX_CONNECTIONS_PER_USER` (`16`), `IDEMPOTENCY_ENABLED` (`false`), `IDEMPOTENCY_TTL` (`24h`) and `IDEMPOTENCY_LOCK_TIMEOUT` (`60s`). It does not pass the `PPROF_*` variables: profiling needs an override file of your own (see "Profiling (pprof)"), and `docker-compose.otel.yml` sets the telemetry and metrics variables. The backend healthcheck (`/health/live`, every 30 s) has `start_period: 120s`, so a cold development compile (`go run` with an empty module cache) is not counted as failing; the frontend waits for it (`depends_on: service_healthy`).
+`docker-compose.yml` also passes nine backend variables documented above, with an empty default that keeps the backend's own default (their parsers treat an empty value as unset): `LEADER_ELECTION_ENABLED` (`false`), `REPLICA_HEARTBEAT_ENABLED` (`false`), `WS_MAX_CONNECTIONS_PER_USER` (`16`), `IDEMPOTENCY_ENABLED` (`false`), `IDEMPOTENCY_TTL` (`24h`), `IDEMPOTENCY_LOCK_TIMEOUT` (`60s`), `OUTBOX_ENABLED` (`false`), `OUTBOX_POLL_INTERVAL` (`500ms`) and `OUTBOX_RETENTION` (`1h`). It does not pass the `PPROF_*` variables: profiling needs an override file of your own (see "Profiling (pprof)"), and `docker-compose.otel.yml` sets the telemetry and metrics variables. The backend healthcheck (`/health/live`, every 30 s) has `start_period: 120s`, so a cold development compile (`go run` with an empty module cache) is not counted as failing; the frontend waits for it (`depends_on: service_healthy`).
 
 `docker-compose.yml` also passes `APP_ENV`, `PORT`, `API_VERSION`, `API_PREFIX`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS` and `CORS_MAX_AGE` to the backend. The backend reads none of them (it reads `GO_ENV`, `SERVER_PORT` and `CORS_ALLOWED_ORIGINS`), so they have no effect. Set the listening port with `SERVER_PORT`, never `PORT`. The development frontend does not read a `PORT` either: the Vite server is fixed to port 3000.
 
@@ -213,16 +223,17 @@ The username login throttle is separate and in memory per replica: 5 failed logi
 2. Audit recorder (auth on): no new entries, wait for the writes of finished requests. Own budget.
 3. Leader worker group: stop the background workers. Own budget.
 4. In-flight work (`inflight.Tracker`): work that outlives its request. Own budget.
-5. WebSocket hub: close the client connections and end the revalidation loop.
-6. Telemetry flush (`Telemetry.Shutdown`: spans, metrics and logs that are still buffered, sent or dropped within the budget). Own budget.
-7. Rate limiters: stop their cleanup goroutines.
-8. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
-9. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): stop it and delete this process's row, within a fixed 2 s (`heartbeatStopTimeout`).
-10. Database: close the pool last.
+5. Outbox poller (`OUTBOX_ENABLED=true`): stop the poll loop, within a fixed 2 s (`outboxStopTimeout`). It runs after the HTTP server and the in-flight work (nothing new is written by this process) and before the hub and the database close (it reads the table and sends to the hub).
+6. WebSocket hub: close the client connections and end the revalidation loop.
+7. Telemetry flush (`Telemetry.Shutdown`: spans, metrics and logs that are still buffered, sent or dropped within the budget). Own budget.
+8. Rate limiters: stop their cleanup goroutines.
+9. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
+10. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): stop it and delete this process's row, within a fixed 2 s (`heartbeatStopTimeout`).
+11. Database: close the pool last.
 
-With `LEADER_ELECTION_ENABLED=true` step 3 first stops the workers (the group can no longer start), then ends the election, which releases the lease (`expires_at` in the past where this process is the holder) so the next replica takes over at its next attempt; all of it within the step's budget. When a worker does not stop within the budget (it ignores its context), the election is NOT ended and the lease is NOT released: this process keeps renewing it while the database is open, so no other replica starts while that worker runs. After step 10 closes the database the renewals fail, and the lease expires 15 s after the last one, after the process has exited. When the workers stopped but the election itself does not end within the rest of the budget, the lease expires on its own after 15 s. The leader step never waits longer than its budget, so the worst case below is unchanged.
+With `LEADER_ELECTION_ENABLED=true` step 3 first stops the workers (the group can no longer start), then ends the election, which releases the lease (`expires_at` in the past where this process is the holder) so the next replica takes over at its next attempt; all of it within the step's budget. When a worker does not stop within the budget (it ignores its context), the election is NOT ended and the lease is NOT released: this process keeps renewing it while the database is open, so no other replica starts while that worker runs. After step 11 closes the database the renewals fail, and the lease expires 15 s after the last one, after the process has exited. When the workers stopped but the election itself does not end within the rest of the budget, the lease expires on its own after 15 s. The leader step never waits longer than its budget, so the worst case below is unchanged.
 
-Steps 1, 2, 3, 4 and 6 each get their own budget of the length that was left on the shutdown context when shutdown began (at least 100 ms), detached from it, so a hung request cannot starve a later step and the 2 s of step 0 do not shorten the HTTP drain. That is five budgeted steps, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0 and the 2 s of step 9 (154 s with the default 30 s). The stop grace period of the orchestrator must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s, which still covers it. Raise both together. Work that outlives its request starts with `inflight.Tracker.Go`; a periodic job is a `leader.Worker`.
+Steps 1, 2, 3, 4 and 7 each get their own budget of the length that was left on the shutdown context when shutdown began (at least 100 ms), detached from it, so a hung request cannot starve a later step and the 2 s of step 0 do not shorten the HTTP drain. That is five budgeted steps, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0, the 2 s of step 5 and the 2 s of step 10 (156 s with the default 30 s). The stop grace period of the orchestrator must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s, which still covers it. Raise both together. Work that outlives its request starts with `inflight.Tracker.Go`; a periodic job is a `leader.Worker`.
 
 The API-key last-used update runs in a goroutine that shutdown does not wait for.
 
@@ -267,9 +278,9 @@ Both run on ports of their own, started by `main` (`backend/api/servers.go`) and
 ## Replicas
 
 - Shared through MySQL: all data, the token blocklist and OIDC login states (`SESSION_STORE=mysql`), the refresh-token families and the audit log. A logout on one replica is seen by all others at their next request. A WebSocket on another replica closes at the next revalidation pass (every `websocket.DefaultRevalidateInterval`) or at token expiry.
-- Per replica, in memory: the rate limiters, the username login throttle, the WebSocket hub and its connections. WebSocket broadcasts reach only the sockets of the replica that sent them.
+- Per replica, in memory: the rate limiters, the username login throttle, the WebSocket hub and its connections. WebSocket broadcasts reach only the sockets of the replica that sent them, except the Items events with the outbox module on: every replica delivers those to its own sockets ("Outbox").
 - `SESSION_STORE=memory` is for one replica: a restart forgets every revocation and a second replica does not see any.
-- Leader workers (`refresh-token-cleanup`, hourly, `session-store-cleanup`, every 15 minutes, with the heartbeat on `replica-heartbeat-cleanup`, every 15 minutes, and with the idempotency module on `idempotency-cleanup`, hourly) run in a `leader.Group`. With `LEADER_ELECTION_ENABLED=false` (the default) each process starts them itself; they only delete expired rows, so several replicas running them is safe. With `LEADER_ELECTION_ENABLED=true` they run on one replica at a time (below). A new worker must still be safe to run twice for a short time: see "Failure semantics".
+- Leader workers (`refresh-token-cleanup`, hourly, `session-store-cleanup`, every 15 minutes, with the heartbeat on `replica-heartbeat-cleanup`, every 15 minutes, with the idempotency module on `idempotency-cleanup`, hourly, and with the outbox module on `outbox-cleanup`, every minute) run in a `leader.Group`. With `LEADER_ELECTION_ENABLED=false` (the default) each process starts them itself; they only delete expired rows, so several replicas running them is safe. With `LEADER_ELECTION_ENABLED=true` they run on one replica at a time (below). A new worker must still be safe to run twice for a short time: see "Failure semantics".
 - `EnsureAdminUser` is safe when replicas start together: it never changes an existing user and treats a duplicate key as success.
 
 ### Leader election
@@ -296,7 +307,27 @@ Both run on ports of their own, started by `main` (`backend/api/servers.go`) and
 
 ### Replica heartbeat
 
-With `REPLICA_HEARTBEAT_ENABLED=true` every process (leader or not) upserts its row in `replica_heartbeats` (`id` `varchar(253)` primary key, the process ID; `last_seen` `datetime(3)`, the database server's UTC clock, indexed) every 30 s, and deletes it on a clean shutdown (step 9). A failed write is logged once until the next success and does not stop the process. A row older than 2 minutes (`replica.StaleAfter`) belongs to a process that ended without a clean shutdown; the `replica-heartbeat-cleanup` leader worker deletes those rows. The table lists the running processes, for example `SELECT id, last_seen FROM replica_heartbeats ORDER BY last_seen DESC`.
+With `REPLICA_HEARTBEAT_ENABLED=true` every process (leader or not) upserts its row in `replica_heartbeats` (`id` `varchar(253)` primary key, the process ID; `last_seen` `datetime(3)`, the database server's UTC clock, indexed) every 30 s, and deletes it on a clean shutdown (step 10). A failed write is logged once until the next success and does not stop the process. A row older than 2 minutes (`replica.StaleAfter`) belongs to a process that ended without a clean shutdown; the `replica-heartbeat-cleanup` leader worker deletes those rows. The table lists the running processes, for example `SELECT id, last_seen FROM replica_heartbeats ORDER BY last_seen DESC`.
+
+## Outbox
+
+With `OUTBOX_ENABLED=true` the Items events (`item.created`, `item.updated`, `item.deleted`) go through the table `outbox_events` instead of a direct broadcast after the commit. The payloads are the ones of the direct broadcast, so the SPA is unchanged.
+
+**Write.** The Items repository (`models.GenericRepository`, built by `database.NewRepository` with `outbox.ItemHook`) runs the change and the insert of the event row in one transaction, inside the lock retry (`models.RetryOnLock`). A rolled back or failed change (validation error, version mismatch, duplicate, not found) leaves no row. The handler does not broadcast when the module is on, so each socket gets one copy. The row has `id` (BIGINT auto increment, the delivery order), `event_type`, `message` (the final JSON `{"type": ..., "payload": ...}`, so every replica sends identical bytes) and `created_at` (`DATETIME(3)`, the database clock, indexed for the janitor). The table exists after the migrations whether or not the module is on; with it off nothing reads or writes it.
+
+**Delivery.** Every replica runs one poller (`outbox.Poller`, not a leader worker): every `OUTBOX_POLL_INTERVAL` it reads the rows with `id` greater than its cursor in id order, in batches of 100, and calls `Broadcast` on the hub of its own process. The cursor is in memory and starts at the highest id at process start, so a restart does not replay old events. A failed poll is retried on the next tick and logged once per minute at Error (`logutil.Limiter`).
+
+**Pace.** The hub drops a broadcast that does not fit its 256 slot queue and disconnects a client whose own 256 slot send queue is full, and the poller's cursor moves on after each send, so a burst (a catch-up after a pause, a backlog of more than 256 events) would lose events silently. The batch is therefore 100, under half of the queue, and before every event the poller asks the hub for its backlog (`Hub.BroadcastBacklog`: the fullest of the broadcast queue and the client send queues) and waits, one millisecond at a time, while it is at least 128. A hub that does not drain (a stalled socket) is waited for at most 2 s once per poll (`outbox.DefaultBackpressureTimeout`): after that the rest of the poll sends without waiting, the hub may drop a message or disconnect that slow socket as for any broadcast, and one Warn per minute is logged. The wait is for the fullest queue, so one slow socket whose queue stays at half or more delays delivery to every socket on that replica by up to 2 s per poll until the hub disconnects it. Cancelling the poll during a wait leaves the cursor before the event that was not sent, so the next poll sends it.
+
+**Gap window.** Auto increment ids can commit out of order: a transaction that took id 5 may commit after the one that took id 6. The poller remembers the ids below its cursor that it has not seen and looks them up on every poll for the gap window (the larger of 10 s and four poll intervals), then delivers them when they appear (out of id order, but each event once). At most 10 000 ids are tracked; after a bigger jump only the newest ones are. The limit: a transaction that stays open longer than the gap window, between taking its id and committing, can be skipped by every replica. Keep transactions on Items short.
+
+**Guarantees.** A committed event is delivered by every running replica, also when the replica that wrote it died before it delivered. A healthy socket receives a backlog larger than the hub queue in full and in order (the pace above); the limit is a socket that stops reading for longer than the 2 s wait: the hub disconnects it, and the SPA refetches when it reconnects. Delivery is at most once per socket: a socket that connects after the event, or while its replica was down or the poll failing for longer than the retention, never gets it, and there is no replay for a reconnecting client (the SPA refetches on reconnect). There is no sent flag: each replica keeps its own cursor, so a replica that was down delivers nothing of what it missed. Order within one item is the id order (the row lock of the item serialises its writers).
+
+**Cleanup.** The leader worker `outbox-cleanup` (every minute, only with the module on) deletes the rows older than `OUTBOX_RETENTION` in batches of 1000, at most 100 batches per run, oldest first. It is safe on several replicas. Keep the retention above the longest time a replica may be paused: the minimum is 1 minute and ten poll intervals.
+
+**Metrics** (only with `METRICS_ENABLED` or `OTEL_ENABLED`; with both off nothing is registered and the poller makes no statistics query; no instrument has a label): `outbox.events.delivered` (counter, events sent to this replica's hub), `outbox.delivery.age` (gauge, seconds between the commit of the newest delivered event and its delivery, by the database clock; it keeps the last value while the outbox is idle) and `outbox.cursor.lag` (gauge, ids between the cursor and the table maximum, measured with one `MAX(id)` query at the end of every poll, also a failed one; a poll whose query failed keeps the last value).
+
+**Start check.** `OUTBOX_ENABLED=true` with a repository that does not write the events (no change hook) stops the start: a silent start would drop every event.
 
 ## Idempotency keys
 

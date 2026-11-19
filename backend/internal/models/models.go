@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -81,33 +82,90 @@ type Repository interface {
 type GenericRepository struct {
 	db                  *gorm.DB
 	allowedFilterFields map[string]bool
+	// hook runs inside the transaction of every create, update and delete
+	// (WithChangeHook); nil means none and the writes run as single
+	// statements.
+	hook ChangeHook
 }
 
 // NewRepository creates a new GenericRepository with filter fields for the Item
 // entity ("name", "price"). For other entity types, use NewRepositoryWithFilterFields.
-func NewRepository(db *gorm.DB) Repository {
-	return &GenericRepository{
+//
+// Options (WithChangeHook) are set here and never change afterwards.
+func NewRepository(db *gorm.DB, opts ...RepositoryOption) Repository {
+	r := &GenericRepository{
 		db: db,
 		allowedFilterFields: map[string]bool{
 			"name":  true,
 			"price": true,
 		},
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // NewRepositoryWithFilterFields creates a GenericRepository with a custom filter field whitelist.
-func NewRepositoryWithFilterFields(db *gorm.DB, fields []string) Repository {
+func NewRepositoryWithFilterFields(db *gorm.DB, fields []string, opts ...RepositoryOption) Repository {
 	allowed := make(map[string]bool, len(fields))
 	for _, f := range fields {
 		allowed[f] = true
 	}
-	return &GenericRepository{db: db, allowedFilterFields: allowed}
+	r := &GenericRepository{db: db, allowedFilterFields: allowed}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // DB returns the database handle of the repository. The bootstrap builds the
 // other repositories (users, sessions, audit) on it, so they share one
 // connection pool, which Close closes.
 func (r *GenericRepository) DB() *gorm.DB { return r.db }
+
+// HasChangeHook reports whether the repository runs a change hook in the
+// transaction of its writes. The bootstrap refuses OUTBOX_ENABLED=true
+// without it: no event would ever be written.
+func (r *GenericRepository) HasChangeHook() bool { return r.hook != nil }
+
+// writeWithHook runs change and then the hook in one transaction, and runs the
+// whole transaction again after a deadlock or lock wait timeout. Any error
+// rolls both back. entity is reset to its state before the call after a
+// failed attempt, so a retry (and the caller of a failed write) sees no ID,
+// version or timestamp from the rolled back attempt.
+func (r *GenericRepository) writeWithHook(ctx context.Context, kind ChangeKind, entity interface{}, change func(tx *gorm.DB) error) error {
+	restore := snapshotEntity(entity)
+	return RetryOnLock(ctx, func() error {
+		err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := change(tx); err != nil {
+				return err
+			}
+			if err := r.hook(tx, kind, entity); err != nil {
+				return dberrors.NewDatabaseError("change hook", err)
+			}
+			return nil
+		})
+		if err != nil {
+			restore()
+		}
+		return err
+	})
+}
+
+// snapshotEntity returns a function that puts the struct behind entity back
+// to its current value. For anything but a non-nil pointer to a struct it
+// does nothing.
+func snapshotEntity(entity interface{}) func() {
+	v := reflect.ValueOf(entity)
+	if v.Kind() != reflect.Pointer || v.IsNil() || v.Elem().Kind() != reflect.Struct {
+		return func() { /* not a pointer to a struct: nothing to restore */ }
+	}
+	elem := v.Elem()
+	saved := reflect.New(elem.Type()).Elem()
+	saved.Set(elem)
+	return func() { elem.Set(saved) }
+}
 
 // Ping checks if the database is reachable
 func (r *GenericRepository) Ping(ctx context.Context) error {
@@ -133,6 +191,12 @@ func (r *GenericRepository) Create(ctx context.Context, entity interface{}) erro
 			return dberrors.NewDatabaseError("validate",
 				fmt.Errorf("%w: %s", dberrors.ErrValidation, err.Error()))
 		}
+	}
+
+	if r.hook != nil {
+		return r.writeWithHook(ctx, ChangeCreated, entity, func(tx *gorm.DB) error {
+			return r.handleError("create", tx.Create(entity).Error)
+		})
 	}
 
 	return RetryOnLock(ctx, func() error {
@@ -169,6 +233,22 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 	// Select("*") ensures all columns are written, matching Save() semantics.
 	if ver, ok := entity.(Versionable); ok {
 		currentVersion := ver.GetVersion()
+		if r.hook != nil {
+			return r.writeWithHook(ctx, ChangeUpdated, entity, func(tx *gorm.DB) error {
+				ver.SetVersion(currentVersion + 1)
+				result := tx.Model(entity).
+					Where("version = ?", currentVersion).
+					Select("*").
+					Updates(entity)
+				if result.Error != nil {
+					return r.handleError("update", result.Error)
+				}
+				if result.RowsAffected == 0 {
+					return dberrors.NewDatabaseError("update", errors.New("version mismatch"))
+				}
+				return nil
+			})
+		}
 		// Each attempt is one UPDATE statement that InnoDB rolls back as a whole
 		// on a deadlock, and it resets the in-memory version on every failure,
 		// so a retry increments the version once. A version mismatch is not a
@@ -192,6 +272,12 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 		})
 	}
 
+	if r.hook != nil {
+		return r.writeWithHook(ctx, ChangeUpdated, entity, func(tx *gorm.DB) error {
+			return r.handleError("update", tx.Save(entity).Error)
+		})
+	}
+
 	return RetryOnLock(ctx, func() error {
 		if err := r.db.WithContext(ctx).Save(entity).Error; err != nil {
 			return r.handleError("update", err)
@@ -201,6 +287,21 @@ func (r *GenericRepository) Update(ctx context.Context, entity interface{}) erro
 }
 
 func (r *GenericRepository) Delete(ctx context.Context, entity interface{}) error {
+	if r.hook != nil {
+		// A delete that matches no row is rolled back before the hook runs,
+		// so a missing item leaves no event.
+		return r.writeWithHook(ctx, ChangeDeleted, entity, func(tx *gorm.DB) error {
+			result := tx.Delete(entity)
+			if result.Error != nil {
+				return r.handleError("delete", result.Error)
+			}
+			if result.RowsAffected == 0 {
+				return dberrors.NewDatabaseError("delete", dberrors.ErrNotFound)
+			}
+			return nil
+		})
+	}
+
 	var rowsAffected int64
 	err := RetryOnLock(ctx, func() error {
 		result := r.db.WithContext(ctx).Delete(entity)

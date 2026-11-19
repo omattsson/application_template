@@ -21,6 +21,7 @@ import (
 	"backend/internal/inflight"
 	"backend/internal/leader"
 	"backend/internal/models"
+	"backend/internal/outbox"
 	"backend/internal/replica"
 	"backend/internal/sessionstore"
 	"backend/internal/telemetry"
@@ -75,6 +76,20 @@ const (
 	// heartbeatCleanupInterval is how often the leader deletes the heartbeat
 	// rows of processes that stopped without a clean shutdown.
 	heartbeatCleanupInterval = 15 * time.Minute
+)
+
+// The outbox module (OUTBOX_ENABLED=true).
+const (
+	// outboxStopTimeout bounds the shutdown step that stops the poller.
+	outboxStopTimeout = 2 * time.Second
+	// outboxCleanupInterval is how often the leader deletes the rows older
+	// than OUTBOX_RETENTION.
+	outboxCleanupInterval = time.Minute
+	// outboxCleanupBatch is the number of rows of one delete.
+	outboxCleanupBatch = 1000
+	// outboxCleanupMaxBatches bounds the deletes of one run, so a run that
+	// meets a big backlog returns and the next one goes on.
+	outboxCleanupMaxBatches = 100
 )
 
 // openRepository opens the database and runs the migrations. Tests replace it.
@@ -133,6 +148,11 @@ type auditShutdowner interface {
 	Shutdown(ctx context.Context) error
 }
 
+// outboxStopper is the outbox poller (*outbox.Poller).
+type outboxStopper interface {
+	Stop(timeout time.Duration)
+}
+
 // closer is the data layer (models.Repository).
 type closer interface {
 	Close() error
@@ -150,6 +170,9 @@ type services struct {
 	// heartbeat writes this process's replica_heartbeats row
 	// (REPLICA_HEARTBEAT_ENABLED=true).
 	heartbeat heartbeatStopper
+	// outboxPoller delivers the outbox events to the hub of this process
+	// (OUTBOX_ENABLED=true).
+	outboxPoller outboxStopper
 	// inFlight is the work that outlives its request or worker run
 	// (*inflight.Tracker; see routerDeps.InFlight).
 	inFlight waiter
@@ -392,6 +415,51 @@ func idempotencyCleanupJob(repo models.IdempotencyRepository, batch int) func(ct
 	}
 }
 
+// outboxCleanup returns the function of the outbox-cleanup worker: it deletes
+// the rows older than retention in batches of outboxCleanupBatch, at most
+// outboxCleanupMaxBatches per run, and stops at once when ctx ends (so the
+// worker returns within its 5 s). A short batch means nothing old is left.
+// It is safe on several replicas: a delete by primary key that matches no row
+// is not an error.
+func outboxCleanup(repo models.OutboxRepository, retention time.Duration) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		for range outboxCleanupMaxBatches {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			n, err := repo.DeleteOlderThan(ctx, retention, outboxCleanupBatch)
+			if err != nil {
+				return err
+			}
+			if n < outboxCleanupBatch {
+				return nil
+			}
+		}
+		return nil
+	}
+}
+
+// changeHooked is a repository that reports whether it writes the outbox
+// events (*models.GenericRepository).
+type changeHooked interface {
+	HasChangeHook() bool
+}
+
+// outboxDB returns the database of repo for the outbox module. With
+// OUTBOX_ENABLED=true the repository must run the change hook (database.NewRepository
+// installs it): without it no event would ever be written, and a silent start
+// would drop every WebSocket event.
+func outboxDB(repo models.Repository) (*gorm.DB, error) {
+	g, ok := repo.(gormRepository)
+	if !ok || g.DB() == nil {
+		return nil, errors.New("OUTBOX_ENABLED=true needs the outbox database repository")
+	}
+	if h, ok := repo.(changeHooked); !ok || !h.HasChangeHook() {
+		return nil, errors.New("OUTBOX_ENABLED=true needs a repository that writes the outbox events")
+	}
+	return g.DB(), nil
+}
+
 // electedLeader runs a leader.Group under a leader election: the group
 // starts when this replica acquires the lease and stops when it loses it.
 type electedLeader struct {
@@ -610,6 +678,28 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		leaderWorkers = append(leaderWorkers,
 			periodicWorker("idempotency-cleanup", idempotencyCleanupInterval, idempotencyCleanupJob(idempotencyRepo, idempotencyCleanupBatch)))
 	}
+	// The outbox module: the janitor is a leader worker; the poller is one per
+	// process (every replica delivers to its own sockets) and starts below.
+	var outboxPoller *outbox.Poller
+	if cfg.Outbox.Enabled {
+		db, err := outboxDB(repo)
+		if err != nil {
+			return fail(res, err)
+		}
+		outboxRepo := database.NewGORMOutboxRepository(db)
+		leaderWorkers = append(leaderWorkers,
+			periodicWorker("outbox-cleanup", outboxCleanupInterval, outboxCleanup(outboxRepo, cfg.Outbox.Retention)))
+		pollerCfg := outbox.Config{
+			Repo:      outboxRepo,
+			Sender:    hub,
+			Interval:  cfg.Outbox.PollInterval,
+			GapWindow: outbox.GapWindow(cfg.Outbox.PollInterval),
+		}
+		if m := outbox.NewMetrics(); m != nil {
+			pollerCfg.Observer = m
+		}
+		outboxPoller = outbox.NewPoller(pollerCfg)
+	}
 	var heartbeats models.ReplicaHeartbeatRepository
 	if cfg.Replica.HeartbeatEnabled {
 		heartbeats = database.NewGORMReplicaHeartbeatRepository(replicaDB)
@@ -632,6 +722,13 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		hb := replica.NewHeartbeat(heartbeats, processID, replica.HeartbeatInterval)
 		hb.Start()
 		s.heartbeat = hb
+	}
+
+	if outboxPoller != nil {
+		outboxPoller.Start()
+		s.outboxPoller = outboxPoller
+		slog.Info("Outbox enabled; the Items events are written to outbox_events and delivered by the poller",
+			"poll_interval", cfg.Outbox.PollInterval, "retention", cfg.Outbox.Retention)
 	}
 
 	return s, router, nil
@@ -708,16 +805,20 @@ func stepBudget(ctx context.Context) time.Duration {
 //     finished requests, so a graceful stop loses no entry.
 //  3. Leader worker group: no new background work.
 //  4. In-flight work that outlives its request (inflight.Tracker).
-//  5. WebSocket hub: close the client connections; this also ends the
+//  5. Outbox poller (OUTBOX_ENABLED): stop the poll loop within
+//     outboxStopTimeout (2 s). After the HTTP server and the in-flight work
+//     (this process writes no more events) and before the hub and the
+//     database close (it reads the table and sends to the hub).
+//  6. WebSocket hub: close the client connections; this also ends the
 //     revalidation loop of the open sockets.
-//  6. Telemetry: flush the traces, metrics and logs after the services
+//  7. Telemetry: flush the traces, metrics and logs after the services
 //     stopped, so it covers the shutdown.
-//  7. Rate limiters: stop their cleanup goroutines.
-//  8. Session store (auth on): stop its cleanup goroutine, after everything
+//  8. Rate limiters: stop their cleanup goroutines.
+//  9. Session store (auth on): stop its cleanup goroutine, after everything
 //     that reads it (requests, workers, the hub revalidation).
-//  9. Replica heartbeat (REPLICA_HEARTBEAT_ENABLED): stop it and delete this
+//  10. Replica heartbeat (REPLICA_HEARTBEAT_ENABLED): stop it and delete this
 //     process's row, within heartbeatStopTimeout (2 s).
-//  10. Database: close the connection pool last.
+//  11. Database: close the connection pool last.
 //
 // With LEADER_ELECTION_ENABLED the leader step (3) also ends the election
 // and releases the lease, within the same budget (electedLeader.Close);
@@ -732,8 +833,8 @@ func stepBudget(ctx context.Context) time.Duration {
 // steps, and the diagnostics step does not shorten the HTTP drain: the leader
 // workers still get time to stop and the telemetry flush still gets a live
 // context. The worst case is auxShutdownTimeout plus five budgets (each of
-// the five steps hangs) plus heartbeatStopTimeout, 154 s with the default
-// 30 s; keep the grace period of the orchestrator above that, or
+// the five steps hangs) plus outboxStopTimeout and heartbeatStopTimeout,
+// 156 s with the default 30 s; keep the grace period of the orchestrator above that, or
 // SERVER_SHUTDOWN_TIMEOUT below a fifth of it.
 //
 // Every step runs even when an earlier step failed. shutdown returns the
@@ -790,6 +891,10 @@ func shutdown(ctx context.Context, s *services) error {
 		if err != nil {
 			errs = append(errs, fmt.Errorf("in-flight work did not finish: %w", err))
 		}
+	}
+
+	if !isNilInterface(s.outboxPoller) {
+		s.outboxPoller.Stop(outboxStopTimeout)
 	}
 
 	if s.hub != nil {

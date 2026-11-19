@@ -96,12 +96,13 @@ The session design (tokens, rotation, logout, revocation, WebSocket auth, audit)
 | Swagger UI | `ENABLE_SWAGGER=true` | `/swagger/index.html`; open even with auth on |
 | Trusted proxies | `TRUSTED_PROXIES=<ips or CIDRs>` | client IP for rate limits and audit entries |
 | Idempotency keys | `IDEMPOTENCY_ENABLED=true` (`IDEMPOTENCY_TTL`, `IDEMPOTENCY_LOCK_TIMEOUT`) | `middleware.Idempotency` on `/api/v1` (a `POST` with an `Idempotency-Key` header runs once, a repeat replays the stored response), table `idempotency_keys`, worker `idempotency-cleanup`; rules in `docs/claude/operations.md` |
+| Transactional outbox | `OUTBOX_ENABLED=true` (`OUTBOX_POLL_INTERVAL`, `OUTBOX_RETENTION`) | `models.GenericRepository` change hook (`outbox.ItemHook`), `internal/outbox` poller on every replica, `outbox-cleanup` leader worker; the Items events go through the table `outbox_events` |
 
-The WebSocket hub, the leader worker group and the in-flight tracker are always built. Which workers run depends on the modules: with auth on, `refresh-token-cleanup` (hourly) and `session-store-cleanup` (every 15 minutes); with the idempotency module on, `idempotency-cleanup` (hourly).
+The WebSocket hub, the leader worker group and the in-flight tracker are always built. Which workers run depends on the modules: with auth on, `refresh-token-cleanup` (hourly) and `session-store-cleanup` (every 15 minutes); with the idempotency module on, `idempotency-cleanup` (hourly); with the outbox on, `outbox-cleanup` (every minute). The outbox poller is not a leader worker: every process runs one.
 
 ## WebSocket
 
-`GET /ws` upgrades to a WebSocket owned by `websocket.Hub`. The Items handler sends `item.created`, `item.updated` and `item.deleted` to every client. A client may subscribe to topics (`items`, `item:<id>`, `user:<id>`, `admin:<name>`); with auth on, topics are authorised (deny by default) and the hub closes a socket when its credential is revoked or expires, and revalidates all sockets every minute. Messages are `{"type": "...", "payload": ...}`; the hub is per replica.
+`GET /ws` upgrades to a WebSocket owned by `websocket.Hub`. The Items handler sends `item.created`, `item.updated` and `item.deleted` to every client; with `OUTBOX_ENABLED=true` the repository writes them to `outbox_events` in the transaction of the change and the poller of every replica delivers them to its own hub, so a replica that did not handle the request also reaches its sockets and a crash after the commit loses nothing (see `docs/claude/operations.md`, "Outbox"). A client may subscribe to topics (`items`, `item:<id>`, `user:<id>`, `admin:<name>`); with auth on, topics are authorised (deny by default) and the hub closes a socket when its credential is revoked or expires, and revalidates all sockets every minute. Messages are `{"type": "...", "payload": ...}`; the hub is per replica.
 
 ## Shutdown
 
@@ -111,14 +112,15 @@ The WebSocket hub, the leader worker group and the in-flight tracker are always 
 2. Audit recorder drain (auth on).
 3. Leader worker group.
 4. In-flight work.
-5. WebSocket hub.
-6. Telemetry flush (OpenTelemetry; a no-op with telemetry off).
-7. Rate limiters.
-8. Session store (auth on), after everything that reads it.
-9. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): delete this process's row, within 2 s.
-10. Database pool.
+5. Outbox poller (`OUTBOX_ENABLED=true`), within 2 s, before the hub and the database close.
+6. WebSocket hub.
+7. Telemetry flush (OpenTelemetry; a no-op with telemetry off).
+8. Rate limiters.
+9. Session store (auth on), after everything that reads it.
+10. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): delete this process's row, within 2 s.
+11. Database pool.
 
-The steps 1, 2, 3, 4 and 6 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` (plus 2 s each for the diagnostics servers and the heartbeat); the orchestrator's stop grace period must be longer (Compose: `stop_grace_period: 170s`). With `LEADER_ELECTION_ENABLED=true` step 3 also releases the leader lease, unless a worker did not stop in time: then the lease is kept (renewed) until the process exits.
+The steps 1, 2, 3, 4 and 7 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` (plus 2 s each for the diagnostics servers, the outbox poller and the heartbeat); the orchestrator's stop grace period must be longer (Compose: `stop_grace_period: 170s`). With `LEADER_ELECTION_ENABLED=true` step 3 also releases the leader lease, unless a worker did not stop in time: then the lease is kept (renewed) until the process exits.
 
 ## Design Decisions
 

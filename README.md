@@ -13,6 +13,7 @@ A modern, production-ready template for full-stack web applications using Go (Gi
 - 🛠️ Development and production Docker configurations
 - 🔒 Middleware support (logging, recovery, CORS, security headers, rate limiting)
 - ♻️ Optional idempotency keys (off by default): a `POST` with an `Idempotency-Key` header runs once and a retry replays the stored response
+- 📬 Optional transactional outbox (off by default): the Items WebSocket events are committed with the change and every replica delivers them to its own sockets
 - 🔑 Optional authentication (off by default): local login with refresh sessions, API keys, OIDC single sign-on, user administration, audit log
 
 ### Frontend (React + TypeScript)
@@ -159,9 +160,10 @@ Backend:
 - `TRUSTED_PROXIES` - Proxies allowed to set the client IP (default in Compose: the frontend container, see [Behind a proxy](#behind-a-proxy))
 - `RATE_LIMIT` - API requests per minute per client IP (default: 100)
 - `LOGIN_RATE_LIMIT` - Login attempts per minute per client IP (default: 10)
-- `SERVER_SHUTDOWN_TIMEOUT` - Budget of each shutdown step (default: 30s). Compose gives the backend `stop_grace_period: 170s` (5 steps x 30s, plus 2s each for the diagnostics servers and the replica heartbeat, plus a margin); raise both together.
+- `SERVER_SHUTDOWN_TIMEOUT` - Budget of each shutdown step (default: 30s). Compose gives the backend `stop_grace_period: 170s` (5 steps x 30s, plus 2s each for the diagnostics servers, the outbox poller and the replica heartbeat, plus a margin); raise both together.
 - `AUTH_ENABLED`, `JWT_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SECURE_COOKIES`, `OIDC_*` - Optional authentication, see [Authentication](#authentication)
 - `IDEMPOTENCY_ENABLED`, `IDEMPOTENCY_TTL`, `IDEMPOTENCY_LOCK_TIMEOUT` - Optional idempotency keys for `POST` (default: off, 24h, 60s); see [docs/claude/operations.md](docs/claude/operations.md), "Idempotency keys"
+- `OUTBOX_ENABLED`, `OUTBOX_POLL_INTERVAL`, `OUTBOX_RETENTION` - Optional transactional outbox for the Items WebSocket events (default: off, 500ms, 1h); see [docs/claude/operations.md](docs/claude/operations.md), "Outbox"
 - `CORS_ALLOWED_ORIGINS` - Allowed origins (default `*`: for development only; the bundled web UI is same-origin and needs no entry)
 
 Every variable the backend reads, with its default, is in [backend/.env.example](backend/.env.example) and in [docs/claude/operations.md](docs/claude/operations.md); `make check-env-docs` keeps them in step with the code.
