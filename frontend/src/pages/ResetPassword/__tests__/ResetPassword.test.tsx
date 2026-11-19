@@ -6,7 +6,7 @@ import { AxiosError } from 'axios';
 import type { AxiosResponse } from 'axios';
 import ResetPassword from '../index';
 import { passwordResetService } from '../../../api/client';
-import { LOGIN_NOTICE_KEY, PASSWORD_RESET_CHECK_LOGIN, PASSWORD_RESET_DONE } from '../../../utils/loginNotice';
+import { LOGIN_NOTICE_KEY, RESET_CHECK_LOGIN, RESET_COMPLETED } from '../../../utils/loginNotice';
 import { reachableText } from '../../../test/mockHttp';
 
 vi.mock('../../../api/client', () => ({
@@ -136,7 +136,7 @@ describe('ResetPassword page', () => {
     await fill(PASSWORD);
     expect(await screen.findByText('at /login')).toBeInTheDocument();
     expect(confirm).toHaveBeenCalledWith(TOKEN, PASSWORD);
-    expect(sessionStorage.getItem(LOGIN_NOTICE_KEY)).toMatch(new RegExp(`^${PASSWORD_RESET_DONE}@`));
+    expect(sessionStorage.getItem(LOGIN_NOTICE_KEY)).toMatch(new RegExp(`^${RESET_COMPLETED}@`));
   });
 
   it('disables the button while the request runs', async () => {
@@ -203,7 +203,7 @@ describe('ResetPassword page', () => {
     await screen.findByLabelText(/^new password/i);
     await fill(PASSWORD);
     expect(await screen.findByText('at /login')).toBeInTheDocument();
-    expect(sessionStorage.getItem(LOGIN_NOTICE_KEY)).toMatch(new RegExp(`^${PASSWORD_RESET_CHECK_LOGIN}@`));
+    expect(sessionStorage.getItem(LOGIN_NOTICE_KEY)).toMatch(new RegExp(`^${RESET_CHECK_LOGIN}@`));
   });
 
   it('never logs the token or the password', async () => {

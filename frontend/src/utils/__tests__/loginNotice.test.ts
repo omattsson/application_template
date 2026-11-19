@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   LOGIN_NOTICE_KEY,
   OWN_ACCOUNT_CHANGED,
-  PASSWORD_RESET_CHECK_LOGIN,
-  PASSWORD_RESET_DONE,
+  RESET_CHECK_LOGIN,
+  RESET_COMPLETED,
   loginNoticeText,
   rememberLoginNotice,
   takeLoginNotice,
@@ -62,14 +62,14 @@ describe('password reset notices', () => {
     sessionStorage.clear();
   });
 
-  it.each([PASSWORD_RESET_DONE, PASSWORD_RESET_CHECK_LOGIN])('shows the known notice %s once', (key) => {
+  it.each([RESET_COMPLETED, RESET_CHECK_LOGIN])('shows the known notice %s once', (key) => {
     rememberLoginNotice(key);
     expect(takeLoginNotice()).toBe(loginNoticeText(key));
     expect(takeLoginNotice()).toBeNull();
   });
 
   it('has a text for each password reset key', () => {
-    expect(loginNoticeText(PASSWORD_RESET_DONE)).toMatch(/password was reset/i);
-    expect(loginNoticeText(PASSWORD_RESET_CHECK_LOGIN)).toMatch(/may have been changed/i);
+    expect(loginNoticeText(RESET_COMPLETED)).toMatch(/password was reset/i);
+    expect(loginNoticeText(RESET_CHECK_LOGIN)).toMatch(/may have been changed/i);
   });
 });

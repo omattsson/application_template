@@ -6,7 +6,7 @@ import { Alert, Box, Button, Link, Paper, TextField, Typography } from '@mui/mat
 import { passwordResetService } from '../../api/client';
 import LoadingState from '../../components/LoadingState';
 import { useUnsavedChanges } from '../../hooks/useUnsavedChanges';
-import { rememberLoginNotice, PASSWORD_RESET_CHECK_LOGIN, PASSWORD_RESET_DONE } from '../../utils/loginNotice';
+import { rememberLoginNotice, RESET_CHECK_LOGIN, RESET_COMPLETED } from '../../utils/loginNotice';
 import {
   PASSWORD_MISMATCH_MESSAGE,
   PASSWORD_TOO_LONG_MESSAGE,
@@ -117,7 +117,7 @@ const ResetPassword = () => {
     setSubmitting(true);
     try {
       await passwordResetService.confirmPasswordReset(token, password);
-      rememberLoginNotice(PASSWORD_RESET_DONE);
+      rememberLoginNotice(RESET_COMPLETED);
       navigate('/login', { replace: true });
     } catch (err: unknown) {
       handleFailure(err);
@@ -143,7 +143,7 @@ const ResetPassword = () => {
     }
     if (status === 500) {
       // The password was stored, but the sessions could not be ended: sign in with it.
-      rememberLoginNotice(PASSWORD_RESET_CHECK_LOGIN);
+      rememberLoginNotice(RESET_CHECK_LOGIN);
       navigate('/login', { replace: true });
       return;
     }
