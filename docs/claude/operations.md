@@ -175,6 +175,15 @@ Off by default: with the switch off no table is read or written, there is no pol
 | `OUTBOX_POLL_INTERVAL` | `500ms` | How often each replica reads the new rows. Read leniently while the module is off; with it on it must parse and be positive. |
 | `OUTBOX_RETENTION` | `1h` | How long a row is kept before the `outbox-cleanup` leader worker deletes it. Read leniently while the module is off; with it on it must parse, be at least 1 minute and at least 10 times `OUTBOX_POLL_INTERVAL`. |
 
+### Response compression
+
+On by default: the backend gzips compressible responses for clients that ask for it. Details: "Response compression" below.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `COMPRESSION_ENABLED` | `true` | Strict boolean. With `false` no middleware is mounted and every response is unchanged. |
+| `COMPRESSION_MIN_SIZE` | `1024` | The smallest response body in bytes (uncompressed) that is compressed. Read leniently while the module is off; with it on it must be a positive integer of at most 1048576 (1 MiB): the middleware holds up to that many bytes of a response back to decide. |
+
 ### Compose and Makefile variables
 
 These are read by `docker-compose.yml`, the Makefile or the scripts, not by the backend.
@@ -191,7 +200,7 @@ These are read by `docker-compose.yml`, the Makefile or the scripts, not by the 
 | `FRONTEND_PROXY_IP`, `FRONTEND_NET_SUBNET` | `172.30.80.10`, `172.30.80.0/24` | Fixed proxy address on `frontend-net` and its subnet; change both together. |
 | `VITE_API_URL` | `http://localhost:8081` | Target of the Vite dev proxy; Compose sets `http://backend:8081`. |
 
-`docker-compose.yml` also passes nine backend variables documented above, with an empty default that keeps the backend's own default (their parsers treat an empty value as unset): `LEADER_ELECTION_ENABLED` (`false`), `REPLICA_HEARTBEAT_ENABLED` (`false`), `WS_MAX_CONNECTIONS_PER_USER` (`16`), `IDEMPOTENCY_ENABLED` (`false`), `IDEMPOTENCY_TTL` (`24h`), `IDEMPOTENCY_LOCK_TIMEOUT` (`60s`), `OUTBOX_ENABLED` (`false`), `OUTBOX_POLL_INTERVAL` (`500ms`) and `OUTBOX_RETENTION` (`1h`). It does not pass the `PPROF_*` variables: profiling needs an override file of your own (see "Profiling (pprof)"), and `docker-compose.otel.yml` sets the telemetry and metrics variables. The backend healthcheck (`/health/live`, every 30 s) has `start_period: 120s`, so a cold development compile (`go run` with an empty module cache) is not counted as failing; the frontend waits for it (`depends_on: service_healthy`).
+`docker-compose.yml` also passes eleven backend variables documented above, with an empty default that keeps the backend's own default (their parsers treat an empty value as unset): `LEADER_ELECTION_ENABLED` (`false`), `REPLICA_HEARTBEAT_ENABLED` (`false`), `WS_MAX_CONNECTIONS_PER_USER` (`16`), `IDEMPOTENCY_ENABLED` (`false`), `IDEMPOTENCY_TTL` (`24h`), `IDEMPOTENCY_LOCK_TIMEOUT` (`60s`), `OUTBOX_ENABLED` (`false`), `OUTBOX_POLL_INTERVAL` (`500ms`), `OUTBOX_RETENTION` (`1h`), `COMPRESSION_ENABLED` (`true`) and `COMPRESSION_MIN_SIZE` (`1024`). It does not pass the `PPROF_*` variables: profiling needs an override file of your own (see "Profiling (pprof)"), and `docker-compose.otel.yml` sets the telemetry and metrics variables. The backend healthcheck (`/health/live`, every 30 s) has `start_period: 120s`, so a cold development compile (`go run` with an empty module cache) is not counted as failing; the frontend waits for it (`depends_on: service_healthy`).
 
 `docker-compose.yml` also passes `APP_ENV`, `PORT`, `API_VERSION`, `API_PREFIX`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS` and `CORS_MAX_AGE` to the backend. The backend reads none of them (it reads `GO_ENV`, `SERVER_PORT` and `CORS_ALLOWED_ORIGINS`), so they have no effect. Set the listening port with `SERVER_PORT`, never `PORT`. The development frontend does not read a `PORT` either: the Vite server is fixed to port 3000.
 
@@ -328,6 +337,38 @@ With `OUTBOX_ENABLED=true` the Items events (`item.created`, `item.updated`, `it
 **Metrics** (only with `METRICS_ENABLED` or `OTEL_ENABLED`; with both off nothing is registered and the poller makes no statistics query; no instrument has a label): `outbox.events.delivered` (counter, events sent to this replica's hub), `outbox.delivery.age` (gauge, seconds between the commit of the newest delivered event and its delivery, by the database clock; it keeps the last value while the outbox is idle) and `outbox.cursor.lag` (gauge, ids between the cursor and the table maximum, measured with one `MAX(id)` query at the end of every poll, also a failed one; a poll whose query failed keeps the last value).
 
 **Start check.** `OUTBOX_ENABLED=true` with a repository that does not write the events (no change hook) stops the start: a silent start would drop every event.
+
+## Response compression
+
+`middleware.Compression` (standard library `compress/gzip`, level 5, writers pooled) gzips a response when the client sends `Accept-Encoding` with `gzip` and a q-value above 0 (`gzip;q=0` refuses it; `*` does not count as gzip). It is mounted by `routes.Setup` right after `Recovery` and before `SecurityHeaders`, CORS and the handlers, only with `COMPRESSION_ENABLED=true`. Nothing else changes with it off.
+
+A response is compressed only when all of these hold:
+
+- the method is not `HEAD`, the status allows a body (not 1xx, 204, 304) and is not 206 (no `Content-Range`);
+- the handler set no `Content-Encoding` and no `Cache-Control: no-transform`;
+- the content type is on the allowlist: `text/*`, `application/json` and `+json`, `application/xml` and `+xml`, `application/javascript`, `image/svg+xml` (so images, archives and other binary formats are never touched). A response without a `Content-Type` is sniffed from its first bytes (`http.DetectContentType`) and compressed only when the sniffed type is on the list;
+- the body reaches `COMPRESSION_MIN_SIZE`: the declared `Content-Length` when there is one, otherwise the bytes written (held back until the size is known). A smaller body is sent as it was, with its length. A response that is flushed (a stream) starts compressing at the first flush.
+
+A compressed response has `Content-Encoding: gzip`, no `Content-Length` and a weak `ETag` (`W/`). `Vary: Accept-Encoding` is added to every response of a compressible type, compressed or not, and to a `HEAD` answer, so a cache never serves one variant for the other. The large JSON answers (Items and user lists, `/swagger/doc.json`) are the ones that benefit.
+
+**What it does not touch.**
+
+- `/ws`: a request for the path `/ws` or with `Upgrade: websocket` is never wrapped, so the upgrade (`Hijack`) works as before. The hub writes its own frames.
+- Request bodies: they are never decompressed. A request with `Content-Encoding: gzip` reaches the handler as it is (and a JSON bind fails with 400). `MaxBodySize` (1 MB) and the 413 answers are unchanged.
+- The metrics and pprof servers (own ports).
+
+**Interplay.** After a panic in the chain before the compressed stream started, the writer is put back and `Recovery` answers a plain 500 `Internal server error` (only this case gives a clean 500). After the stream started the status (usually 200) and the headers are already sent: the stream is left without its gzip trailer, so the client's gzip reader fails with an unexpected EOF and cannot take the cut response for a complete one, and the 500 body is dropped (it would be taken for gzip data). `Logger` and the metrics, outside, record the status that was already sent for such a request (not 500), so the only trace of the panic is the Error log of `Recovery`. For any other request they see the real status. The audit recorder and the idempotency module sit inside: they see the uncompressed bytes, so the stored response of an `Idempotency-Key` is the plain one and a replay is compressed per the `Accept-Encoding` of the replay request.
+
+**The bundled nginx does not compress.** `frontend/nginx.conf` has no `gzip` directive and the stock `nginxinc/nginx-unprivileged:alpine` image has it commented out, so neither `/api` nor the SPA files are compressed by the proxy. The backend compresses the API answers; nginx passes them on (a `Content-Encoding: gzip` answer from the backend is proxied as it is). Compressing the static files of the SPA is a separate change in `frontend/nginx.conf`. A proxy of your own that also compresses must not compress an answer that already has a `Content-Encoding`.
+
+**BREACH.** Compressing a response that mixes a secret with text an attacker can choose can leak the secret through the compressed size. No response of this template is exploitable this way:
+
+- The login, refresh and token answers have a fixed shape and are under the 1024-byte default, so they are not compressed. That argument holds for the default only: with `COMPRESSION_MIN_SIZE=1` they would be compressed.
+- `CreateAPIKeyResponse` echoes the `name` that the caller chose next to `raw_key`. It is not exploitable: the route needs an `Authorization` header, which a page of another site cannot make the browser send, so an attacker cannot force requests with chosen names under the victim's credentials. `/api-keys` and `/auth/*` are also on the idempotency skip list, so the secret is never stored or replayed.
+
+Before you add an endpoint that echoes request input next to a secret (a CSRF token, an access token), keep it under the minimum or turn the module off.
+
+**Cost.** Each response of a compressible type that reaches the minimum costs CPU. The writers are pooled (about 1 MiB of state each), and a body under `COMPRESSION_MIN_SIZE` is not compressed. Raise the minimum or set `COMPRESSION_ENABLED=false` when the backend is CPU bound and a proxy in front compresses instead.
 
 ## Idempotency keys
 

@@ -73,6 +73,9 @@ type Config struct {
 	Idempotency IdempotencyConfig
 	// Outbox holds the settings of the optional outbox module (OUTBOX_*).
 	Outbox OutboxConfig
+	// Compression holds the settings of the response compression
+	// (COMPRESSION_*).
+	Compression CompressionConfig
 	// LogLevel is LOG_LEVEL parsed to a slog level; main applies it to the
 	// default slog logger. An invalid value makes LoadConfig fail.
 	LogLevel slog.Level
@@ -448,6 +451,13 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// With the module off its minimum size is not used.
+	if c.Compression.Enabled {
+		if err := c.Compression.Validate(); err != nil {
+			return fmt.Errorf("compression config: %w", err)
+		}
+	}
+
 	if c.Outbox.Enabled {
 		if err := c.Outbox.Validate(); err != nil {
 			return fmt.Errorf("outbox config: %w", err)
@@ -671,6 +681,9 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	if cfg.Outbox, err = loadOutboxConfig(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	if cfg.Compression, err = loadCompressionConfig(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 

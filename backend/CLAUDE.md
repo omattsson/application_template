@@ -88,6 +88,7 @@ Key groups:
 - `CORS_ALLOWED_ORIGINS` (default `*`, development only). It also gates the WebSocket `Origin` header.
 - `LEADER_ELECTION_ENABLED` and `REPLICA_HEARTBEAT_ENABLED` (both default false, strict booleans). The lease timing is fixed in code (`leader.DefaultLeaseConfig`).
 - `IDEMPOTENCY_ENABLED` (default false, strict boolean), `IDEMPOTENCY_TTL` (default 24h) and `IDEMPOTENCY_LOCK_TIMEOUT` (default 60s): the durations are read leniently while the module is off and must be positive with it on (`config/idempotency.go`).
+- `COMPRESSION_ENABLED` (default true, strict boolean) and `COMPRESSION_MIN_SIZE` (default 1024): the size is read leniently while the module is off and must be a positive integer of at most 1048576 with it on (`config/compression.go`).
 - `OUTBOX_ENABLED` (default false, strict), `OUTBOX_POLL_INTERVAL` (default 500ms), `OUTBOX_RETENTION` (default 1h). The durations are read leniently while the module is off; with it on they must be positive and the retention at least 1m and 10 times the poll interval (`config.OutboxConfig.Validate`).
 
 ## Migrations
@@ -105,8 +106,9 @@ Key groups:
 
 ## Middleware Order
 
-`routes.Setup()` applies this order: RequestID, RedactWSToken, Logger, Recovery, SecurityHeaders, CORS, MaxBodySize (1 MB).
+`routes.Setup()` applies this order: RequestID, RedactWSToken, Logger, Recovery, Compression, SecurityHeaders, CORS, MaxBodySize (1 MB).
 
+- `middleware.Compression` (`COMPRESSION_ENABLED`, default true; `COMPRESSION_MIN_SIZE`, default 1024, at most 1 MiB) is mounted only when enabled, right after `Recovery`. It gzips a response for a client that sends `Accept-Encoding: gzip` when the type is on the allowlist, the body reaches the minimum and nothing forbids it (HEAD, 1xx/204/304/206, an existing `Content-Encoding`, `no-transform`); it adds `Vary: Accept-Encoding` to every compressible response. It skips `/ws` (by path and by `Upgrade`) and never decompresses a request body. Middleware inside it (idempotency, audit) sees the uncompressed bytes; a new module that writes a response goes after it, never before. Rules: `docs/claude/operations.md` ("Response compression").
 - The `/api/v1` group adds the API rate limiter.
 - With auth on, the authenticated group adds `CombinedAuth` (JWT and API key) and the audit recorder.
 - With `IDEMPOTENCY_ENABLED=true` `middleware.Idempotency` follows them (with auth off it sits right after the rate limiter): a `POST` with an `Idempotency-Key` runs once and a repeat replays the stored response. MySQL arbitrates (`models.IdempotencyRepository`, one atomic statement per decision); the store of the response and the release use `ctxutil.Detach`. `/auth/*` and `/api-keys` are on its skip list (`idempotencySkipPrefixes`): never add a route whose response holds a secret. A new `/api/v1` POST needs the `Idempotency-Key` header in its Swagger annotations (`@Param Idempotency-Key header string false`). With the module off nothing is mounted and CORS is unchanged.

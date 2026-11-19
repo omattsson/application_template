@@ -164,6 +164,7 @@ Backend:
 - `AUTH_ENABLED`, `JWT_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SECURE_COOKIES`, `OIDC_*` - Optional authentication, see [Authentication](#authentication)
 - `IDEMPOTENCY_ENABLED`, `IDEMPOTENCY_TTL`, `IDEMPOTENCY_LOCK_TIMEOUT` - Optional idempotency keys for `POST` (default: off, 24h, 60s); see [docs/claude/operations.md](docs/claude/operations.md), "Idempotency keys"
 - `OUTBOX_ENABLED`, `OUTBOX_POLL_INTERVAL`, `OUTBOX_RETENTION` - Optional transactional outbox for the Items WebSocket events (default: off, 500ms, 1h); see [docs/claude/operations.md](docs/claude/operations.md), "Outbox"
+- `COMPRESSION_ENABLED`, `COMPRESSION_MIN_SIZE` - Gzip of compressible responses for clients that send `Accept-Encoding: gzip` (default: on, 1024 bytes); see [docs/claude/operations.md](docs/claude/operations.md), "Response compression"
 - `CORS_ALLOWED_ORIGINS` - Allowed origins (default `*`: for development only; the bundled web UI is same-origin and needs no entry)
 
 Every variable the backend reads, with its default, is in [backend/.env.example](backend/.env.example) and in [docs/claude/operations.md](docs/claude/operations.md); `make check-env-docs` keeps them in step with the code.

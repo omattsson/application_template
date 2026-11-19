@@ -33,7 +33,7 @@ backend/
 ├── internal/
 │   ├── api/
 │   │   ├── routes/routes.go   # Setup(): every route, middleware order, auth wiring, rate limiters
-│   │   ├── middleware/        # RequestID, RedactWSToken, Logger, Recovery, SecurityHeaders, CORS, MaxBodySize,
+│   │   ├── middleware/        # RequestID, RedactWSToken, Logger, Recovery, Compression, SecurityHeaders, CORS, MaxBodySize,
 │   │   │                      # JWT + API key auth (CombinedAuth), roles, audit recorder, idempotency.go, /ws token helpers,
 │   │   │                      # HTTPMetrics, SpanEnrichUser, auth_metrics.go (auth outcome counters)
 │   │   └── handlers/          # items.go (reference CRUD), auth*.go, oidc.go, users.go, api_keys.go,

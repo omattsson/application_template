@@ -23,7 +23,7 @@ How the template fits together. Items is the example entity. For commands and ru
 ## Request Flow
 
 1. The proxy forwards the request to `:8081` with `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Real-IP`.
-2. Gin middleware, in order: `RequestID`, `RedactWSToken`, `Logger`, `Recovery`, `SecurityHeaders`, `CORS`, `MaxBodySize` (1 MB).
+2. Gin middleware, in order: `RequestID`, `RedactWSToken`, `Logger`, `Recovery`, `Compression` (gzip for clients that ask, `COMPRESSION_ENABLED`, default on; never `/ws`), `SecurityHeaders`, `CORS`, `MaxBodySize` (1 MB).
 3. `/api/v1` adds the per-IP rate limiter. With auth on, the protected routes add `CombinedAuth` (bearer JWT or `X-API-Key`; revocation checks that fail closed) and the audit recorder. With `IDEMPOTENCY_ENABLED=true` the idempotency middleware follows (after the authentication, so the user is the scope; with auth off, after the rate limiter).
 4. A handler (`internal/api/handlers`) binds and validates the input and calls a repository interface from `internal/models`.
 5. The repository (`internal/models.GenericRepository` for Items, `internal/database` for the rest) talks to MySQL through GORM. Errors are wrapped as `*dberrors.DatabaseError` with a sentinel (`ErrNotFound`, `ErrDuplicateKey`, `ErrValidation`).
@@ -95,6 +95,7 @@ The session design (tokens, rotation, logout, revocation, WebSocket auth, audit)
 | Session store | `SESSION_STORE=mysql` (default) or `memory` (one replica) | `internal/sessionstore` |
 | Swagger UI | `ENABLE_SWAGGER=true` | `/swagger/index.html`; open even with auth on |
 | Trusted proxies | `TRUSTED_PROXIES=<ips or CIDRs>` | client IP for rate limits and audit entries |
+| Response compression | `COMPRESSION_ENABLED` (default `true`), `COMPRESSION_MIN_SIZE` (default 1024) | `middleware.Compression` after `Recovery` (gzip of compressible responses for a client that sends `Accept-Encoding: gzip`, `Vary: Accept-Encoding`, never `/ws`); rules in `docs/claude/operations.md` |
 | Idempotency keys | `IDEMPOTENCY_ENABLED=true` (`IDEMPOTENCY_TTL`, `IDEMPOTENCY_LOCK_TIMEOUT`) | `middleware.Idempotency` on `/api/v1` (a `POST` with an `Idempotency-Key` header runs once, a repeat replays the stored response), table `idempotency_keys`, worker `idempotency-cleanup`; rules in `docs/claude/operations.md` |
 | Transactional outbox | `OUTBOX_ENABLED=true` (`OUTBOX_POLL_INTERVAL`, `OUTBOX_RETENTION`) | `models.GenericRepository` change hook (`outbox.ItemHook`), `internal/outbox` poller on every replica, `outbox-cleanup` leader worker; the Items events go through the table `outbox_events` |
 
