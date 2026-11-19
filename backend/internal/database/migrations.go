@@ -90,6 +90,7 @@ func registerMigrations(migrator *schema.Migrator) {
 	migrator.AddMigration(addSortIndexesMigration())
 	migrator.AddMigration(createIdempotencyKeysMigration())
 	migrator.AddMigration(createOutboxEventsMigration())
+	migrator.AddMigration(createPasswordResetTokensMigration())
 }
 
 // legacyUser is the users table of migrations 20231201000001 and
@@ -568,6 +569,42 @@ func createOutboxEventsMigration() schema.Migration {
 		},
 		Down: func(tx *gorm.DB) error {
 			return dropTables(tx, "outbox_events")
+		},
+	}
+}
+
+// passwordResetTokenV1 is password_reset_tokens as 20261119000001 creates it, a
+// frozen copy of models.PasswordResetToken: a model change needs a new
+// migration (TestPasswordResetTokensMatchModel fails without one).
+type passwordResetTokenV1 struct {
+	ExpiresAt time.Time  `gorm:"column:expires_at;type:datetime(3);not null;index:idx_password_reset_tokens_expires_at"`
+	CreatedAt time.Time  `gorm:"column:created_at;type:datetime(3);not null"`
+	UsedAt    *time.Time `gorm:"column:used_at;type:datetime(3)"`
+	ID        string     `gorm:"column:id;primaryKey;size:36"`
+	UserID    string     `gorm:"column:user_id;size:36;not null;index:idx_password_reset_tokens_user_id"`
+	TokenHash string     `gorm:"column:token_hash;size:64;not null;uniqueIndex:idx_password_reset_tokens_token_hash"`
+}
+
+func (passwordResetTokenV1) TableName() string { return "password_reset_tokens" }
+
+// createPasswordResetTokensMigration creates password_reset_tokens, the table
+// of the optional password reset module (PASSWORD_RESET_ENABLED): one row per
+// issued token, with only the SHA-256 of the token. The unique index on
+// token_hash serves the lookup of a confirm, the index on user_id the
+// replacement of a user's earlier tokens, and the index on expires_at the
+// janitor. The table exists whether or not the module is on, so the switch
+// never needs a migration; nothing reads it while the module is off. Both
+// directions are idempotent.
+func createPasswordResetTokensMigration() schema.Migration {
+	return schema.Migration{
+		Version:     "20261119000001",
+		Name:        "create_password_reset_tokens",
+		Description: "Create password_reset_tokens for the optional password reset module",
+		Up: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&passwordResetTokenV1{})
+		},
+		Down: func(tx *gorm.DB) error {
+			return dropTables(tx, "password_reset_tokens")
 		},
 	}
 }

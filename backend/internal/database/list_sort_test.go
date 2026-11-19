@@ -298,6 +298,7 @@ func TestAddSortIndexesMigrationRollsBack(t *testing.T) {
 	m := schema.NewMigrator(db)
 	registerMigrations(m)
 
+	require.NoError(t, m.MigrateDown(), "roll back the password reset tokens")
 	require.NoError(t, m.MigrateDown(), "roll back the outbox events")
 	require.NoError(t, m.MigrateDown(), "roll back the idempotency keys")
 	require.NoError(t, m.MigrateDown(), "roll back the sort indexes")
@@ -308,7 +309,7 @@ func TestAddSortIndexesMigrationRollsBack(t *testing.T) {
 	require.NoError(t, m.MigrateUp())
 	assert.True(t, db.Migrator().HasIndex("items", "idx_items_price"))
 	assert.True(t, db.Migrator().HasIndex("users", "idx_users_email"))
-	assert.Len(t, appliedVersions(t, db), 9)
+	assert.Len(t, appliedVersions(t, db), 10)
 }
 
 // Every whitelisted sort column has an index of its own on a migrated

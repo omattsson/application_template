@@ -15,6 +15,7 @@ export function uiConfigOf(overrides: Partial<UIConfig> = {}): UIConfig {
     auth_enabled: false,
     oidc_enabled: false,
     local_auth_enabled: false,
+    password_reset_enabled: false,
     ...overrides,
   };
 }

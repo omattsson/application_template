@@ -1,0 +1,15 @@
+# Used only by scripts/e2e.sh (make test-e2e-auth), together with
+# docker-compose.yml and docker-compose.mail.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mail.yml \
+#     -f docker-compose.mail-e2e.yml up -d mailpit
+#
+# The e2e backend runs natively on the host, not in Compose, so it reaches
+# Mailpit over the host: this override also publishes the SMTP port, on
+# 127.0.0.1 only. DEVELOPMENT AND TEST ONLY: Mailpit accepts every mail
+# without authentication or TLS. `make dev-mail` and `make prod*` never read
+# this file.
+services:
+  mailpit:
+    ports:
+      - "127.0.0.1:${E2E_MAILPIT_SMTP_PORT:-11025}:1025"   # SMTP (loopback only)

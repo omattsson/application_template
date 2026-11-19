@@ -125,6 +125,16 @@ func TestUIConfigFromConfig(t *testing.T) {
 		{name: "oidc and local", cfg: config.Config{App: config.AppConfig{Title: "T"}, Auth: config.AuthConfig{Enabled: true}, OIDC: config.OIDCConfig{Enabled: true, LocalAuth: true}},
 			want: UIConfigResponse{Title: "T", AuthEnabled: true, OIDCEnabled: true, LocalAuthEnabled: true}},
 		{name: "empty title", cfg: config.Config{}, want: UIConfigResponse{Title: config.DefaultAppTitle}},
+		{name: "password reset on", cfg: config.Config{App: config.AppConfig{Title: "T"}, Auth: config.AuthConfig{Enabled: true}, PasswordReset: config.PasswordResetConfig{Enabled: true}},
+			want: UIConfigResponse{Title: "T", AuthEnabled: true, LocalAuthEnabled: true, PasswordResetEnabled: true}},
+		{name: "password reset on with the password form", cfg: config.Config{App: config.AppConfig{Title: "T"}, Auth: config.AuthConfig{Enabled: true}, OIDC: config.OIDCConfig{Enabled: true, LocalAuth: true}, PasswordReset: config.PasswordResetConfig{Enabled: true}},
+			want: UIConfigResponse{Title: "T", AuthEnabled: true, OIDCEnabled: true, LocalAuthEnabled: true, PasswordResetEnabled: true}},
+		{name: "password reset on but the password form is hidden", cfg: config.Config{App: config.AppConfig{Title: "T"}, Auth: config.AuthConfig{Enabled: true}, OIDC: config.OIDCConfig{Enabled: true}, PasswordReset: config.PasswordResetConfig{Enabled: true}},
+			want: UIConfigResponse{Title: "T", AuthEnabled: true, OIDCEnabled: true}},
+		{name: "password reset on but auth off", cfg: config.Config{App: config.AppConfig{Title: "T"}, PasswordReset: config.PasswordResetConfig{Enabled: true}},
+			want: UIConfigResponse{Title: "T"}},
+		{name: "password reset off", cfg: config.Config{App: config.AppConfig{Title: "T"}, Auth: config.AuthConfig{Enabled: true}, PasswordReset: config.PasswordResetConfig{Enabled: false}},
+			want: UIConfigResponse{Title: "T", AuthEnabled: true, LocalAuthEnabled: true}},
 	}
 
 	for _, tt := range tests {

@@ -10,6 +10,10 @@
  * from the URL is ever shown.
  */
 export const OWN_ACCOUNT_CHANGED = 'own-account-changed';
+/** The password was reset from the mail link. */
+export const RESET_COMPLETED = 'reset-completed';
+/** The reset stored the password, but the sessions could not be ended: sign in, or ask again. */
+export const RESET_CHECK_LOGIN = 'reset-check-login';
 
 /** sessionStorage key of the pending notice. */
 export const LOGIN_NOTICE_KEY = 'auth-login-notice';
@@ -20,6 +24,9 @@ const MAX_NOTICE_AGE_MS = 60_000;
 const NOTICES: Readonly<Record<string, string>> = {
   [OWN_ACCOUNT_CHANGED]:
     'Your session ended because your own account was changed (role, status or deletion). Sign in again if you still have access.',
+  [RESET_COMPLETED]: 'Your password was reset. Sign in with the new password.',
+  [RESET_CHECK_LOGIN]:
+    'Your password may have been changed. Sign in with the new password. If that does not work, request a new reset link.',
 };
 
 /** The text of a known notice key, or null. */

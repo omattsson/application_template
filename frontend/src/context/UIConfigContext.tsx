@@ -11,6 +11,8 @@ export interface UIConfig {
   oidc_enabled: boolean;
   /** Show the username and password form. */
   local_auth_enabled: boolean;
+  /** PASSWORD_RESET_ENABLED with the password form shown: offer "Forgot password?" and the reset pages. */
+  password_reset_enabled: boolean;
 }
 
 /** Used when the UI config cannot be read: the app as without auth. */
@@ -19,6 +21,7 @@ export const FALLBACK_UI_CONFIG: UIConfig = {
   auth_enabled: false,
   oidc_enabled: false,
   local_auth_enabled: false,
+  password_reset_enabled: false,
 };
 
 interface UIConfigContextValue {

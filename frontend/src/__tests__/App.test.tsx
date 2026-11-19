@@ -25,6 +25,7 @@ vi.mock('../api/client', () => ({
       auth_enabled: false,
       oidc_enabled: false,
       local_auth_enabled: false,
+      password_reset_enabled: false,
     }),
   },
   authService: { login: vi.fn(), logout: vi.fn() },

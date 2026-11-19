@@ -974,6 +974,152 @@
                 }
             }
         },
+        "/api/v1/auth/password-reset": {
+            "post": {
+                "description": "Sends a mail with a single-use reset link to the local account with this username, when the account exists, is enabled, has an email address, is not a service account (the bootstrap admin) and is not an SSO account. Public. Only available when PASSWORD_RESET_ENABLED=true (otherwise 404). The answer is always 202 with the same body, whether or not the account exists or got a mail (an unknown, ineligible, throttled or mailed account, and a mail failure, cannot be told apart by the status, the body, the headers or the time): the lookup and the send run after the answer. At most one mail per account in PASSWORD_RESET_MIN_INTERVAL; a request in that time sends nothing. The link is PASSWORD_RESET_URL + /reset-password#token=... and the token is valid for PASSWORD_RESET_TOKEN_TTL. A request that asks again replaces the unused earlier token. Unknown fields are refused. It has its own LOGIN_RATE_LIMIT budget per client IP. No cookie is set or read.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Request a password reset mail",
+                "parameters": [
+                    {
+                        "description": "The username of the account",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PasswordResetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PasswordResetAcceptedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "No username, a username that cannot exist, or an invalid body",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "The password reset is not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/password-reset/confirm": {
+            "post": {
+                "description": "Sets a new password with the token from the mail. Public. Only available when PASSWORD_RESET_ENABLED=true (otherwise 404). The password follows the password rules (at least 8 characters, at most 72 bytes) and is checked first: a bad password answers 400 and does not use up the token. Then the token is consumed atomically (single use: of two requests with the same token exactly one succeeds) and the new password is stored. A token that is malformed, unknown, used or expired, or of an account that was disabled, deleted, turned into a service account or lost its email address, answers one generic 400 \"Invalid or expired token\". On success (204, no body) every session of the user ends the way an admin password reset ends it: the refresh tokens are revoked, every access token issued before is rejected (user block), the open WebSockets are closed and the failed-login lock of the account is cleared; the account can sign in with the new password at once, also when it was locked. API keys are kept: delete them separately when the account may have been exposed. The audit log gets an entry with the action password_reset (actor and entity: the account). When the password was stored but a revocation step failed, the answer is 500, the new password stands and the entry has revocation_failed. Unknown fields are refused. It has its own LOGIN_RATE_LIMIT budget per client IP. No cookie is set or read.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Set a new password with a reset token",
+                "parameters": [
+                    {
+                        "description": "The token and the new password",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PasswordResetConfirmRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "The password was changed"
+                    },
+                    "400": {
+                        "description": "Invalid or expired token, or a password that breaks the rules (the token is not used up)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "The password reset is not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/auth/refresh": {
             "post": {
                 "description": "Issues a new access token for the session of the refresh token cookie and rotates the refresh token (the old one is consumed, a new cookie is set). The request needs the X-Requested-With header (any value) and must not be cross-site; otherwise 403. A session ends SESSION_MAX_LIFETIME after login and SESSION_IDLE_TIMEOUT after its last login or refresh; rotation never extends it, and the access token never outlives it. A token rotated less than REFRESH_REUSE_GRACE ago (two tabs refreshing at once) gets one more access token, once, without a new cookie. Any other reuse of a consumed token revokes the session and blocks its access tokens. A session that started before a user block (logout-all, a role change, disabling or deleting the user) is refused and revoked even when its refresh token was still active. The refresh cookie is named __Host-refresh_token unless SECURE_COOKIES=false (then refresh_token) and has Path /. Every refusal answers the same 401 and deletes the cookie.",
@@ -1667,7 +1813,7 @@
         },
         "/api/v1/ui-config": {
             "get": {
-                "description": "Returns the display values of the web UI: the product title (APP_TITLE), whether authentication is enabled (AUTH_ENABLED), whether the single sign-on login is offered (oidc_enabled: AUTH_ENABLED and OIDC_ENABLED) and whether the password form is shown (local_auth_enabled: AUTH_ENABLED, and OIDC off or OIDC_LOCAL_AUTH). Public in both auth modes: no authentication, so the login page can use it. Cached for 5 minutes.",
+                "description": "Returns the display values of the web UI: the product title (APP_TITLE), whether authentication is enabled (AUTH_ENABLED), whether the single sign-on login is offered (oidc_enabled: AUTH_ENABLED and OIDC_ENABLED) and whether the password form is shown (local_auth_enabled: AUTH_ENABLED, and OIDC off or OIDC_LOCAL_AUTH) and whether the web UI offers the password reset by mail (password_reset_enabled: PASSWORD_RESET_ENABLED with the password form shown; false while the two routes do not exist). Public in both auth modes: no authentication, so the login page can use it. Cached for 5 minutes.",
                 "produces": [
                     "application/json"
                 ],
@@ -2026,7 +2172,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Changes the display name, the email and/or the password of a user. Admin only, with a login session. Only these fields are accepted; any other field (role, disabled, username, ...) is refused with 400, because role and disabled have endpoints of their own that enforce the last-admin rule and end the user's sessions. A password can be set only for a local user (400 otherwise); setting it ends every session of the user (access tokens issued before are rejected, refresh tokens are revoked, WebSockets are closed) and keeps the API keys. The display name and email of an SSO user are overwritten by the identity provider at the next login. The response never holds a password or hash.",
+                "description": "Changes the display name, the email and/or the password of a user. Admin only, with a login session. Only these fields are accepted; any other field (role, disabled, username, ...) is refused with 400, because role and disabled have endpoints of their own that enforce the last-admin rule and end the user's sessions. A password can be set only for a local user (400 otherwise); setting it ends every session of the user (access tokens issued before are rejected, refresh tokens are revoked, WebSockets are closed) and keeps the API keys. The display name and email of an SSO user are overwritten by the identity provider at the next login. The response never holds a password or hash. With the password reset module on, a changed email address (or a new password) also deletes the user's unused reset tokens.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2227,7 +2373,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Disables (disabled=true) or enables (disabled=false) a user. Admin only, with a login session; the caller must still be an enabled admin in the database (403). The last enabled admin cannot be disabled (409); an admin may disable themselves when another enabled admin exists. Disabling ends every session of the user: access tokens issued before it are rejected (user block), refresh tokens are revoked and the WebSockets are closed. The user's API keys are kept but stop authenticating while the owner is disabled. Enabling writes no new block: tokens issued before the disable stay rejected, and a login after the enable works. A request that does not change the state is a no-op (changed=false, no audit entry; a repeated disable still ends the sessions). Unknown request fields are refused.",
+                "description": "Disables (disabled=true) or enables (disabled=false) a user. Admin only, with a login session; the caller must still be an enabled admin in the database (403). The last enabled admin cannot be disabled (409); an admin may disable themselves when another enabled admin exists. Disabling ends every session of the user: access tokens issued before it are rejected (user block), refresh tokens are revoked and the WebSockets are closed. The user's API keys are kept but stop authenticating while the owner is disabled. Enabling writes no new block: tokens issued before the disable stay rejected, and a login after the enable works. A request that does not change the state is a no-op (changed=false, no audit entry; a repeated disable still ends the sessions). Unknown request fields are refused. With the password reset module on, disabling also deletes the user's unused reset tokens.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2772,6 +2918,38 @@
                 }
             }
         },
+        "handlers.PasswordResetAcceptedResponse": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "example": "If the account exists and can receive mail, a reset link has been sent."
+                }
+            }
+        },
+        "handlers.PasswordResetConfirmRequest": {
+            "type": "object",
+            "properties": {
+                "new_password": {
+                    "description": "NewPassword is the new password: at least 8 characters, at most 72 bytes.",
+                    "type": "string"
+                },
+                "token": {
+                    "description": "Token is the token from the link of the mail (the fragment of the URL).",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.PasswordResetRequest": {
+            "type": "object",
+            "properties": {
+                "username": {
+                    "description": "Username is the name of the local account that forgot its password.",
+                    "type": "string",
+                    "example": "alice"
+                }
+            }
+        },
         "handlers.RefreshResponse": {
             "type": "object",
             "properties": {
@@ -2843,6 +3021,11 @@
                 },
                 "oidc_enabled": {
                     "description": "OIDCEnabled tells the UI to offer the single sign-on button\n(AUTH_ENABLED and OIDC_ENABLED).",
+                    "type": "boolean",
+                    "example": false
+                },
+                "password_reset_enabled": {
+                    "description": "PasswordResetEnabled tells the UI to offer \"Forgot password?\" and the\npages behind it: PASSWORD_RESET_ENABLED, with auth on and the password\nform shown (local_auth_enabled). It is false whenever the two routes do\nnot exist (404).",
                     "type": "boolean",
                     "example": false
                 },

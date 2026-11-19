@@ -11,7 +11,13 @@ type HealthChecker struct {
 	isReady      bool
 	startTime    time.Time
 	dependencies map[string]HealthCheck
+	// informational names the checks that report but never gate readiness.
+	informational map[string]bool
 }
+
+// StatusDegraded is the status of a failing informational check: the
+// dependency is impaired, the service is still ready.
+const StatusDegraded = "DEGRADED"
 
 // HealthCheck is a function that checks a dependency's health.
 // It receives a context for cancellation and timeout support.
@@ -31,16 +37,31 @@ type CheckStatus struct {
 // New creates a new HealthChecker instance
 func New() *HealthChecker {
 	return &HealthChecker{
-		startTime:    time.Now(),
-		dependencies: make(map[string]HealthCheck),
-		isReady:      false,
+		startTime:     time.Now(),
+		dependencies:  make(map[string]HealthCheck),
+		informational: make(map[string]bool),
+		isReady:       false,
 	}
 }
 
+// AddCheck registers a gating check: a failure turns readiness DOWN (503).
 func (h *HealthChecker) AddCheck(name string, check HealthCheck) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.dependencies[name] = check
+	delete(h.informational, name)
+}
+
+// AddInformationalCheck registers a check that never gates readiness: a
+// failure shows in the checks with the status DEGRADED and leaves the overall
+// status and the HTTP status unchanged. Use it for a dependency that only some
+// features need (the mail server), so that its outage does not take every
+// replica out of a load balancer.
+func (h *HealthChecker) AddInformationalCheck(name string, check HealthCheck) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.dependencies[name] = check
+	h.informational[name] = true
 }
 
 func (h *HealthChecker) SetReady(ready bool) {
@@ -69,6 +90,10 @@ func (h *HealthChecker) CheckReadiness(ctx context.Context) HealthStatus {
 	for k, v := range h.dependencies {
 		deps[k] = v
 	}
+	info := make(map[string]bool, len(h.informational))
+	for k, v := range h.informational {
+		info[k] = v
+	}
 	h.mu.RUnlock()
 
 	if !ready {
@@ -87,6 +112,11 @@ func (h *HealthChecker) CheckReadiness(ctx context.Context) HealthStatus {
 
 	for name, check := range deps {
 		if err := check(ctx); err != nil {
+			if info[name] {
+				status.Checks[name] = CheckStatus{Status: StatusDegraded, Message: err.Error()}
+				continue
+			}
+
 			status.Status = "DOWN"
 			status.Checks[name] = CheckStatus{
 				Status:  "DOWN",

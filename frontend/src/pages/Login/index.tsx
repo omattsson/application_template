@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Navigate, useSearchParams } from 'react-router-dom';
-import { Alert, Box, Button, Divider, Paper, TextField, Typography } from '@mui/material';
+import { Link as RouterLink, Navigate, useSearchParams } from 'react-router-dom';
+import { Alert, Box, Button, Divider, Link, Paper, TextField, Typography } from '@mui/material';
 import LoginIcon from '@mui/icons-material/Login';
 import LoadingState from '../../components/LoadingState';
 import { useAuth } from '../../context/AuthContext';
@@ -132,6 +132,13 @@ const Login = () => {
             >
               {submitting ? 'Signing in…' : 'Sign in'}
             </Button>
+            {config.password_reset_enabled && (
+              <Box sx={{ mt: 2, textAlign: 'center' }}>
+                <Link component={RouterLink} to="/forgot-password" variant="body2">
+                  Forgot password?
+                </Link>
+              </Box>
+            )}
           </Box>
         )}
 

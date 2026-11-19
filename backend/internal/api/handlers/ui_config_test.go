@@ -32,22 +32,27 @@ func TestUIConfigHandler(t *testing.T) {
 		{
 			name:     "defaults",
 			resp:     UIConfigResponse{Title: "Application Template"},
-			wantBody: `{"title":"Application Template","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false}`,
+			wantBody: `{"title":"Application Template","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false,"password_reset_enabled":false}`,
 		},
 		{
 			name:     "custom title and auth enabled",
 			resp:     UIConfigResponse{Title: "My App", AuthEnabled: true, LocalAuthEnabled: true},
-			wantBody: `{"title":"My App","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true}`,
+			wantBody: `{"title":"My App","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true,"password_reset_enabled":false}`,
 		},
 		{
 			name:     "oidc only",
 			resp:     UIConfigResponse{Title: "My App", AuthEnabled: true, OIDCEnabled: true},
-			wantBody: `{"title":"My App","auth_enabled":true,"oidc_enabled":true,"local_auth_enabled":false}`,
+			wantBody: `{"title":"My App","auth_enabled":true,"oidc_enabled":true,"local_auth_enabled":false,"password_reset_enabled":false}`,
+		},
+		{
+			name:     "password reset",
+			resp:     UIConfigResponse{Title: "My App", AuthEnabled: true, LocalAuthEnabled: true, PasswordResetEnabled: true},
+			wantBody: `{"title":"My App","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true,"password_reset_enabled":true}`,
 		},
 		{
 			name:     "empty title falls back to the default",
 			resp:     UIConfigResponse{},
-			wantBody: `{"title":"Application Template","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false}`,
+			wantBody: `{"title":"Application Template","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false,"password_reset_enabled":false}`,
 		},
 	}
 

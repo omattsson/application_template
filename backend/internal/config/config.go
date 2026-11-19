@@ -76,6 +76,12 @@ type Config struct {
 	// Compression holds the settings of the response compression
 	// (COMPRESSION_*).
 	Compression CompressionConfig
+	// Mail holds the settings of the optional SMTP sender (MAIL_ENABLED,
+	// SMTP_*, MAIL_FROM).
+	Mail MailConfig
+	// PasswordReset holds the settings of the optional password reset flow
+	// (PASSWORD_RESET_*).
+	PasswordReset PasswordResetConfig
 	// LogLevel is LOG_LEVEL parsed to a slog level; main applies it to the
 	// default slog logger. An invalid value makes LoadConfig fail.
 	LogLevel slog.Level
@@ -464,7 +470,40 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// With the module off its settings are not used.
+	if c.Mail.Enabled {
+		if err := c.Mail.Validate(); err != nil {
+			return fmt.Errorf("mail config: %w", err)
+		}
+	}
+
+	if c.PasswordReset.Enabled {
+		if err := c.validatePasswordReset(); err != nil {
+			return fmt.Errorf("password reset config: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// validatePasswordReset checks what the flow needs from the other modules: a
+// user to sign in (auth on), a local password form (OIDC off, or OIDC with
+// OIDC_LOCAL_AUTH=true: with SSO as the only login nobody but the service
+// account has a password, and the service account is excluded) and the mailer.
+func (c *Config) validatePasswordReset() error {
+	if !c.Auth.Enabled {
+		return errors.New("PASSWORD_RESET_ENABLED=true needs AUTH_ENABLED=true")
+	}
+
+	if c.OIDC.Enabled && !c.OIDC.LocalAuth {
+		return errors.New("PASSWORD_RESET_ENABLED=true needs the local password login: set OIDC_LOCAL_AUTH=true or OIDC_ENABLED=false")
+	}
+
+	if !c.Mail.Enabled {
+		return errors.New("PASSWORD_RESET_ENABLED=true needs MAIL_ENABLED=true")
+	}
+
+	return c.PasswordReset.Validate()
 }
 
 func (c *AppConfig) Validate() error {
@@ -684,6 +723,12 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	if cfg.Compression, err = loadCompressionConfig(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	if cfg.Mail, err = loadMailConfig(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	if cfg.PasswordReset, err = loadPasswordResetConfig(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 

@@ -29,7 +29,7 @@ const itemListSchema = `{
 // Schema for the GET /api/v1/ui-config response
 const uiConfigSchema = `{
 "type": "object",
-"required": ["title", "auth_enabled", "oidc_enabled", "local_auth_enabled"],
+"required": ["title", "auth_enabled", "oidc_enabled", "local_auth_enabled", "password_reset_enabled"],
 "additionalProperties": false,
 "properties": {
 "title": {
@@ -43,6 +43,9 @@ const uiConfigSchema = `{
 "type": "boolean"
 },
 "local_auth_enabled": {
+"type": "boolean"
+},
+"password_reset_enabled": {
 "type": "boolean"
 }
 }

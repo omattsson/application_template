@@ -27,6 +27,11 @@ type UIConfigResponse struct {
 	// OIDC_LOCAL_AUTH=false only a service account (the bootstrap admin) can
 	// still log in with a password, through the API.
 	LocalAuthEnabled bool `json:"local_auth_enabled" example:"false"`
+	// PasswordResetEnabled tells the UI to offer "Forgot password?" and the
+	// pages behind it: PASSWORD_RESET_ENABLED, with auth on and the password
+	// form shown (local_auth_enabled). It is false whenever the two routes do
+	// not exist (404).
+	PasswordResetEnabled bool `json:"password_reset_enabled" example:"false"`
 }
 
 // UIConfigFromConfig returns the UI config of cfg. With AUTH_ENABLED=false
@@ -43,6 +48,7 @@ func UIConfigFromConfig(cfg *config.Config) UIConfigResponse {
 	if cfg.Auth.Enabled {
 		resp.OIDCEnabled = cfg.OIDC.Enabled
 		resp.LocalAuthEnabled = !cfg.OIDC.Enabled || cfg.OIDC.LocalAuth
+		resp.PasswordResetEnabled = cfg.PasswordReset.Enabled && resp.LocalAuthEnabled
 	}
 	return resp
 }
@@ -61,7 +67,7 @@ func NewUIConfigHandler(resp UIConfigResponse) gin.HandlerFunc {
 
 // getUIConfig godoc
 // @Summary      Web UI display config
-// @Description  Returns the display values of the web UI: the product title (APP_TITLE), whether authentication is enabled (AUTH_ENABLED), whether the single sign-on login is offered (oidc_enabled: AUTH_ENABLED and OIDC_ENABLED) and whether the password form is shown (local_auth_enabled: AUTH_ENABLED, and OIDC off or OIDC_LOCAL_AUTH). Public in both auth modes: no authentication, so the login page can use it. Cached for 5 minutes.
+// @Description  Returns the display values of the web UI: the product title (APP_TITLE), whether authentication is enabled (AUTH_ENABLED), whether the single sign-on login is offered (oidc_enabled: AUTH_ENABLED and OIDC_ENABLED) and whether the password form is shown (local_auth_enabled: AUTH_ENABLED, and OIDC off or OIDC_LOCAL_AUTH) and whether the web UI offers the password reset by mail (password_reset_enabled: PASSWORD_RESET_ENABLED with the password form shown; false while the two routes do not exist). Public in both auth modes: no authentication, so the login page can use it. Cached for 5 minutes.
 // @Tags         ui
 // @Produce      json
 // @Success      200  {object}  UIConfigResponse

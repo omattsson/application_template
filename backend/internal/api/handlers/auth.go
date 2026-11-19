@@ -95,6 +95,7 @@ type AuthHandler struct {
 	refreshTokenRepo models.RefreshTokenRepository
 	sessionStore     sessionstore.SessionStore
 	wsRevoker        websocket.ClientRevoker
+	resetTokens      models.PasswordResetTokenRepository
 	cfg              *config.AuthConfig
 	oidcCfg          *config.OIDCConfig
 	throttle         *loginThrottle
@@ -135,6 +136,13 @@ func (h *AuthHandler) SetSessionStore(store sessionstore.SessionStore) {
 // logout. nil: sockets close at access-token expiry only.
 func (h *AuthHandler) SetWebSocketRevoker(r websocket.ClientRevoker) {
 	h.wsRevoker = r
+}
+
+// SetPasswordResetTokens sets the reset token repository of the optional
+// password reset module: a password change then deletes the unused reset
+// tokens of the user. nil (the default, module off): nothing is deleted.
+func (h *AuthHandler) SetPasswordResetTokens(repo models.PasswordResetTokenRepository) {
+	h.resetTokens = repo
 }
 
 // acquireBcrypt takes a slot of bcryptSem. It gives up when ctx ends while it

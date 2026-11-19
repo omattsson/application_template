@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 	"time"
 
 	"backend/internal/api/handlers"
@@ -12,6 +13,8 @@ import (
 	"backend/internal/auth"
 	"backend/internal/config"
 	"backend/internal/health"
+	"backend/internal/inflight"
+	"backend/internal/mail"
 	"backend/internal/models"
 	"backend/internal/sessionstore"
 	"backend/internal/websocket"
@@ -31,6 +34,17 @@ var ErrAuthDepsMissing = errors.New("auth is enabled but an auth dependency is m
 // The module is never silently skipped: a client that sends an Idempotency-Key
 // relies on it.
 var ErrIdempotencyDepsMissing = errors.New("idempotency is enabled but its repository or settings are missing")
+
+// ErrPasswordResetDepsMissing is returned by Setup when PASSWORD_RESET_ENABLED
+// is true and a dependency of the module is missing (the token repository, the
+// mailer or the in-flight tracker), the settings are unusable, or auth is off.
+// The module is never silently skipped: the web UI offers "Forgot password?"
+// on the strength of it.
+var ErrPasswordResetDepsMissing = errors.New("password reset is enabled but a dependency or setting is missing")
+
+// passwordResetSendMargin is added to SMTP_TIMEOUT for the bound of one mail
+// send of the password reset (the mailer enforces SMTP_TIMEOUT itself).
+const passwordResetSendMargin = 5 * time.Second
 
 // idempotencySkipPrefixes are the paths that the idempotency middleware never
 // touches, because it stores the response body and replays it:
@@ -56,6 +70,14 @@ type RateLimiters struct {
 	// (each request costs up to two bcrypt operations). It has its own budget:
 	// it never uses up the login budget of a shared address.
 	PasswordChange *handlers.RateLimiter
+	// PasswordReset is LOGIN_RATE_LIMIT per client IP on POST
+	// /auth/password-reset (nil while the module is off). The request costs
+	// nothing on the request path, but each one may become a mail.
+	PasswordReset *handlers.RateLimiter
+	// PasswordResetConfirm is LOGIN_RATE_LIMIT per client IP on POST
+	// /auth/password-reset/confirm (nil while the module is off). It has its own
+	// budget: guessing a 256-bit token is hopeless, but the route does bcrypt.
+	PasswordResetConfirm *handlers.RateLimiter
 	// OIDCCallback is LOGIN_RATE_LIMIT per client IP on GET /auth/oidc/callback
 	// (it calls the identity provider). It has its own budget: a user who
 	// starts a login must still have the budget for the return.
@@ -67,7 +89,7 @@ func (r *RateLimiters) Stop() {
 	if r == nil {
 		return
 	}
-	for _, l := range []*handlers.RateLimiter{r.API, r.Login, r.Register, r.OIDCLogin, r.OIDCCallback, r.PasswordChange} {
+	for _, l := range []*handlers.RateLimiter{r.API, r.Login, r.Register, r.OIDCLogin, r.OIDCCallback, r.PasswordChange, r.PasswordReset, r.PasswordResetConfirm} {
 		if l != nil {
 			l.Stop()
 		}
@@ -90,6 +112,14 @@ type AuthDeps struct {
 	RevalidateInterval time.Duration
 }
 
+// PasswordResetDeps are the dependencies of the optional password reset
+// module. Setup needs all of them when PASSWORD_RESET_ENABLED is true.
+type PasswordResetDeps struct {
+	Tokens   models.PasswordResetTokenRepository
+	Mailer   mail.Mailer
+	InFlight *inflight.Tracker
+}
+
 // Deps are the dependencies of Setup.
 type Deps struct {
 	Config        *config.Config
@@ -101,6 +131,9 @@ type Deps struct {
 	// Idempotency is required when Config.Idempotency.Enabled and ignored
 	// otherwise.
 	Idempotency models.IdempotencyRepository
+	// PasswordReset is required when Config.PasswordReset.Enabled and ignored
+	// otherwise.
+	PasswordReset *PasswordResetDeps
 }
 
 // Result is what Setup built and what the caller must stop.
@@ -137,6 +170,9 @@ func checkDeps(deps Deps) error {
 			return fmt.Errorf("%w: the TTL and the lock timeout must be positive", ErrIdempotencyDepsMissing)
 		}
 	}
+	if err := checkPasswordResetDeps(deps); err != nil {
+		return err
+	}
 	if !deps.Config.Auth.Enabled {
 		return nil
 	}
@@ -151,6 +187,31 @@ func checkDeps(deps Deps) error {
 		if isNil(v) {
 			return fmt.Errorf("%w: %s", ErrAuthDepsMissing, name)
 		}
+	}
+	return nil
+}
+
+// checkPasswordResetDeps validates the password reset module (nil when it is
+// off).
+func checkPasswordResetDeps(deps Deps) error {
+	pr := deps.Config.PasswordReset
+	if !pr.Enabled {
+		return nil
+	}
+	if !deps.Config.Auth.Enabled {
+		return fmt.Errorf("%w: AUTH_ENABLED is false", ErrPasswordResetDepsMissing)
+	}
+	d := deps.PasswordReset
+	if d == nil {
+		return fmt.Errorf("%w: no dependencies", ErrPasswordResetDepsMissing)
+	}
+	for name, v := range map[string]any{"token repository": d.Tokens, "mailer": d.Mailer, "in-flight tracker": d.InFlight} {
+		if isNil(v) {
+			return fmt.Errorf("%w: %s", ErrPasswordResetDepsMissing, name)
+		}
+	}
+	if pr.TokenTTL <= 0 || pr.MinInterval < 0 || strings.TrimSpace(pr.URL) == "" {
+		return fmt.Errorf("%w: the token TTL must be positive and the URL set", ErrPasswordResetDepsMissing)
 	}
 	return nil
 }
@@ -196,7 +257,7 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 	var a *authWiring
 	if cfg.Auth.Enabled {
 		var err error
-		if a, err = newAuthWiring(cfg, deps.Auth, deps.Hub); err != nil {
+		if a, err = newAuthWiring(cfg, deps.Auth, deps.Hub, deps.PasswordReset); err != nil {
 			return nil, err
 		}
 	}
@@ -303,6 +364,10 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 		limiters.OIDCLogin = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
 		limiters.OIDCCallback = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
 		limiters.PasswordChange = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
+		if a.reset != nil {
+			limiters.PasswordReset = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
+			limiters.PasswordResetConfirm = handlers.NewRateLimiter(int(cfg.Server.LoginRateLimit), time.Minute)
+		}
 		a.registerPublicAuth(v1, limiters)
 		authMW := []gin.HandlerFunc{a.authenticate}
 		if cfg.Otel.Enabled {
@@ -363,6 +428,7 @@ type authWiring struct {
 	oidcHandler  *handlers.OIDCHandler
 	apiKeys      *handlers.APIKeyHandler
 	users        *handlers.UserHandler
+	reset        *handlers.PasswordResetHandler
 	auditLogs    *handlers.AuditLogHandler
 	recorder     *middleware.AuditRecorder
 	authenticate gin.HandlerFunc
@@ -370,7 +436,7 @@ type authWiring struct {
 
 // newAuthWiring builds the auth handlers. It starts nothing, so an error
 // leaves nothing to stop.
-func newAuthWiring(cfg *config.Config, d *AuthDeps, hub *websocket.Hub) (*authWiring, error) {
+func newAuthWiring(cfg *config.Config, d *AuthDeps, hub *websocket.Hub, pr *PasswordResetDeps) (*authWiring, error) {
 	provider := d.OIDCProvider
 	if isNil(provider) && cfg.OIDC.Enabled {
 		p, err := auth.NewProvider(&cfg.OIDC, auth.Options{})
@@ -416,6 +482,23 @@ func newAuthWiring(cfg *config.Config, d *AuthDeps, hub *websocket.Hub) (*authWi
 		w.users.SetWebSocketRevoker(hub)
 		w.apiKeys.SetWebSocketRevoker(hub)
 	}
+	if cfg.PasswordReset.Enabled && pr != nil {
+		// A password change (own, or set by an admin) deletes the unused reset
+		// tokens of the user.
+		authHandler.SetPasswordResetTokens(pr.Tokens)
+		w.users.SetPasswordResetTokens(pr.Tokens)
+		w.reset = handlers.NewPasswordResetHandler(handlers.PasswordResetDeps{
+			Users:       d.Users,
+			Tokens:      pr.Tokens,
+			Mailer:      pr.Mailer,
+			InFlight:    pr.InFlight,
+			Auth:        authHandler,
+			Access:      w.users,
+			AppTitle:    cfg.App.Title,
+			Config:      cfg.PasswordReset,
+			SendTimeout: cfg.Mail.Timeout + passwordResetSendMargin,
+		})
+	}
 	return w, nil
 }
 
@@ -454,6 +537,15 @@ func (a *authWiring) registerPublicAuth(v1 *gin.RouterGroup, l *RateLimiters) {
 	// with the cookie. RequireSessionAuth passes here (no auth middleware ran);
 	// the handler reads only the bearer token and the cookie.
 	g.POST("/logout", middleware.RequireSessionAuth(), a.authHandler.Logout)
+	if a.reset != nil {
+		// Optional module (PASSWORD_RESET_ENABLED): the routes do not exist
+		// otherwise. Each has its own budget. The confirm route is audited
+		// although it is public and under /auth/: its handler names the account
+		// that it reset (middleware.SetAuditActor). The request route changes
+		// nothing and has no audit entry.
+		g.POST("/password-reset", l.PasswordReset.RateLimit(), a.reset.Request)
+		g.POST("/password-reset/confirm", l.PasswordResetConfirm.RateLimit(), a.recorder.Middleware(), a.reset.Confirm)
+	}
 	g.GET("/oidc/login", l.OIDCLogin.RateLimit(), a.oidcHandler.Login)
 	g.GET("/oidc/callback", l.OIDCCallback.RateLimit(), a.oidcHandler.Callback)
 }

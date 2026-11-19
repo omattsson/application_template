@@ -134,6 +134,23 @@ services:
       # default (true and 1024 bytes).
       - COMPRESSION_ENABLED=${COMPRESSION_ENABLED:-}
       - COMPRESSION_MIN_SIZE=${COMPRESSION_MIN_SIZE:-}
+      # Mail and password reset (optional modules, off by default). Empty keeps
+      # the backend default (MAIL_ENABLED=false, port 587, starttls, 10s;
+      # PASSWORD_RESET_ENABLED=false, 1h, 60s). These are read strictly while the
+      # module is on. make prod* never starts a mail catcher: set your own SMTP
+      # server. docker-compose.mail.yml (make dev-mail) adds a local catcher.
+      - MAIL_ENABLED=${MAIL_ENABLED:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-}
+      - SMTP_TLS=${SMTP_TLS:-}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - MAIL_FROM=${MAIL_FROM:-}
+      - SMTP_TIMEOUT=${SMTP_TIMEOUT:-}
+      - PASSWORD_RESET_ENABLED=${PASSWORD_RESET_ENABLED:-}
+      - PASSWORD_RESET_URL=${PASSWORD_RESET_URL:-}
+      - PASSWORD_RESET_TOKEN_TTL=${PASSWORD_RESET_TOKEN_TTL:-}
+      - PASSWORD_RESET_MIN_INTERVAL=${PASSWORD_RESET_MIN_INTERVAL:-}
       # OpenID Connect single sign-on (needs AUTH_ENABLED=true): off by default.
       - OIDC_ENABLED=${OIDC_ENABLED:-false}
       - OIDC_ISSUER=${OIDC_ISSUER:-}

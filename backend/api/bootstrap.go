@@ -311,6 +311,9 @@ type routerDeps struct {
 	// Idempotency is the repository of the idempotency module; required with
 	// IDEMPOTENCY_ENABLED=true.
 	Idempotency models.IdempotencyRepository
+	// PasswordReset holds the dependencies of the password reset module;
+	// required with PASSWORD_RESET_ENABLED=true.
+	PasswordReset *routes.PasswordResetDeps
 }
 
 // newSessionStore builds the session store of SESSION_STORE on db. Tests
@@ -551,6 +554,7 @@ func buildRouter(cfg *config.Config, deps routerDeps) (*gin.Engine, *routes.Resu
 		Hub:           deps.Hub,
 		Auth:          deps.Auth,
 		Idempotency:   deps.Idempotency,
+		PasswordReset: deps.PasswordReset,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build the router: %w", err)
@@ -619,6 +623,22 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		idempotencyRepo = database.NewGORMIdempotencyRepository(g.DB())
 	}
 
+	// The mail module (off by default) builds the mailer and its readiness
+	// check; the password reset module (off by default) adds the token
+	// repository and the two routes. MAIL_ENABLED alone builds no routes.
+	mailer, err := buildMail(cfg, healthChecker)
+	if err != nil {
+		return fail(nil, fmt.Errorf("build the mailer: %w", err))
+	}
+	resetTokens, err := passwordResetTokens(cfg, repo)
+	if err != nil {
+		return fail(nil, err)
+	}
+	var resetDeps *routes.PasswordResetDeps
+	if resetTokens != nil {
+		resetDeps = &routes.PasswordResetDeps{Tokens: resetTokens, Mailer: mailer, InFlight: tracker}
+	}
+
 	router, res, err := buildRouter(cfg, routerDeps{
 		Repository:    repo,
 		HealthChecker: healthChecker,
@@ -626,6 +646,7 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		InFlight:      tracker,
 		Auth:          authDeps,
 		Idempotency:   idempotencyRepo,
+		PasswordReset: resetDeps,
 	})
 	if err != nil {
 		return fail(nil, err)
@@ -677,6 +698,10 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 	if idempotencyRepo != nil {
 		leaderWorkers = append(leaderWorkers,
 			periodicWorker("idempotency-cleanup", idempotencyCleanupInterval, idempotencyCleanupJob(idempotencyRepo, idempotencyCleanupBatch)))
+	}
+	if resetTokens != nil {
+		leaderWorkers = append(leaderWorkers,
+			periodicWorker("password-reset-cleanup", passwordResetCleanupInterval, passwordResetCleanup(resetTokens)))
 	}
 	// The outbox module: the janitor is a leader worker; the poller is one per
 	// process (every replica delivers to its own sockets) and starts below.

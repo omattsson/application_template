@@ -350,8 +350,8 @@ func TestUIConfigRoute(t *testing.T) {
 		auth     bool
 		wantBody string
 	}{
-		{name: "defaults", title: "Application Template", wantBody: `{"title":"Application Template","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false}`},
-		{name: "custom", title: "My App", auth: true, wantBody: `{"title":"My App","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true}`},
+		{name: "defaults", title: "Application Template", wantBody: `{"title":"Application Template","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false,"password_reset_enabled":false}`},
+		{name: "custom", title: "My App", auth: true, wantBody: `{"title":"My App","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true,"password_reset_enabled":false}`},
 	}
 
 	for _, tt := range tests {
@@ -401,7 +401,7 @@ func TestUIConfigRouteFromEnv(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.JSONEq(t, `{"title":"My App","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true}`, w.Body.String())
+	assert.JSONEq(t, `{"title":"My App","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true,"password_reset_enabled":false}`, w.Body.String())
 }
 
 func TestUIConfigRouteIsRateLimited(t *testing.T) {

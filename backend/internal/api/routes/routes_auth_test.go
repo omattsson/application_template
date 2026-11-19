@@ -125,10 +125,10 @@ func TestUIConfigAuthFields(t *testing.T) {
 		localAuth bool
 		want      string
 	}{
-		{name: "auth off", want: `{"title":"Auth Test","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false}`},
-		{name: "auth on", auth: true, want: `{"title":"Auth Test","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true}`},
-		{name: "oidc only", auth: true, oidc: true, want: `{"title":"Auth Test","auth_enabled":true,"oidc_enabled":true,"local_auth_enabled":false}`},
-		{name: "oidc and local", auth: true, oidc: true, localAuth: true, want: `{"title":"Auth Test","auth_enabled":true,"oidc_enabled":true,"local_auth_enabled":true}`},
+		{name: "auth off", want: `{"title":"Auth Test","auth_enabled":false,"oidc_enabled":false,"local_auth_enabled":false,"password_reset_enabled":false}`},
+		{name: "auth on", auth: true, want: `{"title":"Auth Test","auth_enabled":true,"oidc_enabled":false,"local_auth_enabled":true,"password_reset_enabled":false}`},
+		{name: "oidc only", auth: true, oidc: true, want: `{"title":"Auth Test","auth_enabled":true,"oidc_enabled":true,"local_auth_enabled":false,"password_reset_enabled":false}`},
+		{name: "oidc and local", auth: true, oidc: true, localAuth: true, want: `{"title":"Auth Test","auth_enabled":true,"oidc_enabled":true,"local_auth_enabled":true,"password_reset_enabled":false}`},
 	}
 
 	for _, tt := range tests {

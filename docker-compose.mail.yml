@@ -1,0 +1,54 @@
+# Local mail catcher for development: Mailpit. An override of
+# docker-compose.yml; `make dev-mail` runs both:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mail.yml up --build
+#
+# DEVELOPMENT ONLY. Mailpit accepts every mail without authentication or TLS
+# and shows every message (with its reset link) to whoever opens its web UI.
+# `make prod*` never reads this file and nothing in the production setup points
+# at it: set a real SMTP server (SMTP_*, MAIL_FROM) for production.
+#
+# The password reset also needs AUTH_ENABLED=true (and the password login). The
+# override turns PASSWORD_RESET_ENABLED on exactly when AUTH_ENABLED is true;
+# set PASSWORD_RESET_ENABLED yourself to override that. With AUTH_ENABLED=false
+# only the mailer and its readiness check are on.
+# PASSWORD_RESET_ENABLED needs the password login: with AUTH_ENABLED=true and
+# OIDC_ENABLED=true the backend refuses to start unless OIDC_LOCAL_AUTH=true.
+# Set OIDC_LOCAL_AUTH=true, or PASSWORD_RESET_ENABLED=false, in that case.
+#
+# Host port (published on 127.0.0.1 only; set MAILPIT_UI_PORT when it is in use):
+#   Mailpit web UI  http://localhost:8025  (MAILPIT_UI_PORT)
+# The SMTP port 1025 is NOT published: the backend reaches it over the Compose
+# network.
+services:
+  backend:
+    environment:
+      - MAIL_ENABLED=true
+      - SMTP_HOST=mailpit
+      - SMTP_PORT=1025
+      - SMTP_TLS=none
+      - SMTP_USERNAME=
+      - SMTP_PASSWORD=
+      - MAIL_FROM=${MAIL_FROM:-App <noreply@example.test>}
+      - PASSWORD_RESET_ENABLED=${PASSWORD_RESET_ENABLED:-${AUTH_ENABLED:-false}}
+      # The link opens the web UI at the address that the browser uses.
+      - PASSWORD_RESET_URL=${PASSWORD_RESET_URL:-http://localhost:${FRONTEND_PORT:-3000}}
+    depends_on:
+      mailpit:
+        condition: service_healthy
+
+  mailpit:
+    image: axllent/mailpit:v1.21.8
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"   # web UI (loopback only)
+    environment:
+      # Keep the last 500 messages in memory only.
+      - MP_MAX_MESSAGES=500
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend-net

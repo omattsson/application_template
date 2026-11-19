@@ -97,6 +97,18 @@ func auditRouter(rec *AuditRecorder, userID string) *gin.Engine {
 		AddAuditDetail(c, "password_changed", true)
 		c.JSON(http.StatusOK, gin.H{"message": "Password changed", "password": "response-secret"})
 	})
+	r.POST("/api/v1/auth/password-reset/confirm", func(c *gin.Context) {
+		if c.Query("actor") != "" {
+			SetAuditActor(c, "u-9", "carol")
+			SetAuditEntityID(c, "u-9")
+			AddAuditDetail(c, "password_reset", true)
+		}
+		c.Status(http.StatusNoContent)
+	})
+	r.POST("/api/v1/auth/password-reset", func(c *gin.Context) {
+		SetAuditActor(c, "u-9", "carol")
+		c.JSON(http.StatusAccepted, gin.H{})
+	})
 	r.PUT("/api/v1/auth/me/password-fail", func(c *gin.Context) { c.JSON(http.StatusUnauthorized, gin.H{}) })
 	r.POST("/api/v1/auth/logout-all", ok)
 	r.POST("/api/v1/auth/login", ok)
@@ -295,6 +307,71 @@ func TestAuditRecordsThePasswordChange(t *testing.T) {
 	}
 }
 
+// The password reset has no session: the handler names the account it reset
+// (SetAuditActor) and the recorder writes the entry for it.
+func TestAuditRecordsThePasswordReset(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the handler names the actor", func(t *testing.T) {
+		t.Parallel()
+		sink := &auditSink{}
+		rec := NewAuditRecorder(sink)
+		r := auditRouter(rec, "") // no authenticated caller
+
+		w := serve(r, http.MethodPost, "/api/v1/auth/password-reset/confirm?actor=1", `{"token":"request-secret","new_password":"request-secret-2"}`)
+		require.Equal(t, http.StatusNoContent, w.Code)
+		waitRecorded(t, rec)
+
+		got := sink.snapshot()
+		require.Len(t, got, 1)
+		e := got[0]
+		assert.Equal(t, AuditActionPasswordReset, e.Action)
+		assert.Equal(t, AuditEntityUser, e.EntityType)
+		assert.Equal(t, "u-9", e.EntityID)
+		assert.Equal(t, "u-9", e.UserID, "the actor is the account that was reset")
+		assert.Equal(t, "carol", e.Username)
+		d := detailsOf(t, e)
+		assert.Equal(t, "/api/v1/auth/password-reset/confirm", d["path"])
+		assert.Equal(t, true, d["password_reset"])
+		assert.NotContains(t, e.Details, "request-secret")
+	})
+
+	t.Run("no actor, no entry", func(t *testing.T) {
+		t.Parallel()
+		sink := &auditSink{}
+		rec := NewAuditRecorder(sink)
+		r := auditRouter(rec, "")
+
+		serve(r, http.MethodPost, "/api/v1/auth/password-reset/confirm", `{}`)
+		waitRecorded(t, rec)
+		assert.Empty(t, sink.snapshot(), "a refused confirm names nobody and is not recorded")
+	})
+
+	t.Run("the request route is never recorded", func(t *testing.T) {
+		t.Parallel()
+		sink := &auditSink{}
+		rec := NewAuditRecorder(sink)
+		r := auditRouter(rec, "")
+
+		serve(r, http.MethodPost, "/api/v1/auth/password-reset", `{"username":"carol"}`)
+		waitRecorded(t, rec)
+		assert.Empty(t, sink.snapshot())
+	})
+
+	t.Run("an authenticated caller wins over an actor", func(t *testing.T) {
+		t.Parallel()
+		sink := &auditSink{}
+		rec := NewAuditRecorder(sink)
+		r := auditRouter(rec, "u-1")
+
+		serve(r, http.MethodPost, "/api/v1/auth/password-reset/confirm?actor=1", `{}`)
+		waitRecorded(t, rec)
+		got := sink.snapshot()
+		require.Len(t, got, 1)
+		assert.Equal(t, "u-1", got[0].UserID)
+	})
+}
+
 func TestAuditRouteFor(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -312,6 +389,8 @@ func TestAuditRouteFor(t *testing.T) {
 		{"PUT", "/api/v1/users/:id/role", auditRoutes["PUT /users/:id/role"]},
 		// An explicit table entry wins over the /auth/ skip.
 		{"PUT", "/api/v1/auth/me/password", AuditRoute{Action: AuditActionChangePassword, EntityType: AuditEntityUser, IDFromHandler: true}},
+		{"POST", "/api/v1/auth/password-reset/confirm", AuditRoute{Action: AuditActionPasswordReset, EntityType: AuditEntityUser, IDFromHandler: true}},
+		{"POST", "/api/v1/auth/password-reset", AuditRoute{Skip: true}},
 		{"POST", "/api/v1/auth/logout", AuditRoute{Skip: true}},
 		{"PUT", "/api/v1/auth/me", AuditRoute{Skip: true}},
 		{"POST", "/api/v1/auth/me/password", AuditRoute{Skip: true}},
@@ -338,7 +417,7 @@ func TestAuditRouteTableUsesKnownValues(t *testing.T) {
 		assert.Contains(t, KnownAuditEntityTypes, route.EntityType, key)
 		assert.True(t, route.IDParam != "" || route.IDFromHandler, "%s: the entity ID comes from a path parameter or the handler", key)
 	}
-	for _, a := range []string{AuditActionCreate, AuditActionUpdate, AuditActionDelete, AuditActionChangeRole, AuditActionDisable, AuditActionEnable, AuditActionChangePassword} {
+	for _, a := range []string{AuditActionCreate, AuditActionUpdate, AuditActionDelete, AuditActionChangeRole, AuditActionDisable, AuditActionEnable, AuditActionChangePassword, AuditActionPasswordReset} {
 		assert.Contains(t, KnownAuditActions, a)
 	}
 	for _, e := range []string{AuditEntityItem, AuditEntityUser, AuditEntityAPIKey} {
