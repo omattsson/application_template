@@ -283,3 +283,28 @@ func TestMessage_Bytes(t *testing.T) {
 	assert.Equal(t, "item.updated", parsed.Type)
 	assert.JSONEq(t, `{"id":1}`, string(parsed.Payload))
 }
+
+func TestHub_BroadcastBacklog(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub() // Run is not started: nothing drains the queues
+	pending, capacity := hub.BroadcastBacklog()
+	assert.Equal(t, 0, pending)
+	assert.Equal(t, broadcastBufferSize, capacity)
+
+	for i := 0; i < 5; i++ {
+		hub.Broadcast([]byte("m"))
+	}
+	pending, _ = hub.BroadcastBacklog()
+	assert.Equal(t, 5, pending, "the broadcast queue")
+
+	// A slow client with a fuller send queue than the broadcast queue.
+	slow := &Client{hub: hub, send: make(chan []byte, sendBufferSize)}
+	require.NoError(t, hub.Register(slow))
+	for i := 0; i < 9; i++ {
+		slow.send <- []byte("m")
+	}
+	pending, capacity = hub.BroadcastBacklog()
+	assert.Equal(t, 9, pending, "the fullest client queue")
+	assert.Equal(t, sendBufferSize, capacity)
+}

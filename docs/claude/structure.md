@@ -43,13 +43,14 @@ backend/
 │   ├── config/                # LoadConfig, AuthConfig, OIDCConfig, TrustedProxies
 │   ├── ctxutil/               # Detach: a bounded context that a leaving client cannot cancel
 │   ├── database/              # factory, migrations, schema/ (migrator), repositories (users, refresh tokens,
-│   │                          # API keys, audit log, replica heartbeats, idempotency keys), BaseRepository (lock retry), gorm logger
+│   │                          # API keys, audit log, replica heartbeats, idempotency keys, outbox events), BaseRepository (lock retry), gorm logger
 │   ├── health/                # Liveness and readiness checks
 │   ├── inflight/              # Tracker for work that outlives its request
 │   ├── leader/                # Worker and Group: leader-only background jobs; Lease: MySQL row lease election
-│   ├── models/                # Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, IdempotencyKey, validation,
-│   │                          # GenericRepository, RetryOnLock
+│   ├── models/                # Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, IdempotencyKey, OutboxEvent, validation,
+│   │                          # GenericRepository (optional change hook), RetryOnLock
 │   ├── logutil/               # Limiter: one log line per interval for a repeating error
+│   ├── outbox/                # Poller (delivers outbox_events to the hub, gap window), ItemHook, Metrics
 │   ├── replica/               # ProcessID and Heartbeat (replica_heartbeats row per process)
 │   ├── sessionstore/          # Token and session blocklist, OIDC state: mysql.go, memory.go, janitor.go
 │   ├── telemetry/             # Init, Shutdown, LogHandler (slog bridge), StartDBMetrics; no-op when off

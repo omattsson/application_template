@@ -22,6 +22,7 @@
 ./internal/leader
 ./internal/logutil
 ./internal/models
+./internal/outbox
 ./internal/replica
 ./internal/sessionstore
 ./internal/telemetry

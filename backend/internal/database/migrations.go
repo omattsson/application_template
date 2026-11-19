@@ -89,6 +89,7 @@ func registerMigrations(migrator *schema.Migrator) {
 	migrator.AddMigration(createReplicaTablesMigration())
 	migrator.AddMigration(addSortIndexesMigration())
 	migrator.AddMigration(createIdempotencyKeysMigration())
+	migrator.AddMigration(createOutboxEventsMigration())
 }
 
 // legacyUser is the users table of migrations 20231201000001 and
@@ -533,6 +534,40 @@ func createIdempotencyKeysMigration() schema.Migration {
 		},
 		Down: func(tx *gorm.DB) error {
 			return dropTables(tx, "idempotency_keys")
+		},
+	}
+}
+
+// outboxEventV1 is outbox_events as 20261117000002 creates it, a frozen copy
+// of models.OutboxEvent: a model change needs a new migration
+// (TestOutboxEventsMatchModel fails without one).
+type outboxEventV1 struct {
+	CreatedAt time.Time `gorm:"type:datetime(3);not null;index:idx_outbox_events_created_at"`
+	ID        uint64    `gorm:"primaryKey;autoIncrement"`
+	EventType string    `gorm:"size:64;not null"`
+	Message   string    `gorm:"type:text;not null"`
+}
+
+func (outboxEventV1) TableName() string { return "outbox_events" }
+
+// createOutboxEventsMigration creates outbox_events, the table of the optional
+// outbox module (OUTBOX_ENABLED=true): the Items repository writes one row
+// per WebSocket event in the transaction of the change, and every replica
+// polls the rows after its cursor. The id is an auto increment (the delivery
+// order); created_at is DATETIME(3), written only with the database clock
+// (UTC_TIMESTAMP(3)), and its index serves the janitor. The table exists
+// whether or not the switch is on, so the switch never needs a migration.
+// Both directions are idempotent.
+func createOutboxEventsMigration() schema.Migration {
+	return schema.Migration{
+		Version:     "20261117000002",
+		Name:        "create_outbox_events",
+		Description: "Create outbox_events for the transactional outbox of the WebSocket events",
+		Up: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&outboxEventV1{})
+		},
+		Down: func(tx *gorm.DB) error {
+			return dropTables(tx, "outbox_events")
 		},
 	}
 }
