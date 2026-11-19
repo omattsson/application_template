@@ -130,6 +130,10 @@ services:
       - OUTBOX_ENABLED=${OUTBOX_ENABLED:-}
       - OUTBOX_POLL_INTERVAL=${OUTBOX_POLL_INTERVAL:-}
       - OUTBOX_RETENTION=${OUTBOX_RETENTION:-}
+      # Response compression (gzip, on by default). Empty keeps the backend
+      # default (true and 1024 bytes).
+      - COMPRESSION_ENABLED=${COMPRESSION_ENABLED:-}
+      - COMPRESSION_MIN_SIZE=${COMPRESSION_MIN_SIZE:-}
       # OpenID Connect single sign-on (needs AUTH_ENABLED=true): off by default.
       - OIDC_ENABLED=${OIDC_ENABLED:-false}
       - OIDC_ISSUER=${OIDC_ISSUER:-}

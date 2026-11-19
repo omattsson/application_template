@@ -232,6 +232,12 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 	}
 	router.Use(middleware.Logger())
 	router.Use(middleware.Recovery())
+	// Response compression (default on, COMPRESSION_ENABLED): right after
+	// Recovery, so a panic still answers a plain 500, and before everything that
+	// writes a response. /ws is never wrapped. With it off nothing is mounted.
+	if cfg.Compression.Enabled {
+		router.Use(middleware.Compression(middleware.CompressionOptions{MinSize: cfg.Compression.MinSize}))
+	}
 	router.Use(middleware.SecurityHeaders())
 	var corsOpts []middleware.CORSOption
 	if cfg.Idempotency.Enabled {
