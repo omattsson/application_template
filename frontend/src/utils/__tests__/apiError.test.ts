@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { AxiosError, AxiosHeaders } from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
-import { getApiErrorMessage } from '../apiError';
+import { errorTextOf, getApiErrorMessage } from '../apiError';
 
 /** An AxiosError as thrown by axios for a non-2xx response. */
 function httpError(status: number, data: unknown): AxiosError {
@@ -61,5 +61,26 @@ describe('getApiErrorMessage', () => {
     ['an object', { foo: 'bar' }],
   ])('handles an unknown thrown value: %s', (_name, value) => {
     expect(getApiErrorMessage(value)).toBe('An unexpected error occurred.');
+  });
+});
+
+describe('errorTextOf', () => {
+  it('reads the error text of a JSON body', () => {
+    expect(errorTextOf(httpError(401, { error: 'Current password is incorrect' }))).toBe('Current password is incorrect');
+  });
+
+  it('does not hide the text of a 5xx (it is for comparing, not for showing)', () => {
+    expect(errorTextOf(httpError(500, { error: 'Internal server error' }))).toBe('Internal server error');
+  });
+
+  it.each([
+    ['no body', httpError(401, undefined)],
+    ['a body without error', httpError(401, { message: 'x' })],
+    ['a non-string error', httpError(401, { error: 5 })],
+    ['a network error', new AxiosError('Network Error', AxiosError.ERR_NETWORK)],
+    ['a plain Error', new Error('x')],
+    ['undefined', undefined],
+  ])('returns null for %s', (_name, err) => {
+    expect(errorTextOf(err)).toBeNull();
   });
 });

@@ -7,7 +7,8 @@ import { getAccessToken, getSession } from './session';
 import { summarizeRequestError } from './errorSummary';
 import type { UIConfig } from '../context/UIConfigContext';
 import { toRole } from '../utils/jwt';
-import { CURRENT_PASSWORD_INCORRECT_MESSAGE, errorTextOf } from '../utils/passwordChange';
+import { errorTextOf } from '../utils/apiError';
+import { CURRENT_PASSWORD_INCORRECT_MESSAGE } from '../utils/passwordChange';
 import type { AuthUser, Role } from '../utils/jwt';
 
 // Marks a request that was already retried after a refresh (no second retry).

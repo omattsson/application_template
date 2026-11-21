@@ -6,15 +6,13 @@ import { Alert, Box, Button, Link, Paper, TextField, Typography } from '@mui/mat
 import { authService } from '../../../api/client';
 import { useAuth } from '../../../context/AuthContext';
 import { useUnsavedChanges } from '../../../hooks/useUnsavedChanges';
-import { getApiErrorMessage } from '../../../utils/apiError';
+import { errorTextOf, getApiErrorMessage } from '../../../utils/apiError';
 import {
   CURRENT_PASSWORD_INCORRECT_MESSAGE,
   PASSWORD_UNCHANGED_MESSAGE,
-  describeWait,
-  errorTextOf,
-  retryAfterSeconds,
 } from '../../../utils/passwordChange';
 import { PASSWORD_MISMATCH_MESSAGE, passwordProblem } from '../../../utils/passwordReset';
+import { describeWait, retryAfterSeconds } from '../../../utils/retryAfter';
 
 const CURRENT_REQUIRED_MESSAGE = 'Enter your current password.';
 const RULES_HELP = 'At least 8 characters, at most 72 bytes, and not your current password.';
@@ -38,7 +36,7 @@ const NO_FIELD_ERRORS: FieldErrors = { current: null, next: null, confirm: null 
 /** The wait of a 429 in words, for the message. */
 function rateLimitMessage(err: unknown): string {
   const seconds = retryAfterSeconds(err);
-  return seconds === null
+  return seconds === undefined
     ? 'Too many attempts. Try again later.'
     : `Too many attempts. Try again in ${describeWait(seconds)}.`;
 }

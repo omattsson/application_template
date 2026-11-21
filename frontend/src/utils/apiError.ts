@@ -32,3 +32,19 @@ export function getApiErrorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   return UNKNOWN_ERROR_MESSAGE;
 }
+
+/**
+ * Read the `error` text of a JSON error body, as the backend sends it.
+ * Unlike `getApiErrorMessage` it applies no 5xx rule and no fallback: use it
+ * to compare the server text with a known one, never to show it unchecked.
+ * @param err - Anything that was thrown
+ * @returns The text, or null when the error has no JSON body with a string `error`
+ */
+export function errorTextOf(err: unknown): string | null {
+  const data: unknown = isAxiosError(err) ? err.response?.data : undefined;
+  if (data && typeof data === 'object') {
+    const text = (data as { error?: unknown }).error;
+    if (typeof text === 'string') return text;
+  }
+  return null;
+}
