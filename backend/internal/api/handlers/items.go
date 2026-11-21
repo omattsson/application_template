@@ -101,7 +101,7 @@ func (h *Handler) CreateItem(c *gin.Context) {
 
 // GetItems godoc
 // @Summary Get all items
-// @Description Get a list of all items. Sort with sort and order; without them the order is id ascending. Rows with an equal sort value are ordered by id in the same direction, so pages never repeat or skip a row.
+// @Description Get a list of all items. Sort with sort and order; without them the order is id ascending. Rows with an equal sort value are ordered by id in the same direction, so pages never repeat or skip a row. The X-Total-Count header holds the number of items that match the filter, ignoring limit and offset; the body is a plain array.
 // @Tags items
 // @Produce json
 // @Param limit query int false "Page size (omit for all items)"
@@ -113,6 +113,7 @@ func (h *Handler) CreateItem(c *gin.Context) {
 // @Param sort query string false "Sort key (default id)" Enums(id, name, price, created_at, updated_at)
 // @Param order query string false "Sort direction (default asc)" Enums(asc, desc)
 // @Success 200 {array} models.Item
+// @Header 200 {integer} X-Total-Count "Number of items that match the filter, ignoring limit and offset"
 // @Failure 400 {object} map[string]string
 // @Failure 499 {object} map[string]string "Client closed request"
 // @Failure 500 {object} map[string]string
@@ -156,14 +157,17 @@ func (h *Handler) GetItems(c *gin.Context) {
 	}
 
 	var items []models.Item
-	// The total is not part of the response (a plain array); ListPaged counts
-	// the matching rows for callers that page.
-	if _, err := h.repository.ListPaged(c.Request.Context(), &items, limit, offset, filter); err != nil {
+	// The body stays a plain array. ListPaged counts every row that matches the
+	// filter (limit and offset do not apply), and the count goes in a header
+	// that CORS exposes, so a pager can show the number of pages.
+	total, err := h.repository.ListPaged(c.Request.Context(), &items, limit, offset, filter)
+	if err != nil {
 		status, message := handleDBError(err)
 		c.JSON(status, gin.H{"error": message})
 		return
 	}
 
+	c.Header(middleware.TotalCountHeader, strconv.FormatInt(total, 10))
 	c.JSON(http.StatusOK, items)
 }
 

@@ -104,6 +104,8 @@ The DSN sets `sql_mode`, `time_zone` (UTC) and `foreign_key_checks` as driver pa
 | `LOG_FILE` | empty | Read but not used: logs go to stderr. |
 | `CORS_ALLOWED_ORIGINS` | `*` | `*` or a comma-separated list. `*` is for development only. It also gates the WebSocket `Origin` header. The other `CORS_*` names in old files are not read: methods and headers are fixed in `middleware.CORS`. |
 
+CORS always exposes `X-Total-Count` to browser scripts: `GET /api/v1/items` sends the number of items that match the filter (ignoring `limit` and `offset`) in that header and keeps a plain array as the body. With `IDEMPOTENCY_ENABLED=true` the same `Access-Control-Expose-Headers` value also lists `Idempotency-Replayed` and `Retry-After`.
+
 ### Telemetry
 
 Off by default. With both switches off nothing is created (no exporter, goroutine or handler) and requests do no extra work. Details: "Telemetry" below.
@@ -417,7 +419,7 @@ With `IDEMPOTENCY_ENABLED=true` a `POST` on `/api/v1` is safe to retry. A client
 - A replay returns the status, `Content-Type` and body only. Other headers that a handler set (for example `Location` or `Cache-Control`) are not stored.
 - The claim, the store of the response and the release run on a detached context with a deadline (`ctxutil.Detach`), never the request context. A failing claim answers 500 `Internal server error` and never runs the handler unprotected; a failing store of the response is logged (once per minute at Error) and the response is sent anyway, and the key then times out like a crashed one.
 - `POST /api/v1/auth/*` and `POST /api/v1/api-keys` are never touched: a replayed login would replay tokens, and the response of an API key create holds the raw key, which is shown once and never stored.
-- CORS (only with the module on): `Idempotency-Key` is an allowed request header, `Idempotency-Replayed` and `Retry-After` are exposed to browser scripts.
+- CORS (only with the module on): `Idempotency-Key` is an allowed request header, `Idempotency-Replayed` and `Retry-After` are exposed to browser scripts (next to `X-Total-Count`, which is always exposed).
 
 **Several replicas.** MySQL is the arbiter, no state is kept in a process: a claim is one insert on the primary key, a takeover one conditional `UPDATE`, and every time (`locked_at`, `expires_at`) is written and compared with the database clock (`UTC_TIMESTAMP(3)`). Any replica answers a replay or a 409 for a key that another replica runs.
 

@@ -14,7 +14,7 @@ The frontend lives in `frontend/`: Vite, React 19, MUI v9, react-router-dom v7, 
 - **Session**: `src/api/session.ts` holds the auth mode and the in-memory access token (never in storage or a cookie) and announces tokens and logouts to the other tabs. `src/api/refresh.ts` refreshes once per tab and once across tabs (Web Lock plus `BroadcastChannel`), never aborts a refresh request and does not retry on its own failure.
 - **Contexts**: `UIConfigContext` (title and auth flags from `GET /api/v1/ui-config`, public in every mode), `AuthContext` (session restore with `POST /auth/refresh`, login, logout, role), `WebSocketContext` (one socket that follows the session: a new socket for each new access token), `ThemeContext` (light and dark).
 - **Auth off**: with `AUTH_ENABLED=false` the UI shows no login, no Users page and no role checks; `ProtectedRoute` renders the page directly.
-- **WebSocket**: pages subscribe to message types through `useWebSocketContext().subscribe(type, handler)`, for example `item.created`. The Items page re-fetches on `item.*` messages.
+- **WebSocket**: pages subscribe to message types through `useWebSocketContext().subscribe(type, handler)`, for example `item.created`. The Items page re-fetches its current page (with the sort and the name filter) on `item.*` messages. Its page, size, sort, order and filter are the URL query (`page`, `size`, `sort`, `order`, `q`), so a reload keeps them.
 - **Styling**: the MUI theme is in `src/theme/` (palette, typography, component overrides). Use theme tokens, never fixed colours.
 
 ## Component Patterns

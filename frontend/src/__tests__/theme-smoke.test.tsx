@@ -15,7 +15,7 @@ vi.mock('../api/client', () => ({
     checkReadiness: vi.fn().mockReturnValue(new Promise(() => {})),
   },
   itemService: {
-    list: vi.fn().mockResolvedValue([]),
+    list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   },
   // Auth off (the backend default).
   uiConfigService: {
