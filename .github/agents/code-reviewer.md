@@ -88,7 +88,7 @@ When reviewing code:
 
 #### Patterns
 - [ ] MUI components only; `sx` prop for styling; functional components
-- [ ] Page in `pages/{Name}/index.tsx`; route in `routes.tsx`; nav in `Layout`
+- [ ] Page in `pages/{Name}/index.tsx`; route in `routes.tsx`; entry in `NAV_ITEMS` (`Layout/navItems.ts`)
 - [ ] Service object in `api/client.ts` with `try/catch` + `console.error`
 - [ ] Interfaces for all props, state, API responses — no `any`
 

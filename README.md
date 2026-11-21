@@ -260,8 +260,8 @@ Details, including the session and revocation design: [docs/claude/auth-sessions
 
 3. **Change the title.** The product name is in several places:
    - `APP_TITLE` (backend): the title that the web UI reads from `GET /api/v1/ui-config` (the login page shows it). The default is `Application Template`.
-   - `frontend/index.html` (`<title>`), `frontend/src/components/Layout/index.tsx` (app bar and footer) and `frontend/src/pages/Home/index.tsx`.
-   - The tests and e2e specs that assert those texts (search for `Full Stack App` and `Full Stack Application`), `frontend/package.json` (`name`) and this README and `WIKI.md`.
+   - `frontend/index.html` (`<title>`, shown until the config is read). The app bar, the footer, the document title and the Home heading follow `APP_TITLE`.
+   - The e2e specs that assert the default title (search for `Application Template` in `frontend/e2e`), `frontend/package.json` (`name`) and this README and `WIKI.md`.
    - `@title` in `backend/api/main.go` (then `make docs`), `APP_NAME` in `docker-compose.yml`.
    - `.github/CODEOWNERS`, `.github/SECURITY.md` and `.github/CODE_OF_CONDUCT.md` name contacts that must become yours.
 4. **Set the secrets.** For Compose, create a `.env` file next to `docker-compose.yml`; for a backend on the host, copy `backend/config/.env.example` (the same file with `DB_HOST=localhost`) to `backend/.env` (neither is committed). Set your own values:

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import App from '../App';
 
 // Prevent WebSocketProvider from opening a real connection in jsdom
@@ -34,17 +34,20 @@ vi.mock('../api/client', () => ({
 describe('App', () => {
   it('renders the layout with navigation', async () => {
     render(<App />);
-    expect(screen.getByText('Full Stack App')).toBeInTheDocument();
+    // The title shows once the UI config is loaded (empty while loading, no flash of the fallback).
+    expect(await screen.findByText('Application Template')).toBeInTheDocument();
     // The links show once the UI config is loaded (hidden while loading, no flicker).
-    expect(await screen.findByRole('link', { name: /home/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /health/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /items/i })).toBeInTheDocument();
+    // Home lists Health and Items as well, so look in the app bar.
+    const bar = within(screen.getByRole('banner'));
+    expect(await bar.findByRole('link', { name: /home/i })).toBeInTheDocument();
+    expect(bar.getByRole('link', { name: /health/i })).toBeInTheDocument();
+    expect(bar.getByRole('link', { name: /items/i })).toBeInTheDocument();
   });
 
   it('renders the Home page by default', async () => {
     render(<App />);
     expect(
-      await screen.findByRole('heading', { name: /welcome to the full stack application/i })
+      await screen.findByRole('heading', { name: /welcome to application template/i })
     ).toBeInTheDocument();
   });
 });

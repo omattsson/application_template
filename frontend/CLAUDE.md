@@ -7,7 +7,7 @@ The frontend lives in `frontend/`: Vite, React 19, MUI v9, react-router-dom v7, 
 ## Architecture
 
 - **Entry**: `src/main.tsx`, then `App.tsx` (providers: theme, UI config, auth, WebSocket; the `Layout`), then `routes.tsx`.
-- **Routing**: `react-router-dom` with `<Routes>` and `<Route>` in `src/routes.tsx`. Every page except `/login`, `/auth/callback` and the 404 is wrapped in `ProtectedRoute`. A new page goes in `routes.tsx` and gets a navigation button in `components/Layout/index.tsx`.
+- **Routing**: `react-router-dom` with `<Routes>` and `<Route>` in `src/routes.tsx`. Every page except `/login`, `/auth/callback` and the 404 is wrapped in `ProtectedRoute`. A new page goes in `routes.tsx` and gets an entry in `NAV_ITEMS` (`components/Layout/navItems.ts`).
 - **API config**: `src/api/config.ts` sets `API_BASE_URL = '/api'`. The browser always calls the web UI origin: the Vite dev server and the bundled nginx forward `/api/*` (one `/api` is stripped) and `/ws` to the backend, so a request to `/api/api/v1/items` reaches the backend as `/api/v1/items`. Never hard-code the backend port in the SPA: the httpOnly refresh cookie is `SameSite=Strict` and only goes to the origin of the page.
 - **API client**: `src/api/client.ts` has the Axios instance and the service objects (`itemService`, `authService`, `userService`, `apiKeyService`, `uiConfigService`, `healthService`). Requests carry the bearer token; a 401 triggers one refresh and one retry.
 - **Password reset**: `passwordResetService` (`/forgot-password`, `/reset-password`, registered only with `password_reset_enabled` and no session) uses `unauthenticatedApi`: no bearer header, no cookie, no 401 refresh. The token is read from the URL fragment and removed from the address at once; it is never stored or logged.
@@ -17,6 +17,7 @@ The frontend lives in `frontend/`: Vite, React 19, MUI v9, react-router-dom v7, 
 - **Audit log page**: `pages/Admin/AuditLogs` at `/admin/audit-logs` (`auditLogService.list`: offset paging, filters on action, entity type, user ID and a date range) is registered only with `auth_enabled` and wrapped in `ProtectedRoute roles={['admin']}`; the Layout shows its "Audit log" button only to an admin. The filter lists are copies of the backend's known lists (`options.ts`). Details are shown as text only, behind a per-row toggle. The page reads only; the API checks the role.
 - **Session**: `src/api/session.ts` holds the auth mode and the in-memory access token (never in storage or a cookie) and announces tokens and logouts to the other tabs. `src/api/refresh.ts` refreshes once per tab and once across tabs (Web Lock plus `BroadcastChannel`), never aborts a refresh request and does not retry on its own failure.
 - **Contexts**: `UIConfigContext` (title and auth flags from `GET /api/v1/ui-config`, public in every mode), `AuthContext` (session restore with `POST /auth/refresh`, login, logout, role), `WebSocketContext` (one socket that follows the session: a new socket for each new access token), `ThemeContext` (light and dark).
+- **Layout and Home**: `Layout` shows `config.title` from `UIConfigContext` in the app bar and the footer and sets `document.title` (nothing while the config loads, so the fallback name does not flash). Below the `sm` breakpoint (`useMediaQuery`) the navigation links and the account items (user name, API keys, Log out) move into a temporary `Drawer` opened by the "Open navigation menu" button; the theme toggle stays in the app bar. `NAV_ITEMS` and `useNavItems()` (`components/Layout/navItems.ts`) hold the links and their visibility rules once, for the app bar, the drawer and the Home page ("Where to start"). A test of the narrow case mocks `window.matchMedia` (JSDOM has none).
 - **Auth off**: with `AUTH_ENABLED=false` the UI shows no login, no Users page and no role checks; `ProtectedRoute` renders the page directly.
 - **WebSocket**: pages subscribe to message types through `useWebSocketContext().subscribe(type, handler)`, for example `item.created`. The Items page re-fetches its current page (with the sort and the name filter) on `item.*` messages. Its page, size, sort, order and filter are the URL query (`page`, `size`, `sort`, `order`, `q`), so a reload keeps them.
 - **Styling**: the MUI theme is in `src/theme/` (palette, typography, component overrides). Use theme tokens, never fixed colours.
@@ -33,7 +34,7 @@ The frontend lives in `frontend/`: Vite, React 19, MUI v9, react-router-dom v7, 
 
 ## Role-Based UI
 
-`<ProtectedRoute roles={['admin']}>` shows "Access denied" to a signed-in user without the role, and the Layout hides the navigation entry. Both are hints only: the API checks the role itself. Do not rely on the UI for access control.
+`<ProtectedRoute roles={['admin']}>` shows "Access denied" to a signed-in user without the role, and `useNavItems` hides the navigation entry. Both are hints only: the API checks the role itself. Do not rely on the UI for access control.
 
 ## Page Pattern
 

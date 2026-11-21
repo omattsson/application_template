@@ -148,7 +148,7 @@ Add godoc comments above each handler. Then run: `cd backend && make docs`
 - Service methods in `frontend/src/api/client.ts`
 - New page in `frontend/src/pages/{Name}/index.tsx`
 - Register in `frontend/src/routes.tsx`
-- Add nav link in `frontend/src/components/Layout/index.tsx`
+- Add a nav entry to `NAV_ITEMS` in `frontend/src/components/Layout/navItems.ts`
 
 ## Critical Rules
 
