@@ -616,6 +616,97 @@ export const apiKeyService = {
   },
 };
 
+/**
+ * One audit entry (GET /api/v1/audit-logs). The server writes `details` as JSON
+ * text (method, route, status, client IP, request ID and small values). The UI
+ * shows it as text only, never as HTML.
+ */
+export interface AuditLog {
+  id: string;
+  /** RFC3339 time of the change. */
+  timestamp: string;
+  user_id: string;
+  username: string;
+  /** Lower case word, for example `create` or `change_role`. */
+  action: string;
+  /** Lower case word, for example `item`, `user` or `api_key`. */
+  entity_type: string;
+  entity_id: string;
+  /** JSON text of the entry, or the raw text when it is not JSON. */
+  details: string;
+}
+
+/** Query of the audit log list. Every field is optional; an unset field is not sent. */
+export interface AuditLogListParams {
+  /** Rows per page (the server default is 25, the maximum 100). */
+  limit?: number;
+  /**
+   * Rows to skip. The server clamps an offset above 100000 to 100000 and answers
+   * that clamped offset (with the rows of that page), not an error.
+   */
+  offset?: number;
+  /** Only entries with this action. */
+  action?: string;
+  /** Only entries of this entity type. */
+  entity_type?: string;
+  /** Only entries of this user ID (the server has no username filter). */
+  user_id?: string;
+  /** Start of the range, RFC3339 with a zone, inclusive. */
+  start_date?: string;
+  /** End of the range, RFC3339 with a zone, inclusive. */
+  end_date?: string;
+}
+
+/** One page of the audit log, newest first, with the exact total. */
+export interface AuditLogListResult {
+  data: AuditLog[];
+  /** Number of entries that match the filters (ignoring limit and offset). */
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** The query keys of the audit log list, in the order the request sends them. */
+const AUDIT_LOG_QUERY_KEYS: readonly (keyof AuditLogListParams)[] = [
+  'limit',
+  'offset',
+  'action',
+  'entity_type',
+  'user_id',
+  'start_date',
+  'end_date',
+];
+
+/**
+ * The audit log (an admin with a login session only: the API refuses everything
+ * else with 403). A request error is logged as a summary.
+ */
+export const auditLogService = {
+  /**
+   * List one page of audit entries, newest first, with optional filters.
+   * @param params - Paging and filters; a missing or empty field is not sent
+   * @returns The entries of the page, the total and the paging of the answer. The `offset` of the answer is the one the server read: a larger requested offset comes back clamped to 100000
+   * @throws The request error: 400 (a filter or the range is invalid), 403, 401, network
+   * @see GET /api/v1/audit-logs
+   */
+  list: async (params: AuditLogListParams = {}): Promise<AuditLogListResult> => {
+    try {
+      const query = new URLSearchParams();
+      for (const key of AUDIT_LOG_QUERY_KEYS) {
+        const value = params[key];
+        if (value !== undefined && value !== '') query.set(key, String(value));
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : '';
+      const response = await api.get<AuditLogListResult & { next_cursor?: string }>(`/api/v1/audit-logs${suffix}`);
+      const { data, total, limit, offset } = response.data;
+      return { data, total, limit, offset };
+    } catch (error) {
+      console.error('Failed to list audit logs:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+};
+
 /** Check the shape of a UI config answer. */
 function isUIConfig(value: unknown): value is UIConfig {
   if (!value || typeof value !== 'object') return false;

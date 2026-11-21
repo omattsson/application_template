@@ -56,6 +56,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                   Users
                 </Button>
               )}
+              {showUsers && (
+                <Button color="inherit" component={RouterLink} to="/admin/audit-logs">
+                  Audit log
+                </Button>
+              )}
             </>
           )}
           <Tooltip title={toggleLabel}>

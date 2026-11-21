@@ -11,6 +11,7 @@ import type { DecisionInput } from './skipDecision';
 // - Login: only exists with auth on (with auth off it redirects home).
 // - Admin Users: needs auth on and the local administrator.
 // - Account API keys and Account: need auth on and the local administrator (a signed-in user).
+// - Admin audit log: needs auth on and the local administrator (an admin).
 // - Forgot password and Reset password: need auth on and PASSWORD_RESET_ENABLED.
 //
 // A page that did not load must not pass: before axe runs, each test checks the
@@ -56,6 +57,12 @@ const PAGES: PageCase[] = [
   {
     name: 'account api keys',
     spec: { path: '/account/api-keys', heading: 'API keys' },
+    needs: { needsAuth: true, needsSignIn: true, signInWhenAuthOn: true },
+  },
+  // The audit log: exists only with auth on, and needs an admin sign-in.
+  {
+    name: 'admin audit logs',
+    spec: { path: '/admin/audit-logs', heading: 'Audit log' },
     needs: { needsAuth: true, needsSignIn: true, signInWhenAuthOn: true },
   },
   // The signed-in user's account (profile and password change): auth on, local sign-in on, signed in.

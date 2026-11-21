@@ -86,7 +86,7 @@ frontend/
 │   ├── context/               # AuthContext, UIConfigContext, WebSocketContext, ThemeContext
 │   ├── hooks/                 # useWebSocket, useUnsavedChanges
 │   ├── components/            # Layout, ProtectedRoute, ErrorBoundary, ConfirmDialog, EmptyState, LoadingState
-│   ├── pages/                 # Home, Health, Items, Login, AuthCallback, ForgotPassword, ResetPassword, Admin/Users, Account/Profile, Account/ApiKeys, NotFound (one directory each)
+│   ├── pages/                 # Home, Health, Items, Login, AuthCallback, ForgotPassword, ResetPassword, Admin/Users, Admin/AuditLogs, Account/Profile, Account/ApiKeys, NotFound (one directory each)
 │   ├── theme/                 # MUI theme: palette, typography, component overrides
 │   ├── utils/                 # jwt, apiError, retryAfter, passwordReset, passwordChange, returnPath, navigation
 │   └── test/                  # Test harness and setup

@@ -33,6 +33,7 @@ vi.mock('../pages/Home', () => ({ default: () => <h1>Home page</h1> }));
 vi.mock('../pages/Health', () => ({ default: () => <h1>Health page</h1> }));
 vi.mock('../pages/Admin/Users', () => ({ default: () => <h1>Admin users page</h1> }));
 vi.mock('../pages/Account/ApiKeys', () => ({ default: () => <h1>API keys page</h1> }));
+vi.mock('../pages/Admin/AuditLogs', () => ({ default: () => <h1>Audit log page</h1> }));
 vi.mock('../pages/Account/Profile', () => ({ default: () => <h1>Account page</h1> }));
 const itemsState = { shouldThrow: false };
 vi.mock('../pages/Items', () => ({
@@ -210,6 +211,47 @@ describe('AppRoutes', () => {
       vi.mocked(useUIConfig).mockReturnValue({ config: uiConfig({ auth_enabled: false, local_auth_enabled: false }).config, loading: true });
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: false, isLoading: true }));
       renderAt('/account');
+      expect(screen.getByRole('status')).toBeInTheDocument();
+      expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('/admin/audit-logs', () => {
+    const ALICE_ADMIN = { id: 'u1', username: 'alice', display_name: 'Alice', role: 'admin' as const };
+
+    it('renders for an admin when auth is enabled', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: ALICE_ADMIN, role: 'admin' }));
+      renderAt('/admin/audit-logs');
+      expect(screen.getByRole('heading', { name: 'Audit log page' })).toBeInTheDocument();
+    });
+
+    it.each(['user', 'devops'] as const)('shows Access denied (no redirect) to the role %s', (role) => {
+      vi.mocked(useAuth).mockReturnValue(
+        authState({ authEnabled: true, isAuthenticated: true, user: { ...ALICE_ADMIN, role }, role }),
+      );
+      renderAt('/admin/audit-logs');
+      expect(screen.getByRole('heading', { name: 'Access denied' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Audit log page' })).not.toBeInTheDocument();
+    });
+
+    it('sends an anonymous visitor to the login page', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
+      renderAt('/admin/audit-logs');
+      expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Audit log page' })).not.toBeInTheDocument();
+    });
+
+    it('has no route with auth off (NotFound)', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: false }));
+      renderAt('/admin/audit-logs');
+      expect(screen.getByText('Page not found')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Audit log page' })).not.toBeInTheDocument();
+    });
+
+    it('shows the loading state while the session loads, not NotFound', () => {
+      vi.mocked(useUIConfig).mockReturnValue({ config: uiConfig().config, loading: true });
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isLoading: true }));
+      renderAt('/admin/audit-logs');
       expect(screen.getByRole('status')).toBeInTheDocument();
       expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
     });
