@@ -24,7 +24,7 @@ You are a senior DevOps engineer. You own the Dockerfiles, `docker-compose.yml`,
 - **Backend Dockerfile stages**: `development` (`air`, `golang:1.27.4`), `build-prod` (static binary), `production` (`alpine`, non-root uid 65532, the binary only). CI reads the Go version from `backend/go.mod`, and `scripts/check-dockerfiles.sh` checks that the images match it.
 - **Frontend Dockerfile stages**: `build`, `development` (Vite dev server on `:3000`), `production` (`nginx-unprivileged`, uid 101, `:8080`). Both the Vite dev server and `frontend/nginx.conf` forward `/api/*` (one `/api` stripped) and `/ws` to `backend:8081`. The browser always calls the web UI origin.
 - **Ports**: the backend listens on `SERVER_PORT` (8081). Host ports: `BACKEND_PORT`, `FRONTEND_PORT`, `MYSQL_PORT`.
-- **Shutdown**: `stop_grace_period: 170s` in `docker-compose.yml` must stay longer than the worst case of the ordered shutdown (about five times `SERVER_SHUTDOWN_TIMEOUT` plus 6 s: 156 s by default).
+- **Shutdown**: `stop_grace_period: 170s` in `docker-compose.yml` must stay longer than the worst case of the ordered shutdown (about five times `SERVER_SHUTDOWN_TIMEOUT` plus 13 s: 163 s by default).
 - **Trusted proxy**: `TRUSTED_PROXIES` is set to the fixed frontend address (`FRONTEND_PROXY_IP`). Never trust all proxies.
 - **Workflows** (`.github/workflows/`): `pull-request.yml` (repository checks, backend, frontend, Markdown lint), `pr-title.yml` (conventional PR title), `docker-build.yml` (both production images, not pushed), `security-scan.yml` (Trivy), `codeql.yml`, `e2e.yml` (Playwright, three passes).
 

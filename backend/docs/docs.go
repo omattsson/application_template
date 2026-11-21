@@ -1779,6 +1779,132 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/jobs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns one page of jobs of the queue (optional module, JOBS_ENABLED=true; the route does not exist otherwise), newest first unless sort and order say otherwise. Rows with an equal sort value are ordered by id in the same direction, so pages never repeat or skip a row. Never the payload: a job shows its type, status, attempts, schedule, the worker that holds it and the text of the last error. Admin only with AUTH_ENABLED=true. A read: no audit entry.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "List background jobs",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 25, at most 100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Rows to skip (default 0, at most 100000)",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "pending",
+                            "running",
+                            "succeeded",
+                            "dead"
+                        ],
+                        "type": "string",
+                        "description": "Status",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Job type (exact, at most 100 characters)",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "created_at",
+                            "run_at",
+                            "id"
+                        ],
+                        "type": "string",
+                        "description": "Sort key (default id)",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "asc",
+                            "desc"
+                        ],
+                        "type": "string",
+                        "description": "Sort direction (default desc)",
+                        "name": "order",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.JobListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required (AUTH_ENABLED=true)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "499": {
+                        "description": "Client closed request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/ping": {
             "get": {
                 "security": [
@@ -2900,6 +3026,26 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.JobListResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.Job"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "handlers.LoginRequest": {
             "type": "object",
             "required": [
@@ -3191,6 +3337,57 @@ const docTemplate = `{
                 "version": {
                     "description": "For optimistic locking (1 = initial; 0 = not provided)",
                     "type": "integer"
+                }
+            }
+        },
+        "models.Job": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "description": "Attempts is the number of claims: a crash of a worker counts.",
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "description": "FinishedAt is set when the job became succeeded or dead.",
+                    "type": "string"
+                },
+                "id": {
+                    "description": "ID is the auto increment key.",
+                    "type": "integer"
+                },
+                "last_error": {
+                    "description": "LastError is the error text of the last failed attempt, cut to\nJobLastErrorMaxChars characters.",
+                    "type": "string"
+                },
+                "locked_by": {
+                    "description": "LockedBy is the worker (replica ID and worker number) that holds the\nlease. Empty when the job is not running.",
+                    "type": "string"
+                },
+                "locked_until": {
+                    "description": "LockedUntil is the end of the lease of a running job.",
+                    "type": "string"
+                },
+                "max_attempts": {
+                    "description": "MaxAttempts is the number of claims after which a failing job is dead.",
+                    "type": "integer"
+                },
+                "run_at": {
+                    "description": "RunAt is when the job is due.",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is one of JobStatuses.",
+                    "type": "string"
+                },
+                "type": {
+                    "description": "Type is the registered handler name.",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
                 }
             }
         },

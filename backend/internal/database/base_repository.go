@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 
 	"backend/internal/models"
 
@@ -46,6 +47,19 @@ func (b *BaseRepository) Tx(ctx context.Context, fn func(tx *gorm.DB) error) err
 	}
 	return models.RetryOnLock(ctx, func() error {
 		return b.DB.WithContext(ctx).Transaction(fn)
+	})
+}
+
+// TxOpts is Tx with transaction options (for example an isolation level for
+// one transaction). A nested call runs in a SAVEPOINT and ignores opts: the
+// outer transaction keeps its own level. Every attempt of a retry begins with
+// opts again.
+func (b *BaseRepository) TxOpts(ctx context.Context, opts *sql.TxOptions, fn func(tx *gorm.DB) error) error {
+	if inTransaction(b.DB) {
+		return b.DB.WithContext(ctx).Transaction(fn)
+	}
+	return models.RetryOnLock(ctx, func() error {
+		return b.DB.WithContext(ctx).Transaction(fn, opts)
 	})
 }
 

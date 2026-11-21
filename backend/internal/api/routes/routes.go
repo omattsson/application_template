@@ -14,6 +14,7 @@ import (
 	"backend/internal/config"
 	"backend/internal/health"
 	"backend/internal/inflight"
+	"backend/internal/jobs"
 	"backend/internal/mail"
 	"backend/internal/models"
 	"backend/internal/sessionstore"
@@ -41,6 +42,11 @@ var ErrIdempotencyDepsMissing = errors.New("idempotency is enabled but its repos
 // The module is never silently skipped: the web UI offers "Forgot password?"
 // on the strength of it.
 var ErrPasswordResetDepsMissing = errors.New("password reset is enabled but a dependency or setting is missing")
+
+// ErrJobsDepsMissing is returned by Setup when JOBS_ENABLED is true and the job
+// repository is missing. The module is never silently skipped: a feature that
+// enqueues a job relies on the queue being served.
+var ErrJobsDepsMissing = errors.New("jobs are enabled but the job repository is missing")
 
 // passwordResetSendMargin is added to SMTP_TIMEOUT for the bound of one mail
 // send of the password reset (the mailer enforces SMTP_TIMEOUT itself).
@@ -134,6 +140,14 @@ type Deps struct {
 	// PasswordReset is required when Config.PasswordReset.Enabled and ignored
 	// otherwise.
 	PasswordReset *PasswordResetDeps
+	// Jobs is the job repository; required when Config.Jobs.Enabled and ignored
+	// otherwise. It serves GET /api/v1/jobs.
+	Jobs models.JobRepository
+	// JobQueue enqueues jobs. It is for the handler of a feature that starts a
+	// background job: pass it to that handler's constructor in Setup. Nil with
+	// the module off (Enqueue then returns jobs.ErrDisabled). No template
+	// handler uses it.
+	JobQueue *jobs.Queue
 }
 
 // Result is what Setup built and what the caller must stop.
@@ -169,6 +183,9 @@ func checkDeps(deps Deps) error {
 		if ic.TTL <= 0 || ic.LockTimeout <= 0 {
 			return fmt.Errorf("%w: the TTL and the lock timeout must be positive", ErrIdempotencyDepsMissing)
 		}
+	}
+	if deps.Config.Jobs.Enabled && isNil(deps.Jobs) {
+		return fmt.Errorf("%w: no repository", ErrJobsDepsMissing)
 	}
 	if err := checkPasswordResetDeps(deps); err != nil {
 		return err
@@ -399,6 +416,18 @@ func Setup(router *gin.Engine, deps Deps) (*Result, error) {
 		items.POST("", itemsHandler.CreateItem)
 		items.PUT("/:id", itemsHandler.UpdateItem)
 		items.DELETE("/:id", itemsHandler.DeleteItem)
+	}
+
+	// The job list (optional module, off by default: the route does not exist
+	// without it). A read, so no audit entry. With auth on only an admin may
+	// read it: the list shows error texts of the jobs.
+	if cfg.Jobs.Enabled {
+		jobList := handlers.NewJobHandler(deps.Jobs).ListJobs
+		if a != nil {
+			api.GET("/jobs", middleware.RequireAdmin(), jobList)
+		} else {
+			api.GET("/jobs", jobList)
+		}
 	}
 
 	return result, nil

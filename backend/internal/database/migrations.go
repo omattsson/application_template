@@ -91,6 +91,7 @@ func registerMigrations(migrator *schema.Migrator) {
 	migrator.AddMigration(createIdempotencyKeysMigration())
 	migrator.AddMigration(createOutboxEventsMigration())
 	migrator.AddMigration(createPasswordResetTokensMigration())
+	migrator.AddMigration(createJobsMigration())
 }
 
 // legacyUser is the users table of migrations 20231201000001 and
@@ -605,6 +606,48 @@ func createPasswordResetTokensMigration() schema.Migration {
 		},
 		Down: func(tx *gorm.DB) error {
 			return dropTables(tx, "password_reset_tokens")
+		},
+	}
+}
+
+// jobV1 is jobs as 20261121000001 creates it, a frozen copy of models.Job: a
+// model change needs a new migration (TestJobsMatchModel fails without one).
+type jobV1 struct {
+	RunAt       time.Time  `gorm:"type:datetime(6);not null;index:idx_jobs_claim,priority:2;index:idx_jobs_run_at"`
+	CreatedAt   time.Time  `gorm:"type:datetime(6);not null;index:idx_jobs_created_at"`
+	UpdatedAt   time.Time  `gorm:"type:datetime(6);not null"`
+	LockedUntil *time.Time `gorm:"type:datetime(6)"`
+	FinishedAt  *time.Time `gorm:"type:datetime(6);index:idx_jobs_finished,priority:2"`
+	Payload     string     `gorm:"type:longtext;not null"`
+	Type        string     `gorm:"size:100;not null;index:idx_jobs_type_status,priority:1"`
+	Status      string     `gorm:"size:16;not null;index:idx_jobs_claim,priority:1;index:idx_jobs_finished,priority:1;index:idx_jobs_type_status,priority:2"`
+	LockedBy    string     `gorm:"size:260;not null;default:''"`
+	LastError   string     `gorm:"size:2000;not null;default:''"`
+	ID          uint64     `gorm:"primaryKey;autoIncrement;index:idx_jobs_claim,priority:3"`
+	Attempts    int32      `gorm:"type:int;not null;default:0"`
+	MaxAttempts int32      `gorm:"type:int;not null;default:5"`
+}
+
+func (jobV1) TableName() string { return "jobs" }
+
+// createJobsMigration creates jobs, the queue of the optional job module
+// (JOBS_ENABLED=true). The id is an auto increment; every time column is
+// DATETIME(6), written only with the database clock (UTC_TIMESTAMP(6)). The
+// indexes serve the claim (status, run_at, id), the janitor (status,
+// finished_at) and the admin list (created_at, run_at, and type with status).
+// The table exists whether or not the module is on, so the switch never needs
+// a migration; nothing reads it while the module is off. Both directions are
+// idempotent.
+func createJobsMigration() schema.Migration {
+	return schema.Migration{
+		Version:     "20261121000001",
+		Name:        "create_jobs",
+		Description: "Create jobs for the optional background job queue",
+		Up: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&jobV1{})
+		},
+		Down: func(tx *gorm.DB) error {
+			return dropTables(tx, "jobs")
 		},
 	}
 }
