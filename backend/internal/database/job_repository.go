@@ -171,6 +171,17 @@ func (r *GORMJobRepository) selectClaimable(tx *gorm.DB, dialect, where string, 
 	return rows, jobLockSkip(q, dialect).Scan(&rows).Error
 }
 
+// jobClaimTxOptions is the transaction options of a claim: READ COMMITTED on
+// MySQL. SQLite (the unit tests) has no isolation levels to choose from and
+// runs one writer at a time, so it gets the default.
+func jobClaimTxOptions(dialect string) *sql.TxOptions {
+	if dialect != dialectMySQL {
+		return nil
+	}
+
+	return &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+}
+
 // Claim implements models.JobRepository.
 //
 // One transaction: the running rows whose lease passed come first (they are
@@ -180,6 +191,15 @@ func (r *GORMJobRepository) selectClaimable(tx *gorm.DB, dialect, where string, 
 // running. Then one UPDATE per claimed row sets the lease, its worker and
 // attempts + 1. The whole transaction runs again after a deadlock, so the
 // result is reset at its start.
+//
+// The transaction runs at READ COMMITTED. The type filter is not part of
+// idx_jobs_claim, so the scan reads rows of other types (a rolling deploy
+// leaves a backlog of a type this replica does not handle) and, for the
+// expired-lease select, may read old finished rows through idx_jobs_run_at.
+// At REPEATABLE READ InnoDB keeps record and gap locks on every row that the
+// scan passes until the commit, which blocks the SKIP LOCKED claims of other
+// replicas and the inserts of Enqueue. At READ COMMITTED a lock on a row that
+// the WHERE clause rejects is released at once and there are no gap locks.
 func (r *GORMJobRepository) Claim(ctx context.Context, workerIDs, types []string, lease time.Duration) (models.JobClaim, error) {
 	if len(workerIDs) == 0 || len(types) == 0 {
 		return models.JobClaim{}, nil
@@ -194,7 +214,7 @@ func (r *GORMJobRepository) Claim(ctx context.Context, workerIDs, types []string
 
 	var result models.JobClaim
 
-	err := r.Tx(ctx, func(tx *gorm.DB) error {
+	err := r.TxOpts(ctx, jobClaimTxOptions(dialect), func(tx *gorm.DB) error {
 		result = models.JobClaim{}
 
 		expired, err := r.selectClaimable(tx, dialect, "status = 'running' AND locked_until < "+now, types, len(workerIDs))

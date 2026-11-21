@@ -758,3 +758,13 @@ func TestPoolOneJobPerWorker(t *testing.T) {
 	assert.Equal(t, int32(1), started.Load())
 	close(release)
 }
+
+func TestCallTraceNamesTheCallers(t *testing.T) {
+	t.Parallel()
+
+	trace := func() string { return callTrace() }()
+
+	assert.Contains(t, trace, "TestCallTraceNamesTheCallers")
+	assert.Contains(t, trace, " <- ")
+	assert.NotContains(t, trace, "\n")
+}

@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
@@ -589,4 +590,13 @@ func TestJobTimeScanner(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestJobClaimTxOptions(t *testing.T) {
+	t.Parallel()
+
+	opts := jobClaimTxOptions(dialectMySQL)
+	require.NotNil(t, opts)
+	assert.Equal(t, sql.LevelReadCommitted, opts.Isolation)
+	assert.Nil(t, jobClaimTxOptions("sqlite"), "SQLite has no isolation level to choose")
 }

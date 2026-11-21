@@ -7,7 +7,8 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"runtime"
-	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -652,8 +653,36 @@ func (p *Pool) report(t task, outcome string, write func(ctx context.Context) (b
 // errPanicked marks the error of a handler that panicked.
 var errPanicked = errors.New(panicMessage)
 
-// invoke runs the handler and turns a panic into an error. The stack is
-// logged, the panic value only when it is a runtime error (an index or nil
+// traceFrames is the most frames of a logged call trace.
+const traceFrames = 32
+
+// callTrace returns the calls that lead to its caller, innermost first, as
+// "function:line" joined by " <- " (no file paths, no arguments).
+func callTrace() string {
+	pcs := make([]uintptr, traceFrames)
+	pcs = pcs[:runtime.Callers(2, pcs)]
+	frames := runtime.CallersFrames(pcs)
+
+	var sb strings.Builder
+
+	for {
+		frame, more := frames.Next()
+		if sb.Len() > 0 {
+			sb.WriteString(" <- ")
+		}
+
+		sb.WriteString(frame.Function + ":" + strconv.Itoa(frame.Line))
+
+		if !more {
+			break
+		}
+	}
+
+	return sb.String()
+}
+
+// invoke runs the handler and turns a panic into an error. The call trace
+// is logged, the panic value only when it is a runtime error (an index or nil
 // dereference); the payload is never logged.
 func (p *Pool) invoke(ctx context.Context, t task) (err error) {
 	defer func() {
@@ -662,7 +691,7 @@ func (p *Pool) invoke(ctx context.Context, t task) (err error) {
 			return
 		}
 
-		attrs := []any{"job_id", t.job.ID, "type", t.job.Type, "panic_type", fmt.Sprintf("%T", r), "stack", string(debug.Stack())}
+		attrs := []any{"job_id", t.job.ID, "type", t.job.Type, "panic_type", fmt.Sprintf("%T", r), "trace", callTrace()}
 		if re, ok := r.(runtime.Error); ok {
 			attrs = append(attrs, "panic", re.Error())
 		}

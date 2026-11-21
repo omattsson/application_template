@@ -628,3 +628,122 @@ func TestDatabaseJobsStatsCounts(t *testing.T) {
 	assert.Equal(t, int64(2), stats.Due, "the future job is not due")
 	assert.InDelta(t, 30, stats.OldestDueAge.Seconds(), 5)
 }
+
+// insertJobsAt inserts n due pending jobs of typ in one multi-row INSERT per
+// 500 rows. offsetSec is the run_at offset in database clock seconds; the
+// microsecond part grows with the row so that the run_at, id order is fixed.
+func insertJobsAt(t *testing.T, db *gorm.DB, typ string, n, offsetSec int) {
+	t.Helper()
+	for done := 0; done < n; {
+		batch := min(500, n-done)
+		var sb strings.Builder
+		args := make([]any, 0, batch*3)
+		sb.WriteString("INSERT INTO jobs (type, payload, status, attempts, max_attempts, run_at, locked_by, last_error, created_at, updated_at) VALUES ")
+		for i := 0; i < batch; i++ {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString("(?, '{}', 'pending', 0, 3, UTC_TIMESTAMP(6) + INTERVAL ? MICROSECOND, '', '', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))")
+			args = append(args, typ, int64(offsetSec)*1_000_000+int64(done+i))
+		}
+		require.NoError(t, db.Exec(sb.String(), args...).Error)
+		done += batch
+	}
+}
+
+// TestDatabaseJobsClaimScanLeavesForeignRowsUnlocked: a replica that scans a
+// large backlog of a type it does not handle holds no lock on those rows (the
+// type filter is not in idx_jobs_claim), so another replica still claims its
+// own type and Enqueue still inserts while that scan transaction is open. At
+// REPEATABLE READ the scan keeps record and gap locks: the other claim skips
+// the rows that were locked and returns nothing, and the insert waits.
+//
+// The open transaction is built from the claim's own parts (TxOpts with
+// jobClaimTxOptions), because Claim commits before it returns. Two scans: the
+// one of the claim (the planner picks its index; on this data it may use
+// idx_jobs_type_status) and the same query forced to idx_jobs_claim, the plan
+// that scans a foreign backlog. No assert has a time limit that decides the
+// outcome: each waits up to a generous deadline for a result.
+func TestDatabaseJobsClaimScanLeavesForeignRowsUnlocked(t *testing.T) {
+	const foreign, wanted = 5000, 3
+
+	tests := []struct {
+		scan func(r *GORMJobRepository, tx *gorm.DB, dialect string) (int, error)
+		name string
+	}{
+		{
+			name: "planner index",
+			scan: func(r *GORMJobRepository, tx *gorm.DB, dialect string) (int, error) {
+				rows, err := r.selectClaimable(tx, dialect, "status = 'pending' AND run_at <= "+jobNowSQL(dialect), []string{"it.none"}, 1)
+				return len(rows), err
+			},
+		},
+		{
+			name: "idx_jobs_claim",
+			scan: func(_ *GORMJobRepository, tx *gorm.DB, _ string) (int, error) {
+				var rows []jobClaimRow
+				err := tx.Raw("SELECT id, type, payload, attempts, max_attempts FROM jobs FORCE INDEX (idx_jobs_claim) " +
+					"WHERE status = 'pending' AND run_at <= UTC_TIMESTAMP(6) AND type IN ('it.none') " +
+					"ORDER BY run_at ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED").Scan(&rows).Error
+				return len(rows), err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			repo1, db := jobsTestRepo(t)
+			repo2 := NewGORMJobRepository(db)
+			ctx := context.Background()
+			// The foreign backlog is older than the wanted jobs, so a scan of a
+			// third type passes all of it and then the wanted rows too.
+			insertJobsAt(t, db, "it.foreign", foreign, -600)
+			insertJobsAt(t, db, "it.wanted", wanted, -300)
+
+			dialect := db.Dialector.Name()
+			scanned := make(chan int, 1)
+			release := make(chan struct{})
+			txDone := make(chan error, 1)
+			go func() {
+				txDone <- repo1.TxOpts(ctx, jobClaimTxOptions(dialect), func(tx *gorm.DB) error {
+					n, err := tt.scan(repo1, tx, dialect)
+					if err != nil {
+						return err
+					}
+					scanned <- n
+					select {
+					case <-release:
+					case <-time.After(90 * time.Second):
+					}
+					return nil
+				})
+			}()
+			// The scan transaction ends here, also after a failed require.
+			t.Cleanup(func() {
+				close(release)
+				assert.NoError(t, <-txDone)
+			})
+
+			select {
+			case n := <-scanned:
+				require.Zero(t, n, "no job of the unhandled type")
+			case <-time.After(60 * time.Second):
+				t.Fatal("the scan did not finish")
+			}
+
+			// Replica 2 claims its own type while the scan transaction is open.
+			claimCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			claim, err := repo2.Claim(claimCtx, []string{"w1", "w2", "w3", "w4"}, []string{"it.wanted"}, time.Minute)
+			require.NoError(t, err)
+			assert.Len(t, claim.Jobs, wanted, "the rows that the open scan passed are not locked")
+
+			// Enqueue inserts while the scan is open.
+			enqCtx, cancelEnq := context.WithTimeout(ctx, 30*time.Second)
+			defer cancelEnq()
+			_, err = repo2.Enqueue(enqCtx, jobSpec("it.late"))
+			assert.NoError(t, err, "Enqueue is not blocked by the open scan")
+		})
+	}
+}
