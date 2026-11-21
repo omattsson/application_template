@@ -457,6 +457,112 @@ export const passwordResetService = {
   },
 };
 
+/**
+ * An API key of the signed-in user, without its secret (GET /api/v1/api-keys).
+ * The API has no update: a key is created or deleted.
+ */
+export interface ApiKey {
+  id: string;
+  user_id: string;
+  /** The name that the user gave the key. */
+  name: string;
+  /** The first characters of the key, to tell keys apart. */
+  prefix: string;
+  created_at: string;
+  /** Null (or missing) when the key has never been used. */
+  last_used_at?: string | null;
+  /** Null (or missing) when the key does not expire. The API requires an expiry on create. */
+  expires_at?: string | null;
+}
+
+/** One page of the signed-in user's API keys, newest first (GET /api/v1/api-keys). `page` starts at 1. */
+export interface ApiKeyListResponse {
+  data: ApiKey[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** Body of POST /api/v1/api-keys. The server takes the expiry in days (at most its maximum, 365 by default). */
+export interface CreateApiKeyRequest {
+  /** Letters, digits, spaces and . _ - : @ / ( ) +, at most 100 characters. */
+  name: string;
+  /** Days from now until the key expires. */
+  expires_in_days: number;
+}
+
+/**
+ * Answer of POST /api/v1/api-keys. `raw_key` is the secret: the server returns it
+ * once and cannot show it again. The caller keeps it in component state only.
+ */
+export interface CreatedApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  /** The secret key (sk_ and 64 hex characters). Never log it, store it or put it in a URL. */
+  raw_key: string;
+  created_at: string;
+  expires_at?: string | null;
+}
+
+/**
+ * The signed-in user's API keys (a login session only: the API refuses a key
+ * with 403). The request errors are logged as a summary; the create answer is
+ * never logged, because it holds the raw key.
+ */
+export const apiKeyService = {
+  /**
+   * List one page of the signed-in user's keys, newest first.
+   * @param page - Page number, from 1
+   * @param pageSize - Keys per page (the server default is 25, the maximum 100)
+   * @returns The page and the total number of keys
+   * @see GET /api/v1/api-keys
+   */
+  list: async (page: number, pageSize: number): Promise<ApiKeyListResponse> => {
+    try {
+      const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      const response = await api.get<ApiKeyListResponse>(`/api/v1/api-keys?${query.toString()}`);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to list API keys:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+
+  /**
+   * Create a key for the signed-in user. The raw key is in the answer once.
+   * @param request - The name and the lifetime in days
+   * @returns The new key, with its raw secret (the caller shows it once)
+   * @throws The request error: 400 (name or expiry rule), 409 (25 active keys), 429, 413, network
+   * @see POST /api/v1/api-keys
+   */
+  create: async (request: CreateApiKeyRequest): Promise<CreatedApiKey> => {
+    try {
+      const response = await api.post<CreatedApiKey>('/api/v1/api-keys', request);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to create an API key:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+
+  /**
+   * Revoke a key of the signed-in user. The key stops working at once.
+   * @param id - Key ID
+   * @returns Nothing
+   * @throws The request error: 404 when the key does not exist (or is already revoked)
+   * @see DELETE /api/v1/api-keys/:id
+   */
+  delete: async (id: string): Promise<void> => {
+    try {
+      await api.delete(`/api/v1/api-keys/${encodeURIComponent(id)}`);
+    } catch (error) {
+      console.error('Failed to revoke an API key:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+};
+
 /** Check the shape of a UI config answer. */
 function isUIConfig(value: unknown): value is UIConfig {
   if (!value || typeof value !== 'object') return false;

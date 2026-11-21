@@ -156,6 +156,32 @@ describe('Layout', () => {
       });
     });
 
+    describe('API keys link', () => {
+      it('is shown to a signed-in user when auth is enabled, whatever the role', () => {
+        vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: ALICE, role: 'user' }));
+        renderLayout();
+        expect(screen.getByRole('link', { name: 'API keys' })).toHaveAttribute('href', '/account/api-keys');
+      });
+
+      it('is shown to an admin as well', () => {
+        vi.mocked(useAuth).mockReturnValue(
+          authState({ authEnabled: true, isAuthenticated: true, user: { ...ALICE, role: 'admin' }, role: 'admin' }),
+        );
+        renderLayout();
+        expect(screen.getByRole('link', { name: 'API keys' })).toBeInTheDocument();
+      });
+
+      it.each([
+        ['auth is disabled', { authEnabled: false, isAuthenticated: false, user: null, role: null }],
+        ['an anonymous visitor', { authEnabled: true, isAuthenticated: false, user: null, role: null }],
+        ['the session is still restored', { authEnabled: true, isLoading: true, isAuthenticated: true, user: ALICE, role: 'user' as const }],
+      ])('is hidden when %s', (_name, state) => {
+        vi.mocked(useAuth).mockReturnValue(authState(state));
+        renderLayout();
+        expect(screen.queryByRole('link', { name: 'API keys' })).not.toBeInTheDocument();
+      });
+    });
+
     it('Logout calls logout and goes to the login page', async () => {
       const logout = vi.fn().mockResolvedValue(undefined);
       vi.mocked(useAuth).mockReturnValue(
