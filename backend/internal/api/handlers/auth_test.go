@@ -960,7 +960,10 @@ func TestLoginAccentVariantsShareTheAccountThrottle(t *testing.T) {
 			for i := 0; i < loginFailureThreshold; i++ {
 				select {
 				case <-arrived:
-				case <-time.After(5 * time.Second):
+				// A deadlock guard only: a passing run never waits for it. A
+				// short bound failed on loaded runners, where the race detector
+				// and the parallel bcrypt tests stall the process for seconds.
+				case <-time.After(time.Minute):
 					close(release)
 					t.Fatal("held attempts did not arrive")
 				}
