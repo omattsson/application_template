@@ -64,7 +64,8 @@ Start independent steps in parallel (for example backend and frontend tests of d
 | frontend-developer | Pages, components, API services, routing, WebSocket, frontend tests |
 | devops-engineer | Docker, Compose, nginx, Makefile, CI/CD workflows |
 | qa-engineer | Test strategy, coverage gaps, integration and end-to-end tests |
-| code-reviewer | The review loop, security review |
+| code-reviewer | The review loop |
+| security-reviewer | Security review of a change to auth, sessions, tokens, roles, API keys, OIDC, MFA, password reset or the audit log |
 
 ## Implementation order (backend and frontend)
 
@@ -91,7 +92,7 @@ Confirm the change with the user in the spec step: it alters the auth model.
 1. go-api-developer: auth handler or middleware, session store, OIDC provider (`docs/claude/auth-sessions.md`).
 2. qa-engineer: all auth paths (login, refresh, OIDC callback, API key, disabled user), with auth on and off.
 3. frontend-developer: Login page, AuthCallback, AuthContext.
-4. The review loop focuses on security.
+4. The review loop focuses on security: the panel's B reviewer is a security-reviewer instead of a code-reviewer.
 
 ### Configuration, Docker, or CI change
 
