@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { AxiosHeaders } from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import { axiosConfig } from './config';
 import { authApi, CSRF_HEADERS, refreshAccessToken } from './refresh';
@@ -73,15 +73,65 @@ export interface Item {
   updated_at: string;
 }
 
+/** Columns that the items list can be sorted by (the API whitelist). */
+export type ItemSortKey = 'id' | 'name' | 'price' | 'created_at' | 'updated_at';
+
+/** Sort direction of the items list. */
+export type SortOrder = 'asc' | 'desc';
+
+/** Query of the items list. Every field is optional; a missing field is not sent. */
+export interface ItemListParams {
+  /** Rows per page. */
+  limit?: number;
+  /** Rows to skip. */
+  offset?: number;
+  /** Column to sort by. */
+  sort?: ItemSortKey;
+  /** Sort direction. */
+  order?: SortOrder;
+  /** Name filter: the items whose name contains this text. */
+  name?: string;
+}
+
+/** One page of the items list. */
+export interface ItemListResult {
+  /** Rows of the requested page. */
+  items: Item[];
+  /** Number of items that match the filter (ignoring limit and offset). */
+  total: number;
+}
+
+/**
+ * Read the total of the X-Total-Count header.
+ * @param value - The header value
+ * @returns The count, or null when the header is missing or is not a count
+ */
+function totalFromHeader(value: unknown): number | null {
+  const text = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+  return /^\d+$/.test(text) && Number.isSafeInteger(Number(text)) ? Number(text) : null;
+}
+
 export const itemService = {
-  list: async (limit?: number, offset?: number): Promise<Item[]> => {
+  /**
+   * List items, one page at a time, with an optional sort and name filter.
+   * @param params - Paging, sort and filter; every field is optional
+   * @returns The rows of the page and the total of the filtered list
+   * @see GET /api/v1/items
+   */
+  list: async (params: ItemListParams = {}): Promise<ItemListResult> => {
     try {
-      const params = new URLSearchParams();
-      if (limit !== undefined) params.set('limit', String(limit));
-      if (offset !== undefined) params.set('offset', String(offset));
-      const query = params.toString() ? `?${params.toString()}` : '';
-      const response = await api.get<Item[]>(`/api/v1/items${query}`);
-      return response.data;
+      const query = new URLSearchParams();
+      if (params.limit !== undefined) query.set('limit', String(params.limit));
+      if (params.offset !== undefined) query.set('offset', String(params.offset));
+      if (params.sort !== undefined) query.set('sort', params.sort);
+      if (params.order !== undefined) query.set('order', params.order);
+      if (params.name) query.set('name', params.name);
+      const suffix = query.toString() ? `?${query.toString()}` : '';
+      const response = await api.get<Item[]>(`/api/v1/items${suffix}`);
+      const items = response.data;
+      // The total is in a header so that the body stays a plain array.
+      const total = totalFromHeader(AxiosHeaders.from(response.headers as AxiosHeaders).get('X-Total-Count')) ?? items.length;
+      return { items, total };
     } catch (error) {
       console.error('Failed to fetch items:', summarizeRequestError(error));
       throw error;

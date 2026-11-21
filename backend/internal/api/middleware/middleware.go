@@ -29,6 +29,10 @@ func WithIdempotencyHeaders() CORSOption {
 	return func(o *corsOptions) { o.idempotency = true }
 }
 
+// TotalCountHeader is the response header that carries the number of rows that
+// match a list request, ignoring limit and offset. CORS always exposes it.
+const TotalCountHeader = "X-Total-Count"
+
 // CORS middleware with configurable allowed origins.
 // Pass "*" or "" to allow all origins (development only).
 // For production, pass a comma-separated list of allowed origins.
@@ -49,6 +53,12 @@ func CORS(allowedOrigins string, opts ...CORSOption) gin.HandlerFunc {
 	allowHeaders := "Content-Type, Content-Length, Accept-Encoding, Authorization, X-Request-ID"
 	if o.idempotency {
 		allowHeaders += ", " + IdempotencyKeyHeader
+	}
+
+	// X-Total-Count is the filtered total of GET /api/v1/items.
+	exposeHeaders := TotalCountHeader
+	if o.idempotency {
+		exposeHeaders += ", " + IdempotencyReplayedHeader + ", Retry-After"
 	}
 
 	return func(c *gin.Context) {
@@ -78,10 +88,9 @@ func CORS(allowedOrigins string, opts ...CORSOption) gin.HandlerFunc {
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", allowHeaders)
-		if o.idempotency {
-			// Without it a browser script cannot read these two response headers.
-			c.Writer.Header().Set("Access-Control-Expose-Headers", IdempotencyReplayedHeader+", Retry-After")
-		}
+		// Without it a browser script on another origin cannot read these
+		// response headers.
+		c.Writer.Header().Set("Access-Control-Expose-Headers", exposeHeaders)
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)

@@ -398,6 +398,65 @@ func TestListItems(t *testing.T) {
 	}
 }
 
+// TestListItemsTotalCountHeader checks that X-Total-Count carries the number of
+// rows that match the filter, whatever the page window is.
+func TestListItemsTotalCountHeader(t *testing.T) {
+	t.Parallel()
+	router, mockRepo := setupTestRouter()
+
+	for _, item := range []models.Item{
+		{Name: "Phone", Price: 999.99},
+		{Name: "Laptop", Price: 1999.99},
+		{Name: "Phone Case", Price: 29.99},
+		{Name: "Charger", Price: 49.99},
+		{Name: "Headphones", Price: 199.99},
+	} {
+		item := item
+		assert.NoError(t, mockRepo.Create(context.Background(), &item))
+	}
+
+	tests := []struct {
+		name      string
+		query     string
+		wantTotal string
+		wantRows  int
+	}{
+		{name: "page smaller than total", query: "/api/v1/items?limit=2&offset=1", wantTotal: "5", wantRows: 2},
+		{name: "last partial page", query: "/api/v1/items?limit=2&offset=4", wantTotal: "5", wantRows: 1},
+		{name: "offset past the end", query: "/api/v1/items?limit=2&offset=10", wantTotal: "5", wantRows: 0},
+		{name: "without limit", query: "/api/v1/items", wantTotal: "5", wantRows: 5},
+		{name: "name filter with limit", query: "/api/v1/items?name=Phone&limit=1", wantTotal: "3", wantRows: 1},
+		{name: "name filter without limit", query: "/api/v1/items?name=Phone", wantTotal: "3", wantRows: 3},
+		{name: "no match", query: "/api/v1/items?name=zzz&limit=10", wantTotal: "0", wantRows: 0},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", tt.query, nil)
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, tt.wantTotal, w.Header().Get("X-Total-Count"))
+
+			var response []models.Item
+			assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+			assert.Len(t, response, tt.wantRows)
+		})
+	}
+
+	t.Run("no header on an error", func(t *testing.T) {
+		t.Parallel()
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/items?limit=0", nil)
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Empty(t, w.Header().Get("X-Total-Count"))
+	})
+}
+
 // TestListItemsErrors tests error scenarios for the ListItems handler
 func TestListItemsErrors(t *testing.T) {
 	t.Parallel()

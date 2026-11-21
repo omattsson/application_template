@@ -85,7 +85,7 @@ func TestIdempotencyOffChangesNothing(t *testing.T) {
 
 	w := doFrom(router, testPeer, http.MethodOptions, "/api/v1/items", "", nil)
 	assert.NotContains(t, w.Header().Get("Access-Control-Allow-Headers"), "Idempotency")
-	assert.Empty(t, w.Header().Get("Access-Control-Expose-Headers"))
+	assert.Equal(t, "X-Total-Count", w.Header().Get("Access-Control-Expose-Headers"))
 }
 
 func TestIdempotencyRouteTableIsTheSameOnAndOff(t *testing.T) {
@@ -124,6 +124,7 @@ func TestIdempotencyOnAuthOffReplays(t *testing.T) {
 	pre := doFrom(router, testPeer, http.MethodOptions, "/api/v1/items", "", nil)
 	assert.Contains(t, pre.Header().Get("Access-Control-Allow-Headers"), "Idempotency-Key")
 	assert.Contains(t, pre.Header().Get("Access-Control-Expose-Headers"), "Idempotency-Replayed")
+	assert.Contains(t, pre.Header().Get("Access-Control-Expose-Headers"), "X-Total-Count")
 }
 
 func TestIdempotencyAuthOffOversizedBodyIs413(t *testing.T) {

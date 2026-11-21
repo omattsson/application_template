@@ -1332,7 +1332,9 @@ paths:
     get:
       description: Get a list of all items. Sort with sort and order; without them
         the order is id ascending. Rows with an equal sort value are ordered by id
-        in the same direction, so pages never repeat or skip a row.
+        in the same direction, so pages never repeat or skip a row. The X-Total-Count
+        header holds the number of items that match the filter, ignoring limit and
+        offset; the body is a plain array.
       parameters:
       - description: Page size (omit for all items)
         in: query
@@ -1380,6 +1382,11 @@ paths:
       responses:
         "200":
           description: OK
+          headers:
+            X-Total-Count:
+              description: Number of items that match the filter, ignoring limit and
+                offset
+              type: integer
           schema:
             items:
               $ref: '#/definitions/models.Item'

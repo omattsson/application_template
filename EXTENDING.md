@@ -83,7 +83,7 @@ Items: `internal/api/handlers/items.go`. Create `handlers/notes.go` with a `Note
 - Map every repository error with `mapError(err, "Note")`: 404, 409, 400, 499 for a cancelled request and `Internal server error` for a 500. Never return `err.Error()` for a 500.
 - Parse path IDs and answer 400 `Invalid ID format` (Items parses a `uint`; a UUID resource checks the format).
 - In a create handler call `middleware.SetAuditEntityID(c, note.ID)`; in a handler that changes nothing call `middleware.SkipAudit(c)`.
-- A list handler reads `limit` and `offset`, rejects a bad value with 400 and calls `ListPaged`. Cap the page size with `models.MaxPageSize`. For sorting call `key, desc, ok := parseSort(c, models.NoteSortKeys)` (`handlers/sort.go`): it answers 400 for a `sort` outside the whitelist or an `order` other than `asc` or `desc`. Add `@Param sort query string false "..." Enums(...)` and `@Param order query string false "..." Enums(asc, desc)`.
+- A list handler reads `limit` and `offset`, rejects a bad value with 400 and calls `ListPaged`. `GET /api/v1/items` sends the total of `ListPaged` in the `X-Total-Count` header (the body stays a plain array; `@Header 200 {integer} X-Total-Count`; CORS exposes it). Cap the page size with `models.MaxPageSize`. For sorting call `key, desc, ok := parseSort(c, models.NoteSortKeys)` (`handlers/sort.go`): it answers 400 for a `sort` outside the whitelist or an `order` other than `asc` or `desc`. Add `@Param sort query string false "..." Enums(...)` and `@Param order query string false "..." Enums(asc, desc)`.
 - To publish an event, take a `websocket.BroadcastSender` as Items does (`NewHandlerWithHub`) and call `Broadcast` with a `{"type": "note.created", "payload": ...}` message.
 
 ### 5. Routes and wiring

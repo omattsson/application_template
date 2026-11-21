@@ -58,7 +58,7 @@ describe('API client with auth', () => {
     await vi.waitFor(() => expect(adapter.mock.calls.filter(([c]) => isRefresh(c))).toHaveLength(1));
     refreshReply.resolve({ status: 200, data: { token: fresh } });
 
-    await expect(a).resolves.toEqual([{ id: 1 }]);
+    await expect(a).resolves.toEqual({ items: [{ id: 1 }], total: 1 });
     await expect(b).resolves.toEqual([{ id: 1 }]);
     expect(adapter.mock.calls.filter(([c]) => isRefresh(c))).toHaveLength(1);
     expect(getSession().token).toBe(fresh);

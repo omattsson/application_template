@@ -20,12 +20,12 @@ func corsRouter(allowed string, opts ...CORSOption) *gin.Engine {
 func TestCORSWithIdempotency(t *testing.T) {
 	t.Parallel()
 
-	t.Run("off: the header lists are as before", func(t *testing.T) {
+	t.Run("off: only the total count header is exposed", func(t *testing.T) {
 		t.Parallel()
 		w := httptest.NewRecorder()
 		corsRouter("*").ServeHTTP(w, httptest.NewRequest(http.MethodOptions, "/test", nil))
 		assert.NotContains(t, w.Header().Get("Access-Control-Allow-Headers"), "Idempotency")
-		assert.Empty(t, w.Header().Values("Access-Control-Expose-Headers"))
+		assert.Equal(t, []string{"X-Total-Count"}, w.Header().Values("Access-Control-Expose-Headers"))
 	})
 
 	for _, allowed := range []string{"*", "https://app.example.com"} {
@@ -45,6 +45,8 @@ func TestCORSWithIdempotency(t *testing.T) {
 				expose := w.Header().Get("Access-Control-Expose-Headers")
 				assert.Contains(t, expose, "Idempotency-Replayed", method)
 				assert.Contains(t, expose, "Retry-After", method)
+				assert.Contains(t, expose, "X-Total-Count", method)
+				assert.Len(t, w.Header().Values("Access-Control-Expose-Headers"), 1, method)
 			}
 		})
 	}

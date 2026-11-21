@@ -22,7 +22,7 @@ function at(path: string) {
 }
 
 const pageCalls = (adapter: ReturnType<typeof fakeBackend>) =>
-  adapter.mock.calls.filter(([c]) => pathOf(c) === '/api/v1/items');
+  adapter.mock.calls.filter(([c]) => pathOf(c).split('?')[0] === '/api/v1/items');
 const authCalls = (adapter: ReturnType<typeof fakeBackend>) =>
   adapter.mock.calls.filter(([c]) => pathOf(c).startsWith('/api/v1/auth/'));
 
