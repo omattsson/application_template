@@ -1,4 +1,4 @@
-import axios, { AxiosHeaders } from 'axios';
+import axios, { AxiosHeaders, isAxiosError } from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import { axiosConfig } from './config';
 import { authApi, CSRF_HEADERS, refreshAccessToken } from './refresh';
@@ -7,6 +7,7 @@ import { getAccessToken, getSession } from './session';
 import { summarizeRequestError } from './errorSummary';
 import type { UIConfig } from '../context/UIConfigContext';
 import { toRole } from '../utils/jwt';
+import { CURRENT_PASSWORD_INCORRECT_MESSAGE, errorTextOf } from '../utils/passwordChange';
 import type { AuthUser, Role } from '../utils/jwt';
 
 // Marks a request that was already retried after a refresh (no second retry).
@@ -266,6 +267,57 @@ export const authService = {
       });
     } catch (error) {
       console.error('Logout failed:', summarizeRequestError(error));
+      throw error;
+    }
+  },
+
+  /**
+   * Change the password of the signed-in local user. The other sessions of the
+   * user end; this one stays.
+   *
+   * It goes through the auth client with an explicit bearer header, never through
+   * the `api` instance: the 401 interceptor of `api` would refresh the token and
+   * send the request again after a wrong current password, and the server counts
+   * every wrong current password against the account (5 failures lock it). One
+   * call is one request, with one exception: an access token that has expired.
+   * The middleware answers it with a 401 before the password is checked (no
+   * failure is counted), and then this method refreshes the token once through
+   * `refreshAccessToken` and sends the request once more. A 401 that is the
+   * wrong current password is never sent again, and a refused or failed refresh
+   * throws the first 401 (a refused refresh has ended the session).
+   * @param currentPassword - The password of the account now (sent once, never logged)
+   * @param newPassword - The new password (sent once, never logged)
+   * @returns Nothing (200)
+   * @throws The request error: 400 (rules, equal to the current one, not a local account), 401 (wrong current password, or no valid session), 403 (password sign-in disabled, or an API key), 429 (locked, with `Retry-After`), 413, 500 (the new password may stand)
+   * @see PUT /api/v1/auth/me/password
+   */
+  changePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+    const send = (token: string | null) =>
+      authApi.put(
+        '/api/v1/auth/me/password',
+        { current_password: currentPassword, new_password: newPassword },
+        { headers: token ? { ...CSRF_HEADERS, Authorization: `Bearer ${token}` } : { ...CSRF_HEADERS } },
+      );
+    try {
+      const token = getAccessToken();
+      try {
+        await send(token);
+      } catch (first) {
+        const status = isAxiosError(first) ? first.response?.status : undefined;
+        // Only a refusal of the token itself may be sent again (see above).
+        if (status !== 401 || errorTextOf(first) === CURRENT_PASSWORD_INCORRECT_MESSAGE || getSession().mode !== 'enabled') {
+          throw first;
+        }
+        let fresh: string;
+        try {
+          fresh = await refreshAccessToken(token);
+        } catch {
+          throw first;
+        }
+        await send(fresh);
+      }
+    } catch (error) {
+      console.error('Password change failed:', summarizeRequestError(error));
       throw error;
     }
   },

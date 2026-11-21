@@ -4,6 +4,7 @@ import Health from './pages/Health';
 import Items from './pages/Items';
 import AdminUsers from './pages/Admin/Users';
 import ApiKeys from './pages/Account/ApiKeys';
+import Profile from './pages/Account/Profile';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
 import ForgotPassword from './pages/ForgotPassword';
@@ -19,13 +20,15 @@ import { useUIConfig } from './context/UIConfigContext';
 const PASSWORD_RESET_PATHS: readonly string[] = ['/forgot-password', '/reset-password'];
 
 /** The account pages of a signed-in user (they exist only with auth on). */
-const ACCOUNT_PATHS: readonly string[] = ['/account/api-keys'];
+const ACCOUNT_PATHS: readonly string[] = ['/account', '/account/api-keys'];
 
 const AppRoutes = () => {
   const { pathname } = useLocation();
   const { config } = useUIConfig();
   const { authEnabled, isLoading, isAuthenticated } = useAuth();
   const resetRoutes = config.password_reset_enabled && !isAuthenticated;
+  // The account page changes the local password: it needs auth on and the password form.
+  const profileRoute = authEnabled && config.local_auth_enabled;
   const normalizedPath = pathname.replace(/\/+$/, '');
   // While the config or the session loads, a reset or account page shows the loading state
   // instead of the not-found page (its routes are not registered yet).
@@ -50,6 +53,7 @@ const AppRoutes = () => {
           <Route path="/items" element={<ProtectedRoute><Items /></ProtectedRoute>} />
           <Route path="/admin/users" element={<ProtectedRoute roles={['admin']}><AdminUsers /></ProtectedRoute>} />
           {/* Only with auth on: with auth off the path is not found. */}
+          {profileRoute && <Route path="/account" element={<ProtectedRoute><Profile /></ProtectedRoute>} />}
           {authEnabled && (
             <Route path="/account/api-keys" element={<ProtectedRoute><ApiKeys /></ProtectedRoute>} />
           )}

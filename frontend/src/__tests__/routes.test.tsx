@@ -33,6 +33,7 @@ vi.mock('../pages/Home', () => ({ default: () => <h1>Home page</h1> }));
 vi.mock('../pages/Health', () => ({ default: () => <h1>Health page</h1> }));
 vi.mock('../pages/Admin/Users', () => ({ default: () => <h1>Admin users page</h1> }));
 vi.mock('../pages/Account/ApiKeys', () => ({ default: () => <h1>API keys page</h1> }));
+vi.mock('../pages/Account/Profile', () => ({ default: () => <h1>Account page</h1> }));
 const itemsState = { shouldThrow: false };
 vi.mock('../pages/Items', () => ({
   default: () => {
@@ -154,6 +155,61 @@ describe('AppRoutes', () => {
       vi.mocked(useUIConfig).mockReturnValue({ config: uiConfig().config, loading: true });
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isLoading: true }));
       renderAt('/account/api-keys');
+      expect(screen.getByRole('status')).toBeInTheDocument();
+      expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('/account', () => {
+    const SIGNED_IN = { id: 'u1', username: 'alice', display_name: 'Alice', role: 'user' as const };
+
+    it('renders for a signed-in user with auth and local sign-in on', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: SIGNED_IN, role: 'user' }));
+      renderAt('/account');
+      expect(screen.getByRole('heading', { name: 'Account page' })).toBeInTheDocument();
+    });
+
+    it('also renders with a trailing slash', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: SIGNED_IN, role: 'user' }));
+      renderAt('/account/');
+      expect(screen.getByRole('heading', { name: 'Account page' })).toBeInTheDocument();
+    });
+
+    it('sends an anonymous visitor to the login page', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
+      renderAt('/account');
+      expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Account page' })).not.toBeInTheDocument();
+    });
+
+    it('has no route with auth off (NotFound)', () => {
+      vi.mocked(useUIConfig).mockReturnValue(uiConfig({ auth_enabled: false, local_auth_enabled: false }));
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: false }));
+      renderAt('/account');
+      expect(screen.getByText('Page not found')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Account page' })).not.toBeInTheDocument();
+    });
+
+    it('has no route in OIDC-only mode, without local sign-in (NotFound)', () => {
+      vi.mocked(useUIConfig).mockReturnValue(uiConfig({ oidc_enabled: true, local_auth_enabled: false }));
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: SIGNED_IN, role: 'user' }));
+      renderAt('/account');
+      expect(screen.getByText('Page not found')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Account page' })).not.toBeInTheDocument();
+    });
+
+    it('shows the loading state while the session loads, not NotFound', () => {
+      vi.mocked(useUIConfig).mockReturnValue({ config: uiConfig().config, loading: true });
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isLoading: true }));
+      renderAt('/account');
+      expect(screen.getByRole('status')).toBeInTheDocument();
+      expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
+    });
+
+    it('shows the loading state while only the UI config loads', () => {
+      vi.mocked(useUIConfig).mockReturnValue({ config: uiConfig({ auth_enabled: false, local_auth_enabled: false }).config, loading: true });
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: false, isLoading: true }));
+      renderAt('/account');
       expect(screen.getByRole('status')).toBeInTheDocument();
       expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
     });

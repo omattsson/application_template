@@ -244,7 +244,7 @@ E2E_ADMIN_PASSWORD ?= e2e-only-admin-password
 # http://localhost too).
 E2E_SECURE_COOKIES ?= false
 # e2e/password-reset and e2e/api-keys match the password reset and API keys specs as patterns.
-E2E_AUTH_SPECS ?= e2e/auth.spec.ts e2e/accessibility.spec.ts e2e/password-reset e2e/api-keys
+E2E_AUTH_SPECS ?= e2e/auth.spec.ts e2e/accessibility.spec.ts e2e/password-reset e2e/api-keys e2e/account.spec.ts
 
 # Auth off: every spec. auth.spec.ts skips itself (it needs AUTH_ENABLED=true),
 # and the accessibility spec skips the Login and Admin Users pages.
