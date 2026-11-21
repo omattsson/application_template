@@ -6,6 +6,7 @@ import { Alert, Box, Button, Link, Paper, TextField, Typography } from '@mui/mat
 import { passwordResetService } from '../../api/client';
 import LoadingState from '../../components/LoadingState';
 import { useUnsavedChanges } from '../../hooks/useUnsavedChanges';
+import { errorTextOf } from '../../utils/apiError';
 import { rememberLoginNotice, RESET_CHECK_LOGIN, RESET_COMPLETED } from '../../utils/loginNotice';
 import {
   PASSWORD_MISMATCH_MESSAGE,
@@ -25,16 +26,6 @@ const RULES_HELP = 'At least 8 characters, at most 72 bytes.';
 
 /** The two 400 texts of the password rules: the only server text that is shown. */
 const PASSWORD_RULE_MESSAGES: readonly string[] = [PASSWORD_TOO_SHORT_MESSAGE, PASSWORD_TOO_LONG_MESSAGE];
-
-/** The `error` text of a JSON error body, or null. */
-function errorTextOf(err: unknown): string | null {
-  const data: unknown = isAxiosError(err) ? err.response?.data : undefined;
-  if (data && typeof data === 'object') {
-    const text = (data as { error?: unknown }).error;
-    if (typeof text === 'string') return text;
-  }
-  return null;
-}
 
 /**
  * Set a new password from the mail link. The token is read from the URL

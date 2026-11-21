@@ -6,8 +6,25 @@ import Layout from '../index';
 import { ThemeModeProvider } from '../../../context/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
 import type { AuthContextValue } from '../../../context/AuthContext';
+import { useUIConfig } from '../../../context/UIConfigContext';
+import type { UIConfig } from '../../../context/UIConfigContext';
 
 vi.mock('../../../context/AuthContext', () => ({ useAuth: vi.fn() }));
+vi.mock('../../../context/UIConfigContext', () => ({ useUIConfig: vi.fn() }));
+
+function uiConfig(overrides: Partial<UIConfig> = {}): { config: UIConfig; loading: boolean } {
+  return {
+    config: {
+      title: 'Test App',
+      auth_enabled: true,
+      oidc_enabled: false,
+      local_auth_enabled: true,
+      password_reset_enabled: false,
+      ...overrides,
+    },
+    loading: false,
+  };
+}
 
 function authState(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
   return {
@@ -46,6 +63,7 @@ function renderLayout(children: React.ReactNode = <div>Test Content</div>, path 
 describe('Layout', () => {
   beforeEach(() => {
     vi.mocked(useAuth).mockReturnValue(authState());
+    vi.mocked(useUIConfig).mockReturnValue(uiConfig());
   });
 
   afterEach(() => {
@@ -212,6 +230,50 @@ describe('Layout', () => {
         vi.mocked(useAuth).mockReturnValue(authState(state));
         renderLayout();
         expect(screen.queryByRole('link', { name: 'API keys' })).not.toBeInTheDocument();
+      });
+    });
+
+    describe('account link (the user name)', () => {
+      const signedIn = () =>
+        vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: ALICE, role: 'user' }));
+
+      it('is a link to /account where the page exists (auth on, signed in, local sign-in on)', () => {
+        signedIn();
+        renderLayout();
+        const link = screen.getByRole('link', { name: 'Alice Person' });
+        expect(link).toHaveAttribute('href', '/account');
+        expect(link).toHaveAttribute('data-testid', 'current-user');
+      });
+
+      it('is plain text without local sign-in (the route does not exist)', () => {
+        signedIn();
+        vi.mocked(useUIConfig).mockReturnValue(uiConfig({ oidc_enabled: true, local_auth_enabled: false }));
+        renderLayout();
+        expect(screen.queryByRole('link', { name: 'Alice Person' })).not.toBeInTheDocument();
+        expect(screen.getByTestId('current-user')).toHaveTextContent('Alice Person');
+        expect(screen.getByTestId('current-user').tagName).not.toBe('A');
+      });
+
+      it('is not shown at all with auth off', () => {
+        vi.mocked(useUIConfig).mockReturnValue(uiConfig({ auth_enabled: false, local_auth_enabled: false }));
+        renderLayout();
+        expect(screen.queryByTestId('current-user')).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /account/i })).not.toBeInTheDocument();
+      });
+
+      it('keeps the API keys link and Log out next to it', () => {
+        signedIn();
+        renderLayout();
+        expect(screen.getByRole('link', { name: 'API keys' })).toHaveAttribute('href', '/account/api-keys');
+        expect(screen.getByRole('button', { name: /log out/i })).toBeInTheDocument();
+      });
+
+      it('is plain text while the session loads (nothing is shown)', () => {
+        vi.mocked(useAuth).mockReturnValue(
+          authState({ authEnabled: true, isLoading: true, isAuthenticated: true, user: ALICE, role: 'user' }),
+        );
+        renderLayout();
+        expect(screen.queryByTestId('current-user')).not.toBeInTheDocument();
       });
     });
 

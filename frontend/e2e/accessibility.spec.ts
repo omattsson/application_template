@@ -10,7 +10,7 @@ import type { DecisionInput } from './skipDecision';
 //   administrator.
 // - Login: only exists with auth on (with auth off it redirects home).
 // - Admin Users: needs auth on and the local administrator.
-// - Account API keys: needs auth on and the local administrator (a signed-in user).
+// - Account API keys and Account: need auth on and the local administrator (a signed-in user).
 // - Admin audit log: needs auth on and the local administrator (an admin).
 // - Forgot password and Reset password: need auth on and PASSWORD_RESET_ENABLED.
 //
@@ -63,6 +63,12 @@ const PAGES: PageCase[] = [
   {
     name: 'admin audit logs',
     spec: { path: '/admin/audit-logs', heading: 'Audit log' },
+    needs: { needsAuth: true, needsSignIn: true, signInWhenAuthOn: true },
+  },
+  // The signed-in user's account (profile and password change): auth on, local sign-in on, signed in.
+  {
+    name: 'account',
+    spec: { path: '/account', heading: 'Account' },
     needs: { needsAuth: true, needsSignIn: true, signInWhenAuthOn: true },
   },
 ];

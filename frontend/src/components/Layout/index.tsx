@@ -1,11 +1,12 @@
 import React from 'react';
-import { Box, AppBar, Toolbar, Typography, Container, Button, IconButton, Tooltip } from '@mui/material';
+import { Box, AppBar, Toolbar, Typography, Container, Button, IconButton, Link, Tooltip } from '@mui/material';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { useThemeMode } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { useUIConfig } from '../../context/UIConfigContext';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -14,6 +15,7 @@ interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { mode, toggleMode } = useThemeMode();
   const { authEnabled, isLoading, isAuthenticated, user, role, logout } = useAuth();
+  const { config } = useUIConfig();
   const navigate = useNavigate();
   const toggleLabel = mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode';
   // Nothing while the UI config and the session load (no flicker). With auth
@@ -22,6 +24,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   // User administration exists with auth on only, and the API requires the admin role (a UI hint).
   const showUsers = showNavigation && authEnabled && role === 'admin';
   const showAccount = !isLoading && authEnabled && isAuthenticated;
+  // The account page (`/account`) exists with auth on and the password form only (see routes.tsx).
+  const accountPageExists = showAccount && config.local_auth_enabled;
+  const userName = user?.display_name ?? user?.username ?? 'Signed in';
 
   const handleLogout = async () => {
     await logout();
@@ -65,9 +70,23 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           </Tooltip>
           {showAccount && (
             <>
-              <Typography variant="body2" component="span" sx={{ ml: 2 }} data-testid="current-user">
-                {user?.display_name ?? user?.username ?? 'Signed in'}
-              </Typography>
+              {accountPageExists ? (
+                <Link
+                  component={RouterLink}
+                  to="/account"
+                  color="inherit"
+                  variant="body2"
+                  underline="hover"
+                  sx={{ ml: 2 }}
+                  data-testid="current-user"
+                >
+                  {userName}
+                </Link>
+              ) : (
+                <Typography variant="body2" component="span" sx={{ ml: 2 }} data-testid="current-user">
+                  {userName}
+                </Typography>
+              )}
               <Button color="inherit" component={RouterLink} to="/account/api-keys" sx={{ ml: 1 }}>
                 API keys
               </Button>
