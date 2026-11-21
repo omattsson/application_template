@@ -156,6 +156,39 @@ describe('Layout', () => {
       });
     });
 
+    describe('Audit log link', () => {
+      const ADMIN = { ...ALICE, role: 'admin' as const };
+
+      it('is shown to an admin when auth is enabled and points to the audit log page', () => {
+        vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: ADMIN, role: 'admin' }));
+        renderLayout();
+        expect(screen.getByRole('link', { name: 'Audit log' })).toHaveAttribute('href', '/admin/audit-logs');
+      });
+
+      it.each(['user', 'devops'] as const)('is hidden from the role %s', (role) => {
+        vi.mocked(useAuth).mockReturnValue(
+          authState({ authEnabled: true, isAuthenticated: true, user: { ...ALICE, role }, role }),
+        );
+        renderLayout();
+        expect(screen.queryByRole('link', { name: 'Audit log' })).not.toBeInTheDocument();
+      });
+
+      it('is hidden when auth is disabled', () => {
+        vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: false, role: 'admin' }));
+        renderLayout();
+        expect(screen.queryByRole('link', { name: 'Audit log' })).not.toBeInTheDocument();
+      });
+
+      it.each([
+        ['an anonymous visitor', { authEnabled: true, role: 'admin' as const }],
+        ['an admin while the session is restored', { authEnabled: true, isLoading: true, isAuthenticated: true, user: ADMIN, role: 'admin' as const }],
+      ])('is hidden from %s', (_name, state) => {
+        vi.mocked(useAuth).mockReturnValue(authState(state));
+        renderLayout();
+        expect(screen.queryByRole('link', { name: 'Audit log' })).not.toBeInTheDocument();
+      });
+    });
+
     describe('API keys link', () => {
       it('is shown to a signed-in user when auth is enabled, whatever the role', () => {
         vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: ALICE, role: 'user' }));
