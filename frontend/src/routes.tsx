@@ -4,6 +4,7 @@ import Health from './pages/Health';
 import Items from './pages/Items';
 import AdminUsers from './pages/Admin/Users';
 import ApiKeys from './pages/Account/ApiKeys';
+import AuditLogs from './pages/Admin/AuditLogs';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
 import ForgotPassword from './pages/ForgotPassword';
@@ -18,8 +19,8 @@ import { useUIConfig } from './context/UIConfigContext';
 /** The password reset pages (they exist only with PASSWORD_RESET_ENABLED and for a visitor who is not signed in). */
 const PASSWORD_RESET_PATHS: readonly string[] = ['/forgot-password', '/reset-password'];
 
-/** The account pages of a signed-in user (they exist only with auth on). */
-const ACCOUNT_PATHS: readonly string[] = ['/account/api-keys'];
+/** The pages that exist only with auth on: the account pages of a signed-in user and the admin audit log. */
+const AUTH_ONLY_PATHS: readonly string[] = ['/account/api-keys', '/admin/audit-logs'];
 
 const AppRoutes = () => {
   const { pathname } = useLocation();
@@ -30,11 +31,11 @@ const AppRoutes = () => {
   // While the config or the session loads, a reset or account page shows the loading state
   // instead of the not-found page (its routes are not registered yet).
   const resetPending = isLoading && PASSWORD_RESET_PATHS.includes(normalizedPath);
-  const accountPending = isLoading && ACCOUNT_PATHS.includes(normalizedPath);
+  const authOnlyPending = isLoading && AUTH_ONLY_PATHS.includes(normalizedPath);
   return (
     // Keyed by path: a page that crashed is reset when the user navigates away.
     <ErrorBoundary key={pathname}>
-      {resetPending || accountPending ? (
+      {resetPending || authOnlyPending ? (
         <LoadingState />
       ) : (
         <Routes>
@@ -52,6 +53,9 @@ const AppRoutes = () => {
           {/* Only with auth on: with auth off the path is not found. */}
           {authEnabled && (
             <Route path="/account/api-keys" element={<ProtectedRoute><ApiKeys /></ProtectedRoute>} />
+          )}
+          {authEnabled && (
+            <Route path="/admin/audit-logs" element={<ProtectedRoute roles={['admin']}><AuditLogs /></ProtectedRoute>} />
           )}
           <Route path="*" element={<NotFound />} />
         </Routes>
