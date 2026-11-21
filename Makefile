@@ -243,8 +243,8 @@ E2E_ADMIN_PASSWORD ?= e2e-only-admin-password
 # production setting, __Host-refresh_token with Secure (Chromium accepts it on
 # http://localhost too).
 E2E_SECURE_COOKIES ?= false
-# e2e/password-reset matches the password reset spec(s) as a pattern.
-E2E_AUTH_SPECS ?= e2e/auth.spec.ts e2e/accessibility.spec.ts e2e/password-reset
+# e2e/password-reset and e2e/api-keys match the password reset and API keys specs as patterns.
+E2E_AUTH_SPECS ?= e2e/auth.spec.ts e2e/accessibility.spec.ts e2e/password-reset e2e/api-keys
 
 # Auth off: every spec. auth.spec.ts skips itself (it needs AUTH_ENABLED=true),
 # and the accessibility spec skips the Login and Admin Users pages.

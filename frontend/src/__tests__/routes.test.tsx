@@ -32,6 +32,7 @@ function authState(overrides: Partial<AuthContextValue> = {}): AuthContextValue 
 vi.mock('../pages/Home', () => ({ default: () => <h1>Home page</h1> }));
 vi.mock('../pages/Health', () => ({ default: () => <h1>Health page</h1> }));
 vi.mock('../pages/Admin/Users', () => ({ default: () => <h1>Admin users page</h1> }));
+vi.mock('../pages/Account/ApiKeys', () => ({ default: () => <h1>API keys page</h1> }));
 const itemsState = { shouldThrow: false };
 vi.mock('../pages/Items', () => ({
   default: () => {
@@ -123,6 +124,38 @@ describe('AppRoutes', () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
       renderAt('/admin/users');
       expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+    });
+  });
+
+  describe('/account/api-keys', () => {
+    const SIGNED_IN = { id: 'u1', username: 'alice', display_name: 'Alice', role: 'user' as const };
+
+    it('renders for a signed-in user when auth is enabled', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: SIGNED_IN, role: 'user' }));
+      renderAt('/account/api-keys');
+      expect(screen.getByRole('heading', { name: 'API keys page' })).toBeInTheDocument();
+    });
+
+    it('sends an anonymous visitor to the login page', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
+      renderAt('/account/api-keys');
+      expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'API keys page' })).not.toBeInTheDocument();
+    });
+
+    it('has no route with auth off (NotFound)', () => {
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: false }));
+      renderAt('/account/api-keys');
+      expect(screen.getByText('Page not found')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'API keys page' })).not.toBeInTheDocument();
+    });
+
+    it('shows the loading state while the session loads, not NotFound', () => {
+      vi.mocked(useUIConfig).mockReturnValue({ config: uiConfig().config, loading: true });
+      vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isLoading: true }));
+      renderAt('/account/api-keys');
+      expect(screen.getByRole('status')).toBeInTheDocument();
+      expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
     });
   });
 

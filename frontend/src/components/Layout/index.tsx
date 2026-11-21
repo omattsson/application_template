@@ -63,6 +63,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               <Typography variant="body2" component="span" sx={{ ml: 2 }} data-testid="current-user">
                 {user?.display_name ?? user?.username ?? 'Signed in'}
               </Typography>
+              <Button color="inherit" component={RouterLink} to="/account/api-keys" sx={{ ml: 1 }}>
+                API keys
+              </Button>
               <Button color="inherit" onClick={handleLogout} startIcon={<LogoutIcon />} sx={{ ml: 1 }}>
                 Log out
               </Button>
