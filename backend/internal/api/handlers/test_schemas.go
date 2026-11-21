@@ -93,3 +93,38 @@ const loginResponseSchema = `{
 "user": ` + userSchema + `
 }
 }`
+
+// Schema for a job in the GET /api/v1/jobs response. additionalProperties is
+// false, so a payload field would fail the check.
+const jobSchema = `{
+"type": "object",
+"required": ["id", "type", "status", "attempts", "max_attempts", "run_at", "created_at", "updated_at"],
+"additionalProperties": false,
+"properties": {
+"id": {"type": "integer", "minimum": 1},
+"type": {"type": "string", "minLength": 1},
+"status": {"type": "string", "enum": ["pending", "running", "succeeded", "dead"]},
+"attempts": {"type": "integer", "minimum": 0},
+"max_attempts": {"type": "integer", "minimum": 1},
+"run_at": {"type": "string"},
+"created_at": {"type": "string"},
+"updated_at": {"type": "string"},
+"locked_until": {"type": "string"},
+"finished_at": {"type": "string"},
+"locked_by": {"type": "string"},
+"last_error": {"type": "string"}
+}
+}`
+
+// Schema for the GET /api/v1/jobs response.
+const jobListSchema = `{
+"type": "object",
+"required": ["data", "total", "limit", "offset"],
+"additionalProperties": false,
+"properties": {
+"data": {"type": "array", "items": ` + jobSchema + `},
+"total": {"type": "integer", "minimum": 0},
+"limit": {"type": "integer", "minimum": 1},
+"offset": {"type": "integer", "minimum": 0}
+}
+}`

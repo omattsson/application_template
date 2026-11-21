@@ -73,6 +73,9 @@ type Config struct {
 	Idempotency IdempotencyConfig
 	// Outbox holds the settings of the optional outbox module (OUTBOX_*).
 	Outbox OutboxConfig
+	// Jobs holds the settings of the optional background job module
+	// (JOBS_*).
+	Jobs JobsConfig
 	// Compression holds the settings of the response compression
 	// (COMPRESSION_*).
 	Compression CompressionConfig
@@ -470,6 +473,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Jobs.Enabled {
+		if err := c.Jobs.Validate(); err != nil {
+			return fmt.Errorf("jobs config: %w", err)
+		}
+	}
+
 	// With the module off its settings are not used.
 	if c.Mail.Enabled {
 		if err := c.Mail.Validate(); err != nil {
@@ -720,6 +729,9 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	if cfg.Outbox, err = loadOutboxConfig(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	if cfg.Jobs, err = loadJobsConfig(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	if cfg.Compression, err = loadCompressionConfig(); err != nil {

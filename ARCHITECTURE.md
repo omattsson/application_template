@@ -98,10 +98,11 @@ The session design (tokens, rotation, logout, revocation, WebSocket auth, audit)
 | Response compression | `COMPRESSION_ENABLED` (default `true`), `COMPRESSION_MIN_SIZE` (default 1024) | `middleware.Compression` after `Recovery` (gzip of compressible responses for a client that sends `Accept-Encoding: gzip`, `Vary: Accept-Encoding`, never `/ws`); rules in `docs/claude/operations.md` |
 | Idempotency keys | `IDEMPOTENCY_ENABLED=true` (`IDEMPOTENCY_TTL`, `IDEMPOTENCY_LOCK_TIMEOUT`) | `middleware.Idempotency` on `/api/v1` (a `POST` with an `Idempotency-Key` header runs once, a repeat replays the stored response), table `idempotency_keys`, worker `idempotency-cleanup`; rules in `docs/claude/operations.md` |
 | Transactional outbox | `OUTBOX_ENABLED=true` (`OUTBOX_POLL_INTERVAL`, `OUTBOX_RETENTION`) | `models.GenericRepository` change hook (`outbox.ItemHook`), `internal/outbox` poller on every replica, `outbox-cleanup` leader worker; the Items events go through the table `outbox_events` |
+| Background jobs | `JOBS_ENABLED=true` (`JOBS_WORKERS`, `JOBS_POLL_INTERVAL`, `JOBS_VISIBILITY_TIMEOUT`, `JOBS_MAX_ATTEMPTS`, `JOBS_BACKOFF_BASE`, `JOBS_BACKOFF_MAX`, `JOBS_RETENTION`, `JOBS_DEAD_RETENTION`, `JOBS_STALE_AFTER`) | `internal/jobs` (registry, queue, a worker pool on every replica that claims with `SELECT ... FOR UPDATE SKIP LOCKED`, retry with backoff, dead letter, lease), table `jobs`, worker `jobs-cleanup`, the informational `jobs` health check, `GET /api/v1/jobs` (admin with auth on); handlers are registered in `registerJobs` (`api/jobs.go`); delivery is at least once; rules in `docs/claude/operations.md` |
 | Mail | `MAIL_ENABLED=true` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `MAIL_FROM`, `SMTP_TIMEOUT`) | `internal/mail` (`Mailer`, `SMTPMailer`, `FakeMailer`), the informational `mail` readiness check (cached, bounded, never gates readiness); adds no route by itself; rules in `docs/claude/operations.md` |
 | Password reset | `PASSWORD_RESET_ENABLED=true` (needs auth, mail and the password login; `PASSWORD_RESET_URL`, `PASSWORD_RESET_TOKEN_TTL`, `PASSWORD_RESET_MIN_INTERVAL`) | `POST /api/v1/auth/password-reset` and `/confirm` (`handlers/password_reset.go`), table `password_reset_tokens` (only the SHA-256 of the token), worker `password-reset-cleanup`; flow in `docs/claude/auth-sessions.md` |
 
-The WebSocket hub, the leader worker group and the in-flight tracker are always built. Which workers run depends on the modules: with auth on, `refresh-token-cleanup` (hourly) and `session-store-cleanup` (every 15 minutes); with the idempotency module on, `idempotency-cleanup` (hourly); with the outbox on, `outbox-cleanup` (every minute); with the password reset on, `password-reset-cleanup` (hourly). The outbox poller is not a leader worker: every process runs one.
+The WebSocket hub, the leader worker group and the in-flight tracker are always built. Which workers run depends on the modules: with auth on, `refresh-token-cleanup` (hourly) and `session-store-cleanup` (every 15 minutes); with the idempotency module on, `idempotency-cleanup` (hourly); with the outbox on, `outbox-cleanup` (every minute); with the job module on, `jobs-cleanup` (every minute; the job pool itself runs on every replica and is not a leader worker); with the password reset on, `password-reset-cleanup` (hourly). The outbox poller is not a leader worker: every process runs one.
 
 ## WebSocket
 
@@ -115,15 +116,16 @@ The WebSocket hub, the leader worker group and the in-flight tracker are always 
 2. Audit recorder drain (auth on).
 3. Leader worker group.
 4. In-flight work.
-5. Outbox poller (`OUTBOX_ENABLED=true`), within 2 s, before the hub and the database close.
-6. WebSocket hub.
-7. Telemetry flush (OpenTelemetry; a no-op with telemetry off).
-8. Rate limiters.
-9. Session store (auth on), after everything that reads it.
-10. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): delete this process's row, within 2 s.
-11. Database pool.
+5. Job pool (`JOBS_ENABLED=true`): no new claim, 5 s for the running jobs, then cancel and release within 2 s more, before the outbox poller, the hub and the database close.
+6. Outbox poller (`OUTBOX_ENABLED=true`), within 2 s, before the hub and the database close.
+7. WebSocket hub.
+8. Telemetry flush (OpenTelemetry; a no-op with telemetry off).
+9. Rate limiters.
+10. Session store (auth on), after everything that reads it.
+11. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): delete this process's row, within 2 s.
+12. Database pool.
 
-The steps 1, 2, 3, 4 and 7 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` (plus 2 s each for the diagnostics servers, the outbox poller and the heartbeat); the orchestrator's stop grace period must be longer (Compose: `stop_grace_period: 170s`). With `LEADER_ELECTION_ENABLED=true` step 3 also releases the leader lease, unless a worker did not stop in time: then the lease is kept (renewed) until the process exits.
+The steps 1, 2, 3, 4 and 8 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` (plus 2 s for the diagnostics servers, 7 s for the job pool, 2 s each for the outbox poller and the heartbeat: 163 s with the default 30 s); the orchestrator's stop grace period must be longer (Compose: `stop_grace_period: 170s`). With `LEADER_ELECTION_ENABLED=true` step 3 also releases the leader lease, unless a worker did not stop in time: then the lease is kept (renewed) until the process exits.
 
 ## Design Decisions
 

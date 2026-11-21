@@ -19,6 +19,7 @@ import (
 	"backend/internal/database"
 	"backend/internal/health"
 	"backend/internal/inflight"
+	"backend/internal/jobs"
 	"backend/internal/leader"
 	"backend/internal/models"
 	"backend/internal/outbox"
@@ -173,6 +174,13 @@ type services struct {
 	// outboxPoller delivers the outbox events to the hub of this process
 	// (OUTBOX_ENABLED=true).
 	outboxPoller outboxStopper
+	// jobs is the job module: the pool that runs the background jobs of this
+	// process (JOBS_ENABLED=true; *jobsModule).
+	jobs jobsStopper
+	// jobQueue and jobRegistry are the queue that a handler enqueues with and
+	// the registry that registerJobs fills (JOBS_ENABLED=true; nil otherwise).
+	jobQueue    *jobs.Queue
+	jobRegistry *jobs.Registry
 	// inFlight is the work that outlives its request or worker run
 	// (*inflight.Tracker; see routerDeps.InFlight).
 	inFlight waiter
@@ -314,6 +322,11 @@ type routerDeps struct {
 	// PasswordReset holds the dependencies of the password reset module;
 	// required with PASSWORD_RESET_ENABLED=true.
 	PasswordReset *routes.PasswordResetDeps
+	// Jobs is the job repository; required with JOBS_ENABLED=true.
+	Jobs models.JobRepository
+	// JobQueue enqueues jobs (nil with the module off). buildRouter passes it
+	// to routes.Setup, where a handler that starts a job takes it.
+	JobQueue *jobs.Queue
 }
 
 // newSessionStore builds the session store of SESSION_STORE on db. Tests
@@ -555,6 +568,8 @@ func buildRouter(cfg *config.Config, deps routerDeps) (*gin.Engine, *routes.Resu
 		Auth:          deps.Auth,
 		Idempotency:   deps.Idempotency,
 		PasswordReset: deps.PasswordReset,
+		Jobs:          deps.Jobs,
+		JobQueue:      deps.JobQueue,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build the router: %w", err)
@@ -600,8 +615,13 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 			return nil, nil, fmt.Errorf("open the auth stores: %w", err)
 		}
 	}
+	// jm is the job module (nil with JOBS_ENABLED=false). It is built before
+	// the router (the list route and the handlers need the repository and the
+	// queue) and started last.
+	var jm *jobsModule
 	// fail stops what was started before an error.
 	fail := func(res *routes.Result, err error) (*services, *gin.Engine, error) {
+		jm.close() // the metrics only: the pool starts after the last error
 		if res != nil {
 			res.RateLimiters.Stop()
 		}
@@ -621,6 +641,21 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 			return fail(nil, errors.New("IDEMPOTENCY_ENABLED needs the database repository"))
 		}
 		idempotencyRepo = database.NewGORMIdempotencyRepository(g.DB())
+	}
+
+	// The identity of this process: the leader lease holder, the heartbeat
+	// row and the prefix of the worker IDs of the job pool.
+	var processID string
+	if cfg.Replica.LeaderElectionEnabled || cfg.Replica.HeartbeatEnabled || cfg.Jobs.Enabled {
+		processID = newProcessID()
+	}
+
+	// The job module (off by default): its repository, registry, queue and
+	// pool exist only with the switch on, so with it off nothing touches the
+	// table.
+	jm, err := buildJobs(cfg, repo, processID, healthChecker)
+	if err != nil {
+		return fail(nil, err)
 	}
 
 	// The mail module (off by default) builds the mailer and its readiness
@@ -647,6 +682,8 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		Auth:          authDeps,
 		Idempotency:   idempotencyRepo,
 		PasswordReset: resetDeps,
+		Jobs:          jobsRepo(jm),
+		JobQueue:      jobsQueue(jm),
 	})
 	if err != nil {
 		return fail(nil, err)
@@ -654,14 +691,12 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 
 	// Leader election and the heartbeat share the database of repo.
 	var replicaDB *gorm.DB
-	var processID string
 	if cfg.Replica.LeaderElectionEnabled || cfg.Replica.HeartbeatEnabled {
 		g, ok := repo.(gormRepository)
 		if !ok || g.DB() == nil {
 			return fail(res, errors.New("LEADER_ELECTION_ENABLED and REPLICA_HEARTBEAT_ENABLED need the database repository"))
 		}
 		replicaDB = g.DB()
-		processID = newProcessID()
 	}
 
 	s := &services{
@@ -702,6 +737,11 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 	if resetTokens != nil {
 		leaderWorkers = append(leaderWorkers,
 			periodicWorker("password-reset-cleanup", passwordResetCleanupInterval, passwordResetCleanup(resetTokens)))
+	}
+	// The job module: the janitor is a leader worker; the pool is one per
+	// process (every replica runs jobs) and starts below.
+	if jm != nil {
+		leaderWorkers = append(leaderWorkers, jm.cleanup)
 	}
 	// The outbox module: the janitor is a leader worker; the poller is one per
 	// process (every replica delivers to its own sockets) and starts below.
@@ -747,6 +787,15 @@ func buildServices(cfg *config.Config, repo models.Repository) (*services, *gin.
 		hb := replica.NewHeartbeat(heartbeats, processID, replica.HeartbeatInterval)
 		hb.Start()
 		s.heartbeat = hb
+	}
+
+	if jm != nil {
+		jm.Start()
+		s.jobs = jm
+		s.jobQueue = jm.queue
+		s.jobRegistry = jm.registry
+		slog.Info("Jobs enabled; the pool runs the registered handlers of this process",
+			"workers", cfg.Jobs.Workers, "types", jm.registry.Types())
 	}
 
 	if outboxPoller != nil {
@@ -830,20 +879,28 @@ func stepBudget(ctx context.Context) time.Duration {
 //     finished requests, so a graceful stop loses no entry.
 //  3. Leader worker group: no new background work.
 //  4. In-flight work that outlives its request (inflight.Tracker).
-//  5. Outbox poller (OUTBOX_ENABLED): stop the poll loop within
-//     outboxStopTimeout (2 s). After the HTTP server and the in-flight work
-//     (this process writes no more events) and before the hub and the
-//     database close (it reads the table and sends to the hub).
-//  6. WebSocket hub: close the client connections; this also ends the
+//  5. Job pool (JOBS_ENABLED): stop claiming at once, give the running jobs
+//     5 s, then cancel them and release the unfinished ones within 2 s more
+//     (jobsStopTimeout, 7 s in all, a detached context). After the HTTP
+//     server and the in-flight work (no request enqueues or starts anything
+//     new) and before the outbox poller (an event that a job writes is still
+//     delivered), the hub and the database close (a job uses both). A handler
+//     that ignores its cancel is logged and its error joined; the later steps
+//     still run.
+//  6. Outbox poller (OUTBOX_ENABLED): stop the poll loop within
+//     outboxStopTimeout (2 s). After the HTTP server, the in-flight work and
+//     the job pool (this process writes no more events) and before the hub
+//     and the database close (it reads the table and sends to the hub).
+//  7. WebSocket hub: close the client connections; this also ends the
 //     revalidation loop of the open sockets.
-//  7. Telemetry: flush the traces, metrics and logs after the services
+//  8. Telemetry: flush the traces, metrics and logs after the services
 //     stopped, so it covers the shutdown.
-//  8. Rate limiters: stop their cleanup goroutines.
-//  9. Session store (auth on): stop its cleanup goroutine, after everything
+//  9. Rate limiters: stop their cleanup goroutines.
+//  10. Session store (auth on): stop its cleanup goroutine, after everything
 //     that reads it (requests, workers, the hub revalidation).
-//  10. Replica heartbeat (REPLICA_HEARTBEAT_ENABLED): stop it and delete this
+//  11. Replica heartbeat (REPLICA_HEARTBEAT_ENABLED): stop it and delete this
 //     process's row, within heartbeatStopTimeout (2 s).
-//  11. Database: close the connection pool last.
+//  12. Database: close the connection pool last.
 //
 // With LEADER_ELECTION_ENABLED the leader step (3) also ends the election
 // and releases the lease, within the same budget (electedLeader.Close);
@@ -858,8 +915,9 @@ func stepBudget(ctx context.Context) time.Duration {
 // steps, and the diagnostics step does not shorten the HTTP drain: the leader
 // workers still get time to stop and the telemetry flush still gets a live
 // context. The worst case is auxShutdownTimeout plus five budgets (each of
-// the five steps hangs) plus outboxStopTimeout and heartbeatStopTimeout,
-// 156 s with the default 30 s; keep the grace period of the orchestrator above that, or
+// the five steps hangs) plus jobsStopTimeout, outboxStopTimeout and
+// heartbeatStopTimeout, 163 s with the default 30 s (2 + 150 + 7 + 2 + 2);
+// keep the grace period of the orchestrator above that (Compose: 170 s), or
 // SERVER_SHUTDOWN_TIMEOUT below a fifth of it.
 //
 // Every step runs even when an earlier step failed. shutdown returns the
@@ -915,6 +973,15 @@ func shutdown(ctx context.Context, s *services) error {
 		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("in-flight work did not finish: %w", err))
+		}
+	}
+
+	if !isNilInterface(s.jobs) {
+		jobsCtx, cancel := ctxutil.Detach(ctx, jobsStopTimeout)
+		err := s.jobs.Stop(jobsCtx)
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("job pool: %w", err))
 		}
 	}
 

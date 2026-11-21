@@ -54,6 +54,8 @@ type authEnv struct {
 	// reset holds the password reset dependencies (set by an envOption; nil:
 	// module off).
 	reset *PasswordResetDeps
+	// jobs is the job repository (set by an envOption; nil: module off).
+	jobs models.JobRepository
 }
 
 // authOn returns a config with AUTH_ENABLED=true and the defaults that
@@ -139,6 +141,7 @@ func newAuthEnv(t *testing.T, cfg *config.Config, opts ...envOption) *authEnv {
 		Auth:          deps,
 		Idempotency:   env.idem,
 		PasswordReset: env.reset,
+		Jobs:          env.jobs,
 	})
 	require.NoError(t, err)
 	t.Cleanup(res.RateLimiters.Stop)

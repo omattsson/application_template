@@ -19,6 +19,7 @@
 ./internal/database
 ./internal/database/schema
 ./internal/inflight
+./internal/jobs
 ./internal/leader
 ./internal/logutil
 ./internal/mail

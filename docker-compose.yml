@@ -43,8 +43,9 @@ services:
     # The ordered shutdown runs up to five steps of SERVER_SHUTDOWN_TIMEOUT
     # each (HTTP drain, audit log writes with AUTH_ENABLED=true, leader
     # workers, in-flight work, telemetry): 5 x 30s with the default, plus 2s
-    # for the metrics and pprof servers and 2s for the replica heartbeat
-    # (156s), plus a margin. Raise it with SERVER_SHUTDOWN_TIMEOUT.
+    # for the metrics and pprof servers, 7s for the job pool (5s drain, 2s
+    # release), 2s for the outbox poller and 2s for the replica heartbeat
+    # (163s), plus a margin. Raise it with SERVER_SHUTDOWN_TIMEOUT.
     stop_grace_period: 170s
     environment:
       - APP_NAME=${APP_NAME:-application}
@@ -130,6 +131,19 @@ services:
       - OUTBOX_ENABLED=${OUTBOX_ENABLED:-}
       - OUTBOX_POLL_INTERVAL=${OUTBOX_POLL_INTERVAL:-}
       - OUTBOX_RETENTION=${OUTBOX_RETENTION:-}
+      # Background jobs (optional module, off by default). Empty keeps the
+      # backend default (false, 4 workers, 1s, 5m, 5 attempts, 10s, 1h, 24h,
+      # 168h and 5m).
+      - JOBS_ENABLED=${JOBS_ENABLED:-}
+      - JOBS_WORKERS=${JOBS_WORKERS:-}
+      - JOBS_POLL_INTERVAL=${JOBS_POLL_INTERVAL:-}
+      - JOBS_VISIBILITY_TIMEOUT=${JOBS_VISIBILITY_TIMEOUT:-}
+      - JOBS_MAX_ATTEMPTS=${JOBS_MAX_ATTEMPTS:-}
+      - JOBS_BACKOFF_BASE=${JOBS_BACKOFF_BASE:-}
+      - JOBS_BACKOFF_MAX=${JOBS_BACKOFF_MAX:-}
+      - JOBS_RETENTION=${JOBS_RETENTION:-}
+      - JOBS_DEAD_RETENTION=${JOBS_DEAD_RETENTION:-}
+      - JOBS_STALE_AFTER=${JOBS_STALE_AFTER:-}
       # Response compression (gzip, on by default). Empty keeps the backend
       # default (true and 1024 bytes).
       - COMPRESSION_ENABLED=${COMPRESSION_ENABLED:-}

@@ -27,15 +27,16 @@ signal -> shutdown              # ordered, see below
 2. Audit recorder (auth on): drain the pending audit writes.
 3. Leader worker group: stop the background workers.
 4. In-flight work (`inflight.Tracker`): wait for work that outlives its request.
-5. Outbox poller (`OUTBOX_ENABLED=true`): stop it within a fixed 2 s, after the HTTP server and the in-flight work and before the hub and the database close.
-6. WebSocket hub: close the client connections.
-7. Telemetry flush (OpenTelemetry; a no-op with `OTEL_ENABLED=false` and `METRICS_ENABLED=false`).
-8. Rate limiters: stop their cleanup goroutines.
-9. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
-10. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): stop it and delete this process's row, within a fixed 2 s.
-11. Database: close the pool last.
+5. Job pool (`JOBS_ENABLED=true`): stop claiming, give the running jobs a fixed 5 s, then cancel and release them within a fixed 2 s more (7 s in all), after the HTTP server and the in-flight work and before the outbox poller, the hub and the database close. The workers belong to the pool, not to `inflight.Tracker`.
+6. Outbox poller (`OUTBOX_ENABLED=true`): stop it within a fixed 2 s, after the HTTP server, the in-flight work and the job pool and before the hub and the database close.
+7. WebSocket hub: close the client connections.
+8. Telemetry flush (OpenTelemetry; a no-op with `OTEL_ENABLED=false` and `METRICS_ENABLED=false`).
+9. Rate limiters: stop their cleanup goroutines.
+10. Session store (auth on): stop its cleanup goroutine, after everything that reads it.
+11. Replica heartbeat (`REPLICA_HEARTBEAT_ENABLED=true`): stop it and delete this process's row, within a fixed 2 s.
+12. Database: close the pool last.
 
-The steps 1, 2, 3, 4 and 7 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0, the 2 s of step 5 and the 2 s of step 10 (156 s with the default 30 s). The orchestrator's stop grace period must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s. Details: `docs/claude/operations.md`.
+The steps 1, 2, 3, 4 and 8 have their own detached budgets, so the worst case is about five times `SERVER_SHUTDOWN_TIMEOUT` plus the 2 s of step 0, the 7 s of step 5, the 2 s of step 6 and the 2 s of step 11 (163 s with the default 30 s). The orchestrator's stop grace period must be longer: `docker-compose.yml` sets `stop_grace_period: 170s` for the default 30 s, which still covers it. Details: `docs/claude/operations.md`.
 
 **Gin mode.** `GIN_MODE` wins when it is set. Otherwise the mode is debug when `APP_DEBUG` is true and release when it is false. The code default of `APP_DEBUG` is `true` and nothing warns about it: set `APP_DEBUG=false` in production (`make prod*` does).
 
@@ -125,6 +126,7 @@ Directory rules: `backend/CLAUDE.md`, `frontend/CLAUDE.md`. GitHub Copilot reads
 - `/api/v1` adds the API rate limiter (`RATE_LIMIT`, default 100 per minute per client IP). With auth on, login, register, the OIDC routes and the password change (`PUT /auth/me/password`) get their own `LOGIN_RATE_LIMIT` budgets (default 10).
 - With auth on, the API group adds `CombinedAuth` (JWT and API key) and the audit recorder. Role gates are `RequireAdmin()` and `RequireRole`.
 - Optional idempotency keys (`IDEMPOTENCY_ENABLED=true`, off by default): `middleware.Idempotency` makes a `POST` with an `Idempotency-Key` header run once and replays the stored response on a repeat. A new `/api/v1` POST route lists the header in its Swagger annotations. Rules: `docs/claude/operations.md`.
+- Optional background jobs (`JOBS_ENABLED=true`, off by default): `internal/jobs`, a MySQL queue (`jobs` table, `SELECT ... FOR UPDATE SKIP LOCKED`) with a worker pool on every replica. `GET /api/v1/jobs` (admin with auth on, no payload) exists only with the module on. The application registers handlers in `registerJobs` (`api/jobs.go`) and a handler enqueues with `jobs.Queue`; delivery is at least once, so a handler is idempotent. Walkthrough: `EXTENDING.md` ("Adding a background job"); rules: `docs/claude/operations.md` ("Background jobs").
 - Optional mail and password reset (`MAIL_ENABLED=true`, `PASSWORD_RESET_ENABLED=true`, both off by default): `internal/mail` (`Mailer`, SMTP and fake) and `handlers/password_reset.go`. `POST /auth/password-reset` always answers 202 with one body and does the lookup and the send after the answer in `inflight.Tracker.Go`; never add work or a branch that changes its status, body, headers or timing. `POST /auth/password-reset/confirm` answers one generic 400 for every unusable token. The token is in the URL fragment, only its SHA-256 is stored, the bootstrap admin (a service account) never gets a mail. Flow: `docs/claude/auth-sessions.md` ("Password reset"); variables: `docs/claude/operations.md`.
 - WebSocket: `/ws`. Health: `/health/live`, `/health/ready`, `/health`. Swagger UI: `/swagger/*` only with `ENABLE_SWAGGER=true`; it stays open with auth on.
 - Client IP: only peers in `TRUSTED_PROXIES` may set it with `X-Forwarded-For` or `X-Real-IP`.
@@ -173,6 +175,7 @@ Details: `docs/claude/operations.md`.
 - Paginate every new list endpoint (`limit` and `offset` with `ListPaged`). Select only the columns that the list needs. Give the query an index that covers its filter and its order. Use batch queries instead of N+1 loops.
 - Add a periodic job as a `leader.Worker` with a restartable `Run(ctx)`, passed to `leader.NewGroup` in `buildServices` before the group starts. Keep state that must survive a leader change in the database. With `LEADER_ELECTION_ENABLED=false` (the default) every process runs the workers; with `true` only the holder of the MySQL lease (`leader.Lease`) does. Either way a job must be idempotent and safe on several replicas, and return within 5 s after its context is cancelled.
 - Work that outlives its request starts with `inflight.Tracker.Go`. Shutdown waits for it before the database closes.
+- Work that must run in the background on demand (retries, survives a restart) is a job (`JOBS_ENABLED=true`): register a handler in `registerJobs`, enqueue with `jobs.Queue`, make the handler idempotent (at least once, no dedupe) and return `jobs.Permanent(err)` for a failure that a retry cannot fix. The pool of each replica is stopped by its own shutdown step (5 s drain, 2 s release), after the in-flight work and before the outbox poller, the hub and the database close; a handler must honour its context. A periodic job stays a `leader.Worker`.
 - With `OUTBOX_ENABLED=true` write an event through the repository hook (`models.WithChangeHook`) in the transaction of the change and never broadcast it directly; the poller of each replica delivers it (`docs/claude/operations.md`, "Outbox").
 - Send WebSocket messages through the hub (`Broadcast`, `BroadcastToTopic`, `BroadcastToUser`) and revoke through `DisconnectUser`, `DisconnectToken` or `DisconnectAPIKey`, never by writing to a connection. Hub state is per replica: a message reaches only the sockets of the replica that sent it.
 - Register every external dependency with `healthChecker.AddCheck()`, or with `AddInformationalCheck()` when the service works without it (it shows as DEGRADED and never gates readiness).

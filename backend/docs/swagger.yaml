@@ -103,6 +103,19 @@ definitions:
       username:
         type: string
     type: object
+  handlers.JobListResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/models.Job'
+        type: array
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+    type: object
   handlers.LoginRequest:
     properties:
       password:
@@ -315,6 +328,48 @@ definitions:
       version:
         description: For optimistic locking (1 = initial; 0 = not provided)
         type: integer
+    type: object
+  models.Job:
+    properties:
+      attempts:
+        description: 'Attempts is the number of claims: a crash of a worker counts.'
+        type: integer
+      created_at:
+        type: string
+      finished_at:
+        description: FinishedAt is set when the job became succeeded or dead.
+        type: string
+      id:
+        description: ID is the auto increment key.
+        type: integer
+      last_error:
+        description: |-
+          LastError is the error text of the last failed attempt, cut to
+          JobLastErrorMaxChars characters.
+        type: string
+      locked_by:
+        description: |-
+          LockedBy is the worker (replica ID and worker number) that holds the
+          lease. Empty when the job is not running.
+        type: string
+      locked_until:
+        description: LockedUntil is the end of the lease of a running job.
+        type: string
+      max_attempts:
+        description: MaxAttempts is the number of claims after which a failing job
+          is dead.
+        type: integer
+      run_at:
+        description: RunAt is when the job is due.
+        type: string
+      status:
+        description: Status is one of JobStatuses.
+        type: string
+      type:
+        description: Type is the registered handler name.
+        type: string
+      updated_at:
+        type: string
     type: object
   models.PaginatedAuditLogs:
     properties:
@@ -1664,6 +1719,94 @@ paths:
       summary: Update an item
       tags:
       - items
+  /api/v1/jobs:
+    get:
+      description: 'Returns one page of jobs of the queue (optional module, JOBS_ENABLED=true;
+        the route does not exist otherwise), newest first unless sort and order say
+        otherwise. Rows with an equal sort value are ordered by id in the same direction,
+        so pages never repeat or skip a row. Never the payload: a job shows its type,
+        status, attempts, schedule, the worker that holds it and the text of the last
+        error. Admin only with AUTH_ENABLED=true. A read: no audit entry.'
+      parameters:
+      - description: Page size (default 25, at most 100)
+        in: query
+        name: limit
+        type: integer
+      - description: Rows to skip (default 0, at most 100000)
+        in: query
+        name: offset
+        type: integer
+      - description: Status
+        enum:
+        - pending
+        - running
+        - succeeded
+        - dead
+        in: query
+        name: status
+        type: string
+      - description: Job type (exact, at most 100 characters)
+        in: query
+        name: type
+        type: string
+      - description: Sort key (default id)
+        enum:
+        - created_at
+        - run_at
+        - id
+        in: query
+        name: sort
+        type: string
+      - description: Sort direction (default desc)
+        enum:
+        - asc
+        - desc
+        in: query
+        name: order
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.JobListResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Authentication required (AUTH_ENABLED=true)
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "499":
+          description: Client closed request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      - ApiKeyAuth: []
+      summary: List background jobs
+      tags:
+      - jobs
   /api/v1/ping:
     get:
       description: Ping test endpoint

@@ -32,6 +32,7 @@ backend/
 ├── api/
 │   ├── main.go                # config -> telemetry -> database -> services -> HTTP server -> signal -> shutdown; Swagger header
 │   ├── bootstrap.go           # initTelemetry, initDatabase, buildServices, buildRouter, startHTTPServer, shutdown (ordered)
+│   ├── jobs.go                # registerJobs (where an application registers job handlers; none in the template), buildJobs, the jobs health check
 │   └── soft_delete.go         # purgeWorker: leader worker that purges soft deleted rows (not registered by default)
 ├── internal/
 │   ├── api/
@@ -41,17 +42,18 @@ backend/
 │   │   │                      # HTTPMetrics, SpanEnrichUser, auth_metrics.go (auth outcome counters)
 │   │   └── handlers/          # items.go (reference CRUD), auth*.go, oidc.go, users.go, api_keys.go,
 │   │                          # audit_logs.go, websocket*.go, ui_config.go, rate_limiter.go, errors.go,
-│   │                          # password_reset.go, login_failure.go, mock_repository.go and test_schemas.go (test support)
+│   │                          # password_reset.go, jobs.go (admin job list), login_failure.go, mock_repository.go and test_schemas.go (test support)
 │   ├── auth/                  # OIDC provider client (discovery, PKCE, ID token validation); authtest/ fake IdP
 │   ├── config/                # LoadConfig, AuthConfig, OIDCConfig, TrustedProxies
 │   ├── ctxutil/               # Detach: a bounded context that a leaving client cannot cancel
 │   ├── database/              # factory, migrations, schema/ (migrator), repositories (users, refresh tokens,
-│   │                          # API keys, audit log, replica heartbeats, idempotency keys, outbox events, password reset tokens), BaseRepository (lock retry), gorm logger
+│   │                          # API keys, audit log, replica heartbeats, idempotency keys, outbox events, jobs, password reset tokens), BaseRepository (lock retry), gorm logger
 │   ├── health/                # Liveness and readiness checks
 │   ├── mail/                  # Mailer interface, SMTP implementation (go-mail), FakeMailer, cached readiness check
 │   ├── inflight/              # Tracker for work that outlives its request
+│   ├── jobs/                  # Optional job queue: Registry, Queue (Enqueue), Pool (claim, lease, retry, dead letter, release), Permanent, jobs-cleanup worker, Metrics
 │   ├── leader/                # Worker and Group: leader-only background jobs; Lease: MySQL row lease election
-│   ├── models/                # Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, IdempotencyKey, OutboxEvent, PasswordResetToken, validation,
+│   ├── models/                # Item, User, RefreshToken, APIKey, AuditLog, ReplicaHeartbeat, IdempotencyKey, OutboxEvent, Job, PasswordResetToken, validation,
 │   │                          # GenericRepository (optional change hook, opt-in soft delete in soft_delete.go), RetryOnLock
 │   ├── logutil/               # Limiter: one log line per interval for a repeating error
 │   ├── outbox/                # Poller (delivers outbox_events to the hub, gap window), ItemHook, Metrics

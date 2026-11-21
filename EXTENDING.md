@@ -139,7 +139,63 @@ With the outbox module (`OUTBOX_ENABLED=true`) an event that must survive a cras
 
 ## Adding a background job
 
+There are two kinds. A periodic job runs on a schedule and is a `leader.Worker`; a job on demand is started by a request or an event and runs from the queue.
+
+### A periodic job
+
 A periodic job is a `leader.Worker` with a restartable `Run(ctx)` (use `periodicWorker(name, interval, fn)` in `api/bootstrap.go`). Add it to the `leaderWorkers` list in `buildServices`, before the group starts. With `LEADER_ELECTION_ENABLED=false` (the default) every process runs it; with `true` only the lease holder does, but a paused or cut-off leader can overlap its successor briefly, so the job must be idempotent and safe on several replicas either way, and must return within 5 s after its context is cancelled. Keep state that must survive in the database. Work that outlives its request starts with `inflight.Tracker.Go` and must respect cancellation. A new external dependency gets `healthChecker.AddCheck`.
+
+### A job on demand (the queue)
+
+Work that a request starts and that must survive a restart, be retried and not hold the request (a report, an export, a call to a slow service) is a job of the optional queue (`JOBS_ENABLED=true`; `docs/claude/operations.md`, "Background jobs"). The template registers no job type: the three steps below are yours.
+
+1. **Register a handler** in `registerJobs` (`backend/api/jobs.go`), the one place that fills the registry before the pool starts. A type name is 1 to 100 characters of `a-z0-9._-`; a duplicate or invalid name panics at start.
+
+   ```go
+   func registerJobs(reg *jobs.Registry) {
+       reg.Register("report.generate", func(ctx context.Context, job jobs.Job) error {
+           var p reportPayload
+           if err := json.Unmarshal(job.Payload, &p); err != nil {
+               return jobs.Permanent(err) // a payload that does not parse never gets better
+           }
+           return generateReport(ctx, p.ReportID) // honour ctx: shutdown cancels it
+       })
+   }
+   ```
+
+2. **Enqueue from a handler.** The handler struct holds the `*jobs.Queue`; `routes.Setup` receives it as `deps.JobQueue` (nil with the module off, and a nil queue answers `jobs.ErrDisabled`), so pass it to your handler's constructor there.
+
+   ```go
+   type ReportHandler struct {
+       queue *jobs.Queue
+   }
+
+   func (h *ReportHandler) Create(c *gin.Context) {
+       // ... bind and validate the request ...
+       id, err := h.queue.Enqueue(c.Request.Context(), "report.generate",
+           reportPayload{ReportID: reportID}, jobs.WithMaxAttempts(3))
+       if errors.Is(err, jobs.ErrDisabled) {
+           c.JSON(http.StatusNotImplemented, gin.H{"error": "Background jobs are not enabled"})
+           return
+       }
+       if err != nil {
+           slog.ErrorContext(c.Request.Context(), "Failed to enqueue the report job", "error", err)
+           c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+           return
+       }
+       c.JSON(http.StatusAccepted, gin.H{"job_id": id})
+   }
+   ```
+
+   `Enqueue` needs no registered handler in this process (a rolling deploy can enqueue a type that only the new replicas handle). Options: `WithDelay`, `WithRunAt` (uses the clock of this process; prefer `WithDelay`) and `WithMaxAttempts`. The payload is marshalled to JSON and at most 64 KiB: put an ID in it, not the data, and never a secret, because the row lives for `JOBS_RETENTION` or `JOBS_DEAD_RETENTION`. A handler that enqueues is a mutating route: register its route and audit entity type as for any resource.
+
+3. **Make the handler safe to run twice.** Delivery is at least once. A worker that crashes after the side effect and before the result is written, a lease that passes while the process hangs, or a retry after a timeout runs the handler again, possibly at the same time on another replica. There is no deduplication or unique key (two `Enqueue` calls are two jobs), so key the side effect on something in the payload (a report ID, an idempotent upsert, a conditional update) and treat "already done" as success.
+
+**Outcome.** A handler that returns nil is `succeeded`. An error is retried after `min(JOBS_BACKOFF_BASE * 2^(attempt-1), JOBS_BACKOFF_MAX)` (shortened by up to 20% of jitter) until `attempts` reaches `max_attempts` (`JOBS_MAX_ATTEMPTS`, or `WithMaxAttempts`), then the job is `dead` (the dead letter: it stays for `JOBS_DEAD_RETENTION` and nothing runs it again). `jobs.Permanent(err)` goes to `dead` at once. A panic counts as a failure. `last_error` holds the error text (cut to 2000 characters), so never put a secret or personal data in an error. A crashed replica's job runs again after `JOBS_VISIBILITY_TIMEOUT`.
+
+**See it.** `GET /api/v1/jobs` (admin with auth on) lists the jobs with `status`, `type`, `sort` and `order` filters, their attempts, schedule and `last_error`, never the payload. There is no API to retry, cancel or delete a job; a dead job is read, fixed in code and enqueued again. The health check `jobs` shows DEGRADED when due jobs wait longer than `JOBS_STALE_AFTER` (also for a type that no replica handles).
+
+**Tests.** Register the handler on a `jobs.NewRegistry()` in a test and call it with a `jobs.Job`; test the enqueue handler with a `*jobs.Queue` on a fake `models.JobRepository`. Integration tests of the queue itself need MySQL (`make test-backend-all`).
 
 ## Adding soft delete to an entity
 
