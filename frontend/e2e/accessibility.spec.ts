@@ -1,4 +1,4 @@
-import { test } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { MODES, checkPage, prepareRun, type PageCheck } from './a11y';
 import type { DecisionInput } from './skipDecision';
 
@@ -6,6 +6,8 @@ import type { DecisionInput } from './skipDecision';
 // 1400x1000. See a11y.ts for the rules and the environment (ADMIN_USERNAME,
 // ADMIN_PASSWORD, and A11Y_REQUIRE_AUTH=1 which turns a skip into a failure).
 //
+// - Home at 375 px wide (below the `sm` breakpoint): the navigation is a drawer;
+//   checked closed and open. With auth on it needs the local administrator.
 // - Items: with auth off it opens directly; with auth on it needs the local
 //   administrator.
 // - Login: only exists with auth on (with auth off it redirects home).
@@ -83,5 +85,34 @@ test.describe('Accessibility: colour contrast and structure', () => {
         await checkPage(page, mode, { ...spec, signIn });
       });
     }
+  }
+});
+
+// Below `sm` the navigation is a temporary drawer: check the page with the drawer
+// closed and with it open (the open drawer covers the page with a backdrop, and
+// its links and account items are the new surface).
+test.describe('Accessibility: Home at 375 px (drawer)', () => {
+  test.use({ viewport: { width: 375, height: 800 } });
+
+  const HOME: PageCheck = { path: '/', heading: 'Welcome to Application Template' };
+  const needs: PageCase['needs'] = { needsAuth: false, needsSignIn: false, signInWhenAuthOn: true };
+
+  for (const mode of MODES) {
+    test(`home, drawer closed (${mode})`, async ({ page }) => {
+      const { signIn } = await prepareRun(page, needs);
+      await checkPage(page, mode, { ...HOME, signIn });
+    });
+
+    test(`home, drawer open (${mode})`, async ({ page }) => {
+      const { signIn } = await prepareRun(page, needs);
+      await checkPage(page, mode, {
+        ...HOME,
+        signIn,
+        beforeAxe: async (p) => {
+          await p.getByRole('button', { name: 'Open navigation menu' }).click();
+          await expect(p.getByRole('navigation', { name: 'Main navigation' })).toBeVisible();
+        },
+      });
+    });
   }
 });

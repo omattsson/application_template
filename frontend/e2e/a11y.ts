@@ -69,6 +69,8 @@ export interface PageCheck {
    * (no query). Each entry needs a comment that says why the call fails.
    */
   allowed5xx?: RegExp[];
+  /** Runs after the page loaded and before axe (open a drawer, for example). */
+  beforeAxe?: (page: Page) => Promise<void>;
 }
 
 /**
@@ -331,5 +333,6 @@ export async function checkPage(page: Page, mode: Mode, spec: PageCheck): Promis
   await expect(page.getByRole('progressbar'), `${what}: a spinner is still shown`).toHaveCount(0, { timeout: 15_000 });
   expect(failed, `${what}: API call(s) answered 5xx\n  ${failed.join('\n  ')}`).toEqual([]);
 
+  await spec.beforeAxe?.(page);
   await runAxe(page, what);
 }

@@ -22,7 +22,7 @@ test.describe('WebSocket Integration', () => {
     await page.goto('/');
 
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-      'Welcome to the Full Stack Application',
+      'Welcome to Application Template',
       { timeout: 10_000 }
     );
 
@@ -34,20 +34,20 @@ test.describe('WebSocket Integration', () => {
     await page.goto('/');
     await expect(
       page.getByRole('heading', { level: 1 })
-    ).toHaveText('Welcome to the Full Stack Application', { timeout: 10_000 });
+    ).toHaveText('Welcome to Application Template', { timeout: 10_000 });
 
     // Navigate away and back — the WebSocket provider should survive route changes
-    await page.getByRole('link', { name: /health/i }).click();
+    await page.getByRole('banner').getByRole('link', { name: /health/i }).click();
     await expect(page).toHaveURL('/health');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
       'System Health',
       { timeout: 10_000 }
     );
 
-    await page.getByRole('link', { name: /home/i }).click();
+    await page.getByRole('banner').getByRole('link', { name: /home/i }).click();
     await expect(page).toHaveURL('/');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-      'Welcome to the Full Stack Application'
+      'Welcome to Application Template'
     );
   });
 
@@ -58,7 +58,7 @@ test.describe('WebSocket Integration', () => {
     await page.goto('/');
     await expect(
       page.getByRole('heading', { level: 1 })
-    ).toHaveText('Welcome to the Full Stack Application', { timeout: 10_000 });
+    ).toHaveText('Welcome to Application Template', { timeout: 10_000 });
 
     // Simulate a network interruption by going offline then online
     await context.setOffline(true);
@@ -66,10 +66,10 @@ test.describe('WebSocket Integration', () => {
 
     // App UI must still be functional after the interruption
     await expect(
-      page.getByRole('link', { name: /health/i })
+      page.getByRole('banner').getByRole('link', { name: /health/i })
     ).toBeVisible({ timeout: 10_000 });
 
-    await page.getByRole('link', { name: /health/i }).click();
+    await page.getByRole('banner').getByRole('link', { name: /health/i }).click();
     await expect(page).toHaveURL('/health');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
       'System Health',
