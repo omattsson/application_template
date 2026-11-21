@@ -32,7 +32,7 @@ You are a senior frontend engineer for React, TypeScript, and Material UI (MUI).
 1. Add a service object in `src/api/client.ts`. Each service object and method has TSDoc with `@param`, `@returns`, and `@see` (HTTP method and route). The API base path is `/api`; the SPA calls `/api/api/v1/...` (the proxy strips one `/api`), so follow the paths of the existing services.
 2. Add the page as `src/pages/{Name}/index.tsx` (default export). Render in this order: loading (`LoadingState`), error (`Alert severity="error"`), content (or `EmptyState`). Title: `Typography variant="h4" component="h1"`.
 3. Add the route in `src/routes.tsx`. Wrap protected pages in `ProtectedRoute`. Use its `roles` prop for a role-gated page.
-4. Add the navigation entry in `src/components/Layout/index.tsx`.
+4. Add the navigation entry to `NAV_ITEMS` in `src/components/Layout/navItems.ts` (the app bar, the drawer and the Home page read it).
 5. Add tests in `src/pages/{Name}/__tests__/`.
 6. Add the page to `PAGES` in `e2e/accessibility.spec.ts`. Add or extend an e2e spec in `frontend/e2e/` for a new feature.
 

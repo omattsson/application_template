@@ -7,7 +7,7 @@ applyTo: "**/*.{ts,tsx}"
 The frontend rules are in `frontend/CLAUDE.md`; the repository-wide rules are in `CLAUDE.md`. Summary:
 
 - Vite, React 19, MUI v9, react-router-dom v7, TypeScript 6 (strict; `noUnusedLocals` and `noUnusedParameters` are enforced). Node 22.12 or later.
-- Entry `src/main.tsx`, then `App.tsx` (providers) and `routes.tsx`. A page is a directory `src/pages/<Name>/index.tsx`, registered in `routes.tsx` inside `ProtectedRoute` (with `roles` for an admin page) and linked in `components/Layout/index.tsx`.
+- Entry `src/main.tsx`, then `App.tsx` (providers) and `routes.tsx`. A page is a directory `src/pages/<Name>/index.tsx`, registered in `routes.tsx` inside `ProtectedRoute` (with `roles` for an admin page) and listed in `NAV_ITEMS` in `components/Layout/navItems.ts` (the app bar, the drawer and Home read it).
 - The API is always same-origin: `API_BASE_URL` is `/api` and the dev server and nginx strip one `/api`, so a call is `/api/api/v1/...`. Never call the backend port from the browser (the refresh cookie is `SameSite=Strict`).
 - API calls go through service objects in `src/api/client.ts` with a TSDoc comment (`@param`, `@returns`, `@see`). Log errors with `summarizeRequestError`, never the full Axios error.
 - The access token lives in memory (`src/api/session.ts`), never in storage. Do not add token handling to pages.
