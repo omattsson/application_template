@@ -1,15 +1,18 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
-import Home from './pages/Home';
-import Health from './pages/Health';
-import Items from './pages/Items';
-import AdminUsers from './pages/Admin/Users';
-import ApiKeys from './pages/Account/ApiKeys';
-import AuditLogs from './pages/Admin/AuditLogs';
-import Profile from './pages/Account/Profile';
-import Login from './pages/Login';
-import AuthCallback from './pages/AuthCallback';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
+// Every page loads on demand, so the first load carries the shell and the page that was asked for.
+// NotFound stays in the entry chunk: it is tiny and the fallback for any path.
+const Home = lazy(() => import('./pages/Home'));
+const Health = lazy(() => import('./pages/Health'));
+const Items = lazy(() => import('./pages/Items'));
+const AdminUsers = lazy(() => import('./pages/Admin/Users'));
+const ApiKeys = lazy(() => import('./pages/Account/ApiKeys'));
+const AuditLogs = lazy(() => import('./pages/Admin/AuditLogs'));
+const Profile = lazy(() => import('./pages/Account/Profile'));
+const Login = lazy(() => import('./pages/Login'));
+const AuthCallback = lazy(() => import('./pages/AuthCallback'));
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 import NotFound from './pages/NotFound';
 import ErrorBoundary from './components/ErrorBoundary';
 import LoadingState from './components/LoadingState';
@@ -41,28 +44,30 @@ const AppRoutes = () => {
       {resetPending || authOnlyPending ? (
         <LoadingState />
       ) : (
-        <Routes>
-          {/* Public: the sign-in page and the OIDC landing page. */}
-          <Route path="/login" element={<Login />} />
-          <Route path="/auth/callback" element={<AuthCallback />} />
-          {/* Public, and only with the password reset on and nobody signed in. */}
-          {resetRoutes && <Route path="/forgot-password" element={<ForgotPassword />} />}
-          {resetRoutes && <Route path="/reset-password" element={<ResetPassword />} />}
-          {/* ProtectedRoute renders the page directly when auth is disabled. */}
-          <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
-          <Route path="/health" element={<ProtectedRoute><Health /></ProtectedRoute>} />
-          <Route path="/items" element={<ProtectedRoute><Items /></ProtectedRoute>} />
-          <Route path="/admin/users" element={<ProtectedRoute roles={['admin']}><AdminUsers /></ProtectedRoute>} />
-          {/* Only with auth on: with auth off the path is not found. */}
-          {profileRoute && <Route path="/account" element={<ProtectedRoute><Profile /></ProtectedRoute>} />}
-          {authEnabled && (
-            <Route path="/account/api-keys" element={<ProtectedRoute><ApiKeys /></ProtectedRoute>} />
-          )}
-          {authEnabled && (
-            <Route path="/admin/audit-logs" element={<ProtectedRoute roles={['admin']}><AuditLogs /></ProtectedRoute>} />
-          )}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <Suspense fallback={<LoadingState />}>
+          <Routes>
+            {/* Public: the sign-in page and the OIDC landing page. */}
+            <Route path="/login" element={<Login />} />
+            <Route path="/auth/callback" element={<AuthCallback />} />
+            {/* Public, and only with the password reset on and nobody signed in. */}
+            {resetRoutes && <Route path="/forgot-password" element={<ForgotPassword />} />}
+            {resetRoutes && <Route path="/reset-password" element={<ResetPassword />} />}
+            {/* ProtectedRoute renders the page directly when auth is disabled. */}
+            <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
+            <Route path="/health" element={<ProtectedRoute><Health /></ProtectedRoute>} />
+            <Route path="/items" element={<ProtectedRoute><Items /></ProtectedRoute>} />
+            <Route path="/admin/users" element={<ProtectedRoute roles={['admin']}><AdminUsers /></ProtectedRoute>} />
+            {/* Only with auth on: with auth off the path is not found. */}
+            {profileRoute && <Route path="/account" element={<ProtectedRoute><Profile /></ProtectedRoute>} />}
+            {authEnabled && (
+              <Route path="/account/api-keys" element={<ProtectedRoute><ApiKeys /></ProtectedRoute>} />
+            )}
+            {authEnabled && (
+              <Route path="/admin/audit-logs" element={<ProtectedRoute roles={['admin']}><AuditLogs /></ProtectedRoute>} />
+            )}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
       )}
     </ErrorBoundary>
   );

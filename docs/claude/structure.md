@@ -81,7 +81,7 @@ The old `internal/api/routes.go` is a placeholder; all routes are in `internal/a
 frontend/
 ├── src/
 │   ├── main.tsx, App.tsx      # Entry, providers (theme, UI config, auth, WebSocket), Layout
-│   ├── routes.tsx             # Route table; ProtectedRoute per page
+│   ├── routes.tsx             # Route table; lazy page chunks, ProtectedRoute per page
 │   ├── api/                   # config.ts (same-origin /api), client.ts (services), session.ts, refresh.ts, errorSummary.ts
 │   ├── context/               # AuthContext, UIConfigContext, WebSocketContext, NotificationContext, ThemeContext
 │   ├── hooks/                 # useWebSocket, useUnsavedChanges

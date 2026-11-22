@@ -81,35 +81,35 @@ describe('AppRoutes', () => {
     ['/', 'Home page'],
     ['/health', 'Health page'],
     ['/items', 'Items page'],
-  ])('renders %s', (path, heading) => {
+  ])('renders %s', async (path, heading) => {
     renderAt(path);
-    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
   });
 
   it.each([
     ['/login', 'Login page'],
     ['/auth/callback', 'Callback page'],
-  ])('renders the public auth route %s', (path, heading) => {
+  ])('renders the public auth route %s', async (path, heading) => {
     vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
     renderAt(path);
-    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
   });
 
-  it.each(['/', '/health', '/items'])('protects %s when auth is enabled', (path) => {
+  it.each(['/', '/health', '/items'])('protects %s when auth is enabled', async (path) => {
     vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
     renderAt(path);
-    expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Login page' })).toBeInTheDocument();
   });
 
   describe('/admin/users', () => {
     const ALICE = { id: 'u1', username: 'alice', display_name: 'Alice', role: 'admin' as const };
 
-    it('renders for an admin', () => {
+    it('renders for an admin', async () => {
       vi.mocked(useAuth).mockReturnValue(
         authState({ authEnabled: true, isAuthenticated: true, user: ALICE, role: 'admin' }),
       );
       renderAt('/admin/users');
-      expect(screen.getByRole('heading', { name: 'Admin users page' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Admin users page' })).toBeInTheDocument();
     });
 
     it.each(['user', 'devops'] as const)('shows Access denied (no redirect) to the role %s', (role) => {
@@ -122,26 +122,26 @@ describe('AppRoutes', () => {
       expect(screen.queryByRole('heading', { name: 'Login page' })).not.toBeInTheDocument();
     });
 
-    it('sends an anonymous visitor to the login page', () => {
+    it('sends an anonymous visitor to the login page', async () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
       renderAt('/admin/users');
-      expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Login page' })).toBeInTheDocument();
     });
   });
 
   describe('/account/api-keys', () => {
     const SIGNED_IN = { id: 'u1', username: 'alice', display_name: 'Alice', role: 'user' as const };
 
-    it('renders for a signed-in user when auth is enabled', () => {
+    it('renders for a signed-in user when auth is enabled', async () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: SIGNED_IN, role: 'user' }));
       renderAt('/account/api-keys');
-      expect(screen.getByRole('heading', { name: 'API keys page' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'API keys page' })).toBeInTheDocument();
     });
 
-    it('sends an anonymous visitor to the login page', () => {
+    it('sends an anonymous visitor to the login page', async () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
       renderAt('/account/api-keys');
-      expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Login page' })).toBeInTheDocument();
       expect(screen.queryByRole('heading', { name: 'API keys page' })).not.toBeInTheDocument();
     });
 
@@ -164,22 +164,22 @@ describe('AppRoutes', () => {
   describe('/account', () => {
     const SIGNED_IN = { id: 'u1', username: 'alice', display_name: 'Alice', role: 'user' as const };
 
-    it('renders for a signed-in user with auth and local sign-in on', () => {
+    it('renders for a signed-in user with auth and local sign-in on', async () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: SIGNED_IN, role: 'user' }));
       renderAt('/account');
-      expect(screen.getByRole('heading', { name: 'Account page' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Account page' })).toBeInTheDocument();
     });
 
-    it('also renders with a trailing slash', () => {
+    it('also renders with a trailing slash', async () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: SIGNED_IN, role: 'user' }));
       renderAt('/account/');
-      expect(screen.getByRole('heading', { name: 'Account page' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Account page' })).toBeInTheDocument();
     });
 
-    it('sends an anonymous visitor to the login page', () => {
+    it('sends an anonymous visitor to the login page', async () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
       renderAt('/account');
-      expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Login page' })).toBeInTheDocument();
       expect(screen.queryByRole('heading', { name: 'Account page' })).not.toBeInTheDocument();
     });
 
@@ -219,10 +219,10 @@ describe('AppRoutes', () => {
   describe('/admin/audit-logs', () => {
     const ALICE_ADMIN = { id: 'u1', username: 'alice', display_name: 'Alice', role: 'admin' as const };
 
-    it('renders for an admin when auth is enabled', () => {
+    it('renders for an admin when auth is enabled', async () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true, isAuthenticated: true, user: ALICE_ADMIN, role: 'admin' }));
       renderAt('/admin/audit-logs');
-      expect(screen.getByRole('heading', { name: 'Audit log page' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Audit log page' })).toBeInTheDocument();
     });
 
     it.each(['user', 'devops'] as const)('shows Access denied (no redirect) to the role %s', (role) => {
@@ -234,10 +234,10 @@ describe('AppRoutes', () => {
       expect(screen.queryByRole('heading', { name: 'Audit log page' })).not.toBeInTheDocument();
     });
 
-    it('sends an anonymous visitor to the login page', () => {
+    it('sends an anonymous visitor to the login page', async () => {
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
       renderAt('/admin/audit-logs');
-      expect(screen.getByRole('heading', { name: 'Login page' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Login page' })).toBeInTheDocument();
       expect(screen.queryByRole('heading', { name: 'Audit log page' })).not.toBeInTheDocument();
     });
 
@@ -263,11 +263,11 @@ describe('AppRoutes', () => {
       ['/reset-password', 'Reset password page'],
     ] as const;
 
-    it.each(PATHS)('renders %s for a visitor when the reset is on', (path, heading) => {
+    it.each(PATHS)('renders %s for a visitor when the reset is on', async (path, heading) => {
       vi.mocked(useUIConfig).mockReturnValue(uiConfig({ password_reset_enabled: true }));
       vi.mocked(useAuth).mockReturnValue(authState({ authEnabled: true }));
       renderAt(path);
-      expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
     });
 
     it.each(PATHS)('has no %s route when the reset is off (NotFound)', (path) => {
@@ -310,10 +310,10 @@ describe('AppRoutes', () => {
         <AppRoutes />
       </MemoryRouter>,
     );
-    expect(screen.getByRole('heading', { name: 'Something went wrong' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Something went wrong' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Go to health' })).toBeInTheDocument();
 
     await user.click(screen.getByRole('link', { name: 'Go to health' }));
-    expect(screen.getByRole('heading', { name: 'Health page' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Health page' })).toBeInTheDocument();
   });
 });

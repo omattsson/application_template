@@ -1,6 +1,8 @@
 import { Component } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 import { Box, Typography, Button, Paper } from '@mui/material';
+import { isChunkLoadError } from '../../utils/chunkError';
+import { reloadPage } from '../../utils/navigation';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -10,16 +12,18 @@ interface ErrorBoundaryProps {
 
 interface ErrorBoundaryState {
   hasError: boolean;
+  /** The error was a page chunk that failed to load: only a reload helps (see `isChunkLoadError`). */
+  chunkError: boolean;
 }
 
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, chunkError: false };
   }
 
-  static getDerivedStateFromError(): ErrorBoundaryState {
-    return { hasError: true };
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return { hasError: true, chunkError: isChunkLoadError(error) };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
@@ -27,7 +31,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 
   handleReset = () => {
-    this.setState({ hasError: false });
+    this.setState({ hasError: false, chunkError: false });
   };
 
   render() {
@@ -35,6 +39,8 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
       if (this.props.fallback !== undefined) {
         return this.props.fallback;
       }
+      // React.lazy keeps a failed import for good, so "Try again" would fail again: reload instead.
+      const { chunkError } = this.state;
       return (
         <Box
           role="alert"
@@ -50,10 +56,12 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
               Something went wrong
             </Typography>
             <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-              An unexpected error occurred. Please try again.
+              {chunkError
+                ? 'This page could not be loaded. The application may have been updated, or the connection dropped. Reload the page to continue.'
+                : 'An unexpected error occurred. Please try again.'}
             </Typography>
-            <Button variant="contained" onClick={this.handleReset}>
-              Try again
+            <Button variant="contained" onClick={chunkError ? reloadPage : this.handleReset}>
+              {chunkError ? 'Reload page' : 'Try again'}
             </Button>
           </Paper>
         </Box>

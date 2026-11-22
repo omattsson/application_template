@@ -1,7 +1,11 @@
+import { lazy, Suspense } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ErrorBoundary from '../index';
+import { reloadPage } from '../../../utils/navigation';
+
+vi.mock('../../../utils/navigation', () => ({ reloadPage: vi.fn() }));
 
 // A component that throws on render
 const ThrowingComponent = ({ shouldThrow }: { shouldThrow: boolean }) => {
@@ -105,5 +109,61 @@ describe('ErrorBoundary', () => {
 
     expect(screen.getByText('Recovered content')).toBeInTheDocument();
     expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
+  });
+
+  describe('a page chunk that fails to load', () => {
+    const ChunkFailure = () => {
+      throw new TypeError('Failed to fetch dynamically imported module: https://x/assets/Items-abc.js');
+    };
+
+    it('offers a reload, not "Try again"', () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      render(
+        <ErrorBoundary>
+          <ChunkFailure />
+        </ErrorBoundary>,
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent('This page could not be loaded');
+      expect(screen.getByRole('button', { name: 'Reload page' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    });
+
+    it('reloads the window when "Reload page" is clicked', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      render(
+        <ErrorBoundary>
+          <ChunkFailure />
+        </ErrorBoundary>,
+      );
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Reload page' }));
+      expect(reloadPage).toHaveBeenCalledTimes(1);
+    });
+
+    it('catches the failed dynamic import of a lazy page', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const LazyPage = lazy(() =>
+        Promise.reject(new TypeError('Failed to fetch dynamically imported module: https://x/assets/Items-abc.js')),
+      );
+      render(
+        <ErrorBoundary>
+          <Suspense fallback={<p>Loading</p>}>
+            <LazyPage />
+          </Suspense>
+        </ErrorBoundary>,
+      );
+      expect(screen.getByText('Loading')).toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: 'Reload page' })).toBeInTheDocument();
+    });
+
+    it('keeps "Try again" for any other error', () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      render(
+        <ErrorBoundary>
+          <ThrowingComponent shouldThrow={true} />
+        </ErrorBoundary>,
+      );
+      expect(screen.queryByRole('button', { name: 'Reload page' })).not.toBeInTheDocument();
+      expect(reloadPage).not.toHaveBeenCalled();
+    });
   });
 });
