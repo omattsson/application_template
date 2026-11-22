@@ -58,7 +58,7 @@ frontend/src/
     config.ts                        # API_BASE_URL: always /api (same-origin)
     client.ts                        # Axios instance + service objects
   components/
-    Layout/index.tsx                 # AppBar + nav buttons + footer shell
+    Layout/index.tsx                 # AppBar, drawer and footer shell; navItems.ts holds the links
   pages/
     Home/index.tsx                   # Static page (reference for simple pages)
     Home/__tests__/Home.test.tsx     # Unit test reference
@@ -188,14 +188,13 @@ import Orders from './pages/Orders';
 <Route path="/orders" element={<Orders />} />
 ```
 
-### 4. Add navigation (`src/components/Layout/index.tsx`)
+### 4. Add navigation (`src/components/Layout/navItems.ts`)
 
-Add a nav button in the AppBar Toolbar:
-```tsx
-<Button color="inherit" component={RouterLink} to="/orders">
-  Orders
-</Button>
+Add an entry to `NAV_ITEMS`; the app bar, the drawer and the Home page read it:
+```ts
+{ label: 'Orders', path: '/orders', description: 'Create and track orders.' },
 ```
+Add `adminOnly: true` for a page that only an admin may open.
 
 ### 5. Unit tests (`src/pages/{Name}/__tests__/{Name}.test.tsx`)
 

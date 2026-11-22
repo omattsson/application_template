@@ -26,20 +26,20 @@ test.describe('Items Page', () => {
   test('navigates to Items page via nav link and back', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-      'Welcome to the Full Stack Application',
+      'Welcome to Application Template',
       { timeout: 10_000 }
     );
 
-    await page.getByRole('link', { name: /items/i }).click();
+    await page.getByRole('banner').getByRole('link', { name: /items/i }).click();
     await expect(page).toHaveURL('/items');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Items', {
       timeout: 10_000,
     });
 
-    await page.getByRole('link', { name: /home/i }).click();
+    await page.getByRole('banner').getByRole('link', { name: /home/i }).click();
     await expect(page).toHaveURL('/');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-      'Welcome to the Full Stack Application'
+      'Welcome to Application Template'
     );
   });
 
