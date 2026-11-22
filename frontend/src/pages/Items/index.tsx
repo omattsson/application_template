@@ -108,7 +108,7 @@ const Items = () => {
   const [filterInput, setFilterInput] = useState(q);
   // The URL filter that the field last followed; a change of it (Back, a link) updates the field.
   const [followedQ, setFollowedQ] = useState(q);
-  const { subscribe } = useWebSocketContext();
+  const { subscribe, reconnectCount } = useWebSocketContext();
   const { notify } = useNotification();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The refresh id of the last load that the fetch effect started.
@@ -204,6 +204,15 @@ const Items = () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [subscribe, scheduleRefresh, notify]);
+
+  // Messages may have been missed while the socket was down: load the page again
+  // when it has reopened. The first open (and a mount) is not a reconnect.
+  const seenReconnectsRef = useRef(reconnectCount);
+  useEffect(() => {
+    if (reconnectCount === seenReconnectsRef.current) return;
+    seenReconnectsRef.current = reconnectCount;
+    requestRefresh();
+  }, [reconnectCount, requestRefresh]);
 
   const updateQuery = (change: (current: ListQuery) => ListQuery, replace = false) => {
     setSearchParams((prev) => buildSearch(prev, change(parseQuery(prev))), { replace });

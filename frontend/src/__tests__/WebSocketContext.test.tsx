@@ -30,7 +30,7 @@ const { MockRWS, getInstance } = vi.hoisted(() => {
 vi.mock('reconnecting-websocket', () => ({ default: MockRWS }));
 
 import { WebSocketProvider, useWebSocketContext } from '../context/WebSocketContext';
-import { setAuthMode, resetSessionForTesting } from '../api/session';
+import { setAuthMode, resetSessionForTesting, startSession, endSession } from '../api/session';
 
 function wrapper({ children }: { children: React.ReactNode }) {
   return React.createElement(WebSocketProvider, null, children);
@@ -183,5 +183,42 @@ describe('WebSocketContext', () => {
     expect(handlerA).not.toHaveBeenCalled();
     expect(handlerB).toHaveBeenCalledTimes(1);
     expect(handlerB).toHaveBeenCalledWith({ type: 'item.deleted', payload: { id: 5 } });
+  });
+
+  it('is active when auth is off', () => {
+    const { result } = renderHook(() => useWebSocketContext(), { wrapper });
+    expect(result.current.active).toBe(true);
+  });
+
+  it('is not active for an anonymous visitor with auth on', () => {
+    setAuthMode('enabled');
+    const { result } = renderHook(() => useWebSocketContext(), { wrapper });
+    expect(result.current.active).toBe(false);
+    expect(result.current.connectionStatus).toBe('closed');
+  });
+
+  it('exposes reconnectCount', () => {
+    const { result } = renderHook(() => useWebSocketContext(), { wrapper });
+    act(() => getInstance().open());
+    expect(result.current.reconnectCount).toBe(0);
+    act(() => getInstance().close());
+    act(() => getInstance().open());
+    expect(result.current.reconnectCount).toBe(1);
+  });
+
+  it('does not count the first open after a sign-out and sign-in as a reconnect', () => {
+    setAuthMode('enabled');
+    const { result } = renderHook(() => useWebSocketContext(), { wrapper });
+    act(() => startSession('token-one', null));
+    act(() => getInstance().open());
+    expect(result.current.active).toBe(true);
+
+    act(() => endSession());
+    expect(result.current.active).toBe(false);
+
+    act(() => startSession('token-two', null));
+    act(() => getInstance().open());
+    expect(result.current.active).toBe(true);
+    expect(result.current.reconnectCount).toBe(0);
   });
 });

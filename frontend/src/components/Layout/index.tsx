@@ -27,6 +27,7 @@ import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { useThemeMode } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useUIConfig } from '../../context/UIConfigContext';
+import ConnectionStatus from '../ConnectionStatus';
 import { useNavItems } from './navItems';
 
 interface LayoutProps {
@@ -103,6 +104,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 {item.label}
               </Button>
             ))}
+          <ConnectionStatus />
           <Tooltip title={toggleLabel}>
             <IconButton color="inherit" onClick={toggleMode} aria-label={toggleLabel} sx={{ ml: 1 }}>
               {mode === 'light' ? <DarkModeIcon /> : <LightModeIcon />}

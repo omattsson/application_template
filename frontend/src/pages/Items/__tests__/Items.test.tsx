@@ -87,10 +87,13 @@ function setupSubscribeMock() {
       handlers[type] = handler;
       return mockUnsubscribe;
     });
-  (useWebSocketContext as ReturnType<typeof vi.fn>).mockReturnValue({
-    subscribe: mockSubscribe,
-  });
-  return { handlers, mockUnsubscribe, mockSubscribe };
+  const setReconnectCount = (reconnectCount: number) =>
+    (useWebSocketContext as ReturnType<typeof vi.fn>).mockReturnValue({
+      subscribe: mockSubscribe,
+      reconnectCount,
+    });
+  setReconnectCount(0);
+  return { handlers, mockUnsubscribe, mockSubscribe, setReconnectCount };
 }
 
 /** Shows the URL and the last navigation type, and has a Back button. */
@@ -109,8 +112,8 @@ function Probe() {
   );
 }
 
-function renderPage(entry = '/items') {
-  return render(
+function pageTree(entry = '/items') {
+  return (
     <NotificationProvider>
       <MemoryRouter initialEntries={[entry]}>
         <Routes>
@@ -125,8 +128,12 @@ function renderPage(entry = '/items') {
           />
         </Routes>
       </MemoryRouter>
-    </NotificationProvider>,
+    </NotificationProvider>
   );
+}
+
+function renderPage(entry = '/items') {
+  return render(pageTree(entry));
 }
 
 /** The query of the URL shown by the probe. */
@@ -189,6 +196,31 @@ describe('Items Page', () => {
         expect(screen.getByRole('alert')).toBeInTheDocument();
       });
       expect(screen.getByText('Failed to load items')).toBeInTheDocument();
+    });
+
+    it('loads the page again when the socket has reconnected, but not on the first open', async () => {
+      const { setReconnectCount } = setupSubscribeMock();
+      listMock.mockResolvedValue({ items: mockItems, total: 1 });
+
+      const { rerender } = renderPage();
+      await screen.findByRole('table');
+      expect(listMock).toHaveBeenCalledTimes(1);
+
+      // A render with an unchanged count (the socket opened for the first time) loads nothing.
+      rerender(pageTree());
+      expect(listMock).toHaveBeenCalledTimes(1);
+
+      setReconnectCount(1);
+      rerender(pageTree());
+      await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+
+      // The reload is silent: the table stays and no error shows.
+      expect(screen.getByRole('table')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      setReconnectCount(2);
+      rerender(pageTree());
+      await waitFor(() => expect(listMock).toHaveBeenCalledTimes(3));
     });
 
     it('shows item.created toast with correct item name', async () => {
