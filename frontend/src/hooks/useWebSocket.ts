@@ -41,6 +41,13 @@ export function webSocketUrl(path: string, token?: string | null): string {
 export interface UseWebSocketResult {
   lastMessage: WebSocketMessage | null;
   connectionStatus: ConnectionStatus;
+  /**
+   * How many times a socket opened after the first open since the socket was
+   * last wanted (a sign-out resets that): a reconnect, or the new socket of a
+   * new token. Messages may have been missed
+   * in between, so a page that shows live data loads it again when this grows.
+   */
+  reconnectCount: number;
   sendMessage: (data: unknown) => void;
 }
 
@@ -49,6 +56,8 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
   const wsRef = useRef<ReconnectingWebSocket | null>(null);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
+  const [reconnectCount, setReconnectCount] = useState(0);
+  const hasOpenedRef = useRef(false);
   const onMessageRef = useRef(onMessage);
 
   // Keep the callback ref up-to-date without re-creating the socket
@@ -60,13 +69,21 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
   useEffect(() => {
     if (!enabled) {
       wsRef.current = null;
+      // The next open after a sign-in is a first open, not a reconnect, and
+      // the status must not show the old `open` until the new socket starts.
+      hasOpenedRef.current = false;
+      setConnectionStatus('connecting');
       return;
     }
     const rws = new ReconnectingWebSocket(webSocketUrl(path, token));
     wsRef.current = rws;
     setConnectionStatus('connecting');
 
-    const handleOpen = () => setConnectionStatus('open');
+    const handleOpen = () => {
+      setConnectionStatus('open');
+      if (hasOpenedRef.current) setReconnectCount((count) => count + 1);
+      hasOpenedRef.current = true;
+    };
     const handleClose = () => setConnectionStatus('closed');
     const handleMessage = (event: MessageEvent) => {
       try {
@@ -95,5 +112,5 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
     wsRef.current?.send(JSON.stringify(data));
   }, []);
 
-  return { lastMessage, connectionStatus: enabled ? connectionStatus : 'closed', sendMessage };
+  return { lastMessage, connectionStatus: enabled ? connectionStatus : 'closed', reconnectCount, sendMessage };
 }

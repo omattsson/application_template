@@ -135,4 +135,58 @@ describe('useWebSocket', () => {
     act(() => getInstance().open());
     expect(result.current.connectionStatus).toBe('open');
   });
+
+  it('counts a reopen as a reconnect, not the first open', () => {
+    const { result } = renderHook(() => useWebSocket());
+    expect(result.current.reconnectCount).toBe(0);
+
+    act(() => getInstance().open());
+    expect(result.current.reconnectCount).toBe(0);
+
+    act(() => getInstance().close());
+    expect(result.current.reconnectCount).toBe(0);
+
+    act(() => getInstance().open());
+    expect(result.current.reconnectCount).toBe(1);
+
+    act(() => getInstance().close());
+    act(() => getInstance().open());
+    expect(result.current.reconnectCount).toBe(2);
+  });
+
+  it('counts the open of a new socket after a token change as a reconnect', () => {
+    const { result, rerender } = renderHook(
+      ({ token }: { token: string }) => useWebSocket({ token }),
+      { initialProps: { token: 'one' } },
+    );
+    act(() => getInstance().open());
+    expect(result.current.reconnectCount).toBe(0);
+
+    rerender({ token: 'two' });
+    act(() => getInstance().open());
+    expect(result.current.reconnectCount).toBe(1);
+  });
+
+  it('does not count the first open after a sign-out and sign-in as a reconnect', () => {
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useWebSocket({ enabled }),
+      { initialProps: { enabled: true } },
+    );
+    act(() => getInstance().open());
+    expect(result.current.connectionStatus).toBe('open');
+
+    rerender({ enabled: false });
+    expect(result.current.connectionStatus).toBe('closed');
+
+    rerender({ enabled: true });
+    // The old `open` must not show for the new socket.
+    expect(result.current.connectionStatus).toBe('connecting');
+    act(() => getInstance().open());
+    expect(result.current.connectionStatus).toBe('open');
+    expect(result.current.reconnectCount).toBe(0);
+
+    act(() => getInstance().close());
+    act(() => getInstance().open());
+    expect(result.current.reconnectCount).toBe(1);
+  });
 });

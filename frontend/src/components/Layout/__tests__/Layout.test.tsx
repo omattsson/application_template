@@ -8,9 +8,11 @@ import { useAuth } from '../../../context/AuthContext';
 import type { AuthContextValue } from '../../../context/AuthContext';
 import { useUIConfig } from '../../../context/UIConfigContext';
 import type { UIConfig } from '../../../context/UIConfigContext';
+import { useWebSocketContext } from '../../../context/WebSocketContext';
 
 vi.mock('../../../context/AuthContext', () => ({ useAuth: vi.fn() }));
 vi.mock('../../../context/UIConfigContext', () => ({ useUIConfig: vi.fn() }));
+vi.mock('../../../context/WebSocketContext', () => ({ useWebSocketContext: vi.fn() }));
 
 function uiConfig(overrides: Partial<UIConfig> = {}): { config: UIConfig; loading: boolean } {
   return {
@@ -78,6 +80,13 @@ describe('Layout', () => {
   beforeEach(() => {
     vi.mocked(useAuth).mockReturnValue(authState());
     vi.mocked(useUIConfig).mockReturnValue(uiConfig());
+    vi.mocked(useWebSocketContext).mockReturnValue({
+      lastMessage: null,
+      connectionStatus: 'open',
+      active: true,
+      reconnectCount: 0,
+      subscribe: vi.fn(),
+    });
   });
 
   afterEach(() => {
@@ -86,6 +95,25 @@ describe('Layout', () => {
     // @ts-expect-error JSDOM has no matchMedia: remove the mock again
     delete window.matchMedia;
     document.title = '';
+  });
+
+  describe('connection status', () => {
+    it('shows the state of the socket in the app bar', () => {
+      renderLayout();
+      expect(within(screen.getByRole('banner')).getByRole('status')).toHaveTextContent('Live');
+    });
+
+    it('shows nothing when no socket is wanted', () => {
+      vi.mocked(useWebSocketContext).mockReturnValue({
+        lastMessage: null,
+        connectionStatus: 'closed',
+        active: false,
+        reconnectCount: 0,
+        subscribe: vi.fn(),
+      });
+      renderLayout();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
   });
 
   describe('title', () => {

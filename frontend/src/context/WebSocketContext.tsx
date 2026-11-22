@@ -6,6 +6,10 @@ import { getSession, subscribeSession } from '../api/session';
 interface WebSocketContextValue {
   lastMessage: WebSocketMessage | null;
   connectionStatus: ConnectionStatus;
+  /** True when a socket is wanted: auth off, or auth on and signed in. False: `closed` is not a fault. */
+  active: boolean;
+  /** Grows with every reopen of the socket after its first open (see `useWebSocket`). */
+  reconnectCount: number;
   subscribe: (type: string, handler: (msg: WebSocketMessage) => void) => () => void;
 }
 
@@ -25,7 +29,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const token = session.mode === 'enabled' ? session.token : null;
   const enabled = session.mode === 'disabled' || (session.mode === 'enabled' && token !== null);
 
-  const { lastMessage, connectionStatus } = useWebSocket({ onMessage: handleMessage, token, enabled });
+  const { lastMessage, connectionStatus, reconnectCount } = useWebSocket({ onMessage: handleMessage, token, enabled });
 
   const subscribe = useCallback(
     (type: string, handler: (msg: WebSocketMessage) => void) => {
@@ -40,7 +44,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <WebSocketContext.Provider value={{ lastMessage, connectionStatus, subscribe }}>
+    <WebSocketContext.Provider value={{ lastMessage, connectionStatus, active: enabled, reconnectCount, subscribe }}>
       {children}
     </WebSocketContext.Provider>
   );
