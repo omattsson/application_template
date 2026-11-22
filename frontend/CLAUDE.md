@@ -6,7 +6,7 @@ The frontend lives in `frontend/`: Vite, React 19, MUI v9, react-router-dom v7, 
 
 ## Architecture
 
-- **Entry**: `src/main.tsx`, then `App.tsx` (providers: theme, UI config, auth, WebSocket; the `Layout`), then `routes.tsx`.
+- **Entry**: `src/main.tsx`, then `App.tsx` (providers: theme, UI config, auth, notifications, WebSocket; the `Layout`), then `routes.tsx`.
 - **Routing**: `react-router-dom` with `<Routes>` and `<Route>` in `src/routes.tsx`. Every page except `/login`, `/auth/callback` and the 404 is wrapped in `ProtectedRoute`. A new page goes in `routes.tsx` and gets an entry in `NAV_ITEMS` (`components/Layout/navItems.ts`).
 - **API config**: `src/api/config.ts` sets `API_BASE_URL = '/api'`. The browser always calls the web UI origin: the Vite dev server and the bundled nginx forward `/api/*` (one `/api` is stripped) and `/ws` to the backend, so a request to `/api/api/v1/items` reaches the backend as `/api/v1/items`. Never hard-code the backend port in the SPA: the httpOnly refresh cookie is `SameSite=Strict` and only goes to the origin of the page.
 - **API client**: `src/api/client.ts` has the Axios instance and the service objects (`itemService`, `authService`, `userService`, `apiKeyService`, `uiConfigService`, `healthService`). Requests carry the bearer token; a 401 triggers one refresh and one retry.
@@ -16,7 +16,7 @@ The frontend lives in `frontend/`: Vite, React 19, MUI v9, react-router-dom v7, 
 - **Password change and the 401 interceptor**: `authService.changePassword` must never go through the `api` instance. Its 401 interceptor refreshes and retries, and a retry of a wrong current password counts a second failure on the account (5 failures lock it). It uses `authApi` with `CSRF_HEADERS` and an explicit bearer header, so one submit is one request. The one exception is an expired access token: a 401 whose text is not `Current password is incorrect` (the middleware refuses it before the password is checked, so no failure is counted) refreshes once through `refreshAccessToken` and sends the request once more; a refused or failed refresh throws the first 401 and the page asks the user to sign in again.
 - **Audit log page**: `pages/Admin/AuditLogs` at `/admin/audit-logs` (`auditLogService.list`: offset paging, filters on action, entity type, user ID and a date range) is registered only with `auth_enabled` and wrapped in `ProtectedRoute roles={['admin']}`; the Layout shows its "Audit log" button only to an admin. The filter lists are copies of the backend's known lists (`options.ts`). Details are shown as text only, behind a per-row toggle. The page reads only; the API checks the role.
 - **Session**: `src/api/session.ts` holds the auth mode and the in-memory access token (never in storage or a cookie) and announces tokens and logouts to the other tabs. `src/api/refresh.ts` refreshes once per tab and once across tabs (Web Lock plus `BroadcastChannel`), never aborts a refresh request and does not retry on its own failure.
-- **Contexts**: `UIConfigContext` (title and auth flags from `GET /api/v1/ui-config`, public in every mode), `AuthContext` (session restore with `POST /auth/refresh`, login, logout, role), `WebSocketContext` (one socket that follows the session: a new socket for each new access token), `ThemeContext` (light and dark).
+- **Contexts**: `UIConfigContext` (title and auth flags from `GET /api/v1/ui-config`, public in every mode), `AuthContext` (session restore with `POST /auth/refresh`, login, logout, role), `WebSocketContext` (one socket that follows the session: a new socket for each new access token), `NotificationContext` (the one toast host and its queue, see "Notifications"), `ThemeContext` (light and dark).
 - **Layout and Home**: `Layout` shows `config.title` from `UIConfigContext` in the app bar and the footer and sets `document.title` (nothing while the config loads, so the fallback name does not flash). Below the `sm` breakpoint (`useMediaQuery`) the navigation links and the account items (user name, API keys, Log out) move into a temporary `Drawer` opened by the "Open navigation menu" button; the theme toggle stays in the app bar. `NAV_ITEMS` and `useNavItems()` (`components/Layout/navItems.ts`) hold the links and their visibility rules once, for the app bar, the drawer and the Home page ("Where to start"). A test of the narrow case mocks `window.matchMedia` (JSDOM has none).
 - **Auth off**: with `AUTH_ENABLED=false` the UI shows no login, no Users page and no role checks; `ProtectedRoute` renders the page directly.
 - **WebSocket**: pages subscribe to message types through `useWebSocketContext().subscribe(type, handler)`, for example `item.created`. The Items page re-fetches its current page (with the sort and the name filter) on `item.*` messages. Its page, size, sort, order and filter are the URL query (`page`, `size`, `sort`, `order`, `q`), so a reload keeps them.
@@ -42,6 +42,14 @@ The frontend lives in `frontend/`: Vite, React 19, MUI v9, react-router-dom v7, 
 - Page titles: `Typography variant="h4" component="h1"`.
 - Wrap the content in MUI `Box` and `Paper` components.
 - A delete asks for confirmation (`ConfirmDialog`) before it calls the API.
+
+## Notifications
+
+A page never owns a `Snackbar` or toast state. It calls `const { notify } = useNotification()` (`context/NotificationContext.tsx`) and `notify(message, severity)` with `'success'`, `'info'` (the default), `'warning'` or `'error'`. `NotificationProvider` in `App.tsx` renders the one host: messages queue and show one at a time (4 s each, closable), and an `error` is announced as `role="alert"`, the others as `role="status"`.
+
+- Use it for the result of an action (created, deleted), for `item.*` WebSocket messages and for an API error of an action: `notify(getApiErrorMessage(err), 'error')`.
+- Keep the error of a page load as an inline `Alert` (see Page Pattern), and an error that belongs to a dialog or a form in that dialog or form.
+- `notify` has a stable identity: it can go in an effect's dependency list. A test of a page that notifies wraps it in `NotificationProvider`.
 
 ## Accessibility
 

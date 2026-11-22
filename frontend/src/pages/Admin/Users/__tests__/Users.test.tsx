@@ -11,6 +11,7 @@ import { userService } from '../../../../api/client';
 import type { User, UserListResponse } from '../../../../api/client';
 import { useAuth } from '../../../../context/AuthContext';
 import type { AuthContextValue } from '../../../../context/AuthContext';
+import { NotificationProvider } from '../../../../context/NotificationContext';
 
 vi.mock('../../../../context/AuthContext', () => ({ useAuth: vi.fn() }));
 vi.mock('../../../../api/session', () => ({ endSession: vi.fn() }));
@@ -109,12 +110,14 @@ function LoginProbe() {
 
 function renderPage() {
   return render(
-    <MemoryRouter initialEntries={['/admin/users']}>
-      <Routes>
-        <Route path="/admin/users" element={<AdminUsers />} />
-        <Route path="/login" element={<LoginProbe />} />
-      </Routes>
-    </MemoryRouter>,
+    <NotificationProvider>
+      <MemoryRouter initialEntries={['/admin/users']}>
+        <Routes>
+          <Route path="/admin/users" element={<AdminUsers />} />
+          <Route path="/login" element={<LoginProbe />} />
+        </Routes>
+      </MemoryRouter>
+    </NotificationProvider>,
   );
 }
 

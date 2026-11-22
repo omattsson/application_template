@@ -5,7 +5,6 @@ import {
   Button,
   Chip,
   Paper,
-  Snackbar,
   Table,
   TableBody,
   TableCell,
@@ -22,6 +21,7 @@ import { isAxiosError } from 'axios';
 import { apiKeyService } from '../../../api/client';
 import type { ApiKey } from '../../../api/client';
 import ConfirmDialog from '../../../components/ConfirmDialog';
+import { useNotification } from '../../../context/NotificationContext';
 import EmptyState from '../../../components/EmptyState';
 import LoadingState from '../../../components/LoadingState';
 import { getApiErrorMessage } from '../../../utils/apiError';
@@ -50,14 +50,13 @@ function isExpired(expiresAt: string | null | undefined, now: number): boolean {
 const ApiKeysPage = () => {
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [total, setTotal] = useState(0);
+  const { notify } = useNotification();
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  // The text stays while the toast fades out (no empty flash).
-  const [notice, setNotice] = useState({ message: '', open: false });
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   // The revoke target is kept after the dialog closed: its exit transition still shows the name.
@@ -108,8 +107,7 @@ const ApiKeysPage = () => {
   /** Reload the current page. Used after every change, whether it worked or not. */
   const reload = () => fetchKeys(queryRef.current.pageIndex, queryRef.current.pageSize);
 
-  const showNotice = (message: string) => setNotice({ message, open: true });
-  const closeNotice = () => setNotice((prev) => ({ ...prev, open: false }));
+  const showNotice = (message: string) => notify(message, 'success');
 
   const runRevoke = async (target: ApiKey): Promise<void> => {
     if (busyRef.current) return;
@@ -281,19 +279,6 @@ const ApiKeysPage = () => {
         onConfirm={handleRevokeConfirm}
         onCancel={() => setRevokeOpen(false)}
       />
-
-      <Snackbar
-        open={notice.open}
-        autoHideDuration={5000}
-        onClose={(_event, reason) => {
-          if (reason !== 'clickaway') closeNotice();
-        }}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-      >
-        <Alert severity="success" role="status" onClose={closeNotice} sx={{ width: '100%' }}>
-          {notice.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };

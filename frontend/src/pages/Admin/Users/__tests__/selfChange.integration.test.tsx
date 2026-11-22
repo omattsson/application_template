@@ -8,6 +8,7 @@ import { resetRefreshForTesting } from '../../../../api/refresh';
 import { resetSessionForTesting } from '../../../../api/session';
 import { AuthProviders, fakeBackend, uiConfigOf } from '../../../../test/authHarness';
 import { tokenFor } from '../../../../test/mockHttp';
+import { NotificationProvider } from '../../../../context/NotificationContext';
 import type { MockReply } from '../../../../test/mockHttp';
 
 /**
@@ -66,10 +67,12 @@ function renderApp(path: string) {
   return render(
     <StrictMode>
       <AuthProviders>
-        <MemoryRouter initialEntries={[path]}>
-          <AppRoutes />
-          <Where />
-        </MemoryRouter>
+        <NotificationProvider>
+          <MemoryRouter initialEntries={[path]}>
+            <AppRoutes />
+            <Where />
+          </MemoryRouter>
+        </NotificationProvider>
       </AuthProviders>
     </StrictMode>,
   );

@@ -7,7 +7,6 @@ import {
   MenuItem,
   Paper,
   Select,
-  Snackbar,
   Table,
   TableBody,
   TableCell,
@@ -24,6 +23,7 @@ import { useNavigate } from 'react-router-dom';
 import { endSession } from '../../../api/session';
 import { userService } from '../../../api/client';
 import { useAuth } from '../../../context/AuthContext';
+import { useNotification } from '../../../context/NotificationContext';
 import type { User } from '../../../api/client';
 import ConfirmDialog from '../../../components/ConfirmDialog';
 import EmptyState from '../../../components/EmptyState';
@@ -50,6 +50,7 @@ type ChangeOutcome = { message: string; endsOwnSession?: boolean };
 const AdminUsers = () => {
   const { authEnabled, user: currentUser } = useAuth();
   const navigate = useNavigate();
+  const { notify } = useNotification();
   const [users, setUsers] = useState<User[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
@@ -58,8 +59,6 @@ const AdminUsers = () => {
   const [fetching, setFetching] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  // The text stays while the toast fades out (no empty flash).
-  const [notice, setNotice] = useState({ message: '', open: false });
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   // The delete target is kept after the dialog closed: its exit transition
@@ -151,8 +150,7 @@ const AdminUsers = () => {
     }
   };
 
-  const showNotice = (message: string) => setNotice({ message, open: true });
-  const closeNotice = () => setNotice((prev) => ({ ...prev, open: false }));
+  const showNotice = (message: string) => notify(message, 'success');
 
   const isSelf = (user: User) => currentUser !== null && currentUser.id === user.id;
 
@@ -371,19 +369,6 @@ const AdminUsers = () => {
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteOpen(false)}
       />
-
-      <Snackbar
-        open={notice.open}
-        autoHideDuration={5000}
-        onClose={(_event, reason) => {
-          if (reason !== 'clickaway') closeNotice();
-        }}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-      >
-        <Alert severity="success" role="status" onClose={closeNotice} sx={{ width: '100%' }}>
-          {notice.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };
