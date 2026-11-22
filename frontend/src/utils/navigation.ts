@@ -7,3 +7,11 @@
 export function redirectBrowser(url: string): void {
   window.location.assign(url);
 }
+
+/**
+ * Load the current page again from the server (a full reload). A separate
+ * function so tests can replace it (jsdom cannot reload).
+ */
+export function reloadPage(): void {
+  window.location.reload();
+}
