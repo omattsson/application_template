@@ -16,25 +16,17 @@ import {
   TableSortLabel,
   TextField,
   Paper,
-  Snackbar,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { itemService } from '../../api/client';
 import type { Item, ItemListResult, ItemSortKey, SortOrder } from '../../api/client';
+import { useNotification } from '../../context/NotificationContext';
 import { useWebSocketContext } from '../../context/WebSocketContext';
 import type { WebSocketMessage } from '../../hooks/useWebSocket';
 import LoadingState from '../../components/LoadingState';
 import EmptyState from '../../components/EmptyState';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import { getApiErrorMessage } from '../../utils/apiError';
-
-type ToastSeverity = 'success' | 'info' | 'warning' | 'error';
-
-interface Toast {
-  open: boolean;
-  message: string;
-  severity: ToastSeverity;
-}
 
 /** The page, size, sort, order and filter of the list, as the URL holds them. */
 interface ListQuery {
@@ -111,13 +103,13 @@ const Items = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState<RefreshRequest>({ id: 0, silent: false });
-  const [toast, setToast] = useState<Toast>({ open: false, message: '', severity: 'success' });
   const [pendingDelete, setPendingDelete] = useState<Item | null>(null);
   // The text in the filter field. It is committed to the URL after a pause.
   const [filterInput, setFilterInput] = useState(q);
   // The URL filter that the field last followed; a change of it (Back, a link) updates the field.
   const [followedQ, setFollowedQ] = useState(q);
   const { subscribe } = useWebSocketContext();
+  const { notify } = useNotification();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The refresh id of the last load that the fetch effect started.
   const lastRunRefreshIdRef = useRef(refresh.id);
@@ -190,18 +182,18 @@ const Items = () => {
   useEffect(() => {
     const unsubCreated = subscribe('item.created', (msg: WebSocketMessage) => {
       const item = msg.payload as Item;
-      setToast({ open: true, message: `Item '${item.name}' created`, severity: 'success' });
+      notify(`Item '${item.name}' created`, 'success');
       scheduleRefresh();
     });
 
     const unsubUpdated = subscribe('item.updated', (msg: WebSocketMessage) => {
       const item = msg.payload as Item;
-      setToast({ open: true, message: `Item '${item.name}' updated`, severity: 'info' });
+      notify(`Item '${item.name}' updated`, 'info');
       scheduleRefresh();
     });
 
     const unsubDeleted = subscribe('item.deleted', () => {
-      setToast({ open: true, message: 'Item deleted', severity: 'warning' });
+      notify('Item deleted', 'warning');
       scheduleRefresh();
     });
 
@@ -211,7 +203,7 @@ const Items = () => {
       unsubDeleted();
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [subscribe, scheduleRefresh]);
+  }, [subscribe, scheduleRefresh, notify]);
 
   const updateQuery = (change: (current: ListQuery) => ListQuery, replace = false) => {
     setSearchParams((prev) => buildSearch(prev, change(parseQuery(prev))), { replace });
@@ -239,20 +231,16 @@ const Items = () => {
     setFilterInput(event.target.value);
   };
 
-  const handleToastClose = () => {
-    setToast((prev) => ({ ...prev, open: false }));
-  };
-
   const handleDeleteConfirm = async () => {
     if (!pendingDelete) return;
     const target = pendingDelete;
     setPendingDelete(null);
     try {
       await itemService.delete(target.id);
-      setToast({ open: true, message: 'Item deleted', severity: 'warning' });
+      notify('Item deleted', 'warning');
       requestRefresh();
     } catch (err) {
-      setToast({ open: true, message: getApiErrorMessage(err), severity: 'error' });
+      notify(getApiErrorMessage(err), 'error');
     }
   };
 
@@ -368,17 +356,6 @@ const Items = () => {
         onConfirm={() => { void handleDeleteConfirm(); }}
         onCancel={() => setPendingDelete(null)}
       />
-
-      <Snackbar
-        open={toast.open}
-        autoHideDuration={4000}
-        onClose={handleToastClose}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-      >
-        <Alert onClose={handleToastClose} severity={toast.severity} sx={{ width: '100%' }}>
-          {toast.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };

@@ -5,6 +5,7 @@ import { ThemeModeProvider } from './context/ThemeContext';
 import { UIConfigProvider } from './context/UIConfigContext';
 import { AuthProvider } from './context/AuthContext';
 import { WebSocketProvider } from './context/WebSocketContext';
+import { NotificationProvider } from './context/NotificationContext';
 
 function App() {
   return (
@@ -12,11 +13,13 @@ function App() {
       <UIConfigProvider>
         <AuthProvider>
           <BrowserRouter>
-            <WebSocketProvider>
-              <Layout>
-                <AppRoutes />
-              </Layout>
-            </WebSocketProvider>
+            <NotificationProvider>
+              <WebSocketProvider>
+                <Layout>
+                  <AppRoutes />
+                </Layout>
+              </WebSocketProvider>
+            </NotificationProvider>
           </BrowserRouter>
         </AuthProvider>
       </UIConfigProvider>

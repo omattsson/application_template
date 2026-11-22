@@ -8,6 +8,7 @@ import Items from '../index';
 import { itemService } from '../../../api/client';
 import type { Item, ItemListParams, ItemListResult } from '../../../api/client';
 import { useWebSocketContext } from '../../../context/WebSocketContext';
+import { NotificationProvider } from '../../../context/NotificationContext';
 import type { WebSocketMessage } from '../../../hooks/useWebSocket';
 
 vi.mock('../../../context/WebSocketContext', () => ({
@@ -110,19 +111,21 @@ function Probe() {
 
 function renderPage(entry = '/items') {
   return render(
-    <MemoryRouter initialEntries={[entry]}>
-      <Routes>
-        <Route
-          path="/items"
-          element={
-            <>
-              <Items />
-              <Probe />
-            </>
-          }
-        />
-      </Routes>
-    </MemoryRouter>,
+    <NotificationProvider>
+      <MemoryRouter initialEntries={[entry]}>
+        <Routes>
+          <Route
+            path="/items"
+            element={
+              <>
+                <Items />
+                <Probe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    </NotificationProvider>,
   );
 }
 

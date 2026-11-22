@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { AxiosError, AxiosHeaders } from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import ApiKeysPage from '../index';
+import { NotificationProvider } from '../../../../context/NotificationContext';
 import { apiKeyService } from '../../../../api/client';
 import type { ApiKey, ApiKeyListResponse, CreatedApiKey } from '../../../../api/client';
 
@@ -83,7 +84,11 @@ function controlled<T>() {
 }
 
 function renderPage() {
-  return render(<ApiKeysPage />);
+  return render(
+    <NotificationProvider>
+      <ApiKeysPage />
+    </NotificationProvider>,
+  );
 }
 
 async function renderLoaded(keys: ApiKey[] = [DEPLOY, OLD_CI]) {
